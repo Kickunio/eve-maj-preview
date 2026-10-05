@@ -12,6 +12,7 @@ const notif_info_view = @import("notif_info_view.zig");
 const activity_tracker = @import("activity_tracker.zig");
 const gdi_overlay = @import("gdi_overlay.zig");
 const region_select = @import("region_select.zig");
+const protocol = @import("protocol.zig");
 const main_mod = @import("main.zig");
 const log = @import("log.zig");
 const slog = log.scoped("painter");
@@ -70,6 +71,8 @@ pub const NotificationHistoryEntry = struct {
 
 /// Cap on simultaneously stacked notifications per thumbnail; kept small since the overlay is drawn onto a small thumbnail bitmap.
 const MAX_STACKED_NOTIFICATIONS: usize = 3;
+
+const TEST_NOTIFICATION_PERMANENT_FALLBACK_MS: u32 = 5000;
 
 /// One resolved (text, color) line of the stacked notification block; built by createRenderSettings, drawn by renderThumbnailOverlay.
 const NotificationLine = struct {
@@ -229,6 +232,8 @@ pub const ThumbnailWindow = struct {
     cached_overlay: ?gdi_overlay.OverlayBitmap = null,
 
     visibility_state: state_mod.VisibilityState = .Visible,
+    /// Set while a Test Notification has force-shown a hidden thumbnail; restored once its notifications clear.
+    test_restore_visibility: ?state_mod.VisibilityState = null,
     /// When checkAutoMinimize's delay should count from; refreshed every tick this thumbnail is Active or Minimized, left untouched otherwise so its frozen value is the moment it last became eligible.
     inactive_since: win32.Ticks = .{},
     /// Edge-detector so a minimize/restore with no accompanying focus change still marks this dirty for repaint.
@@ -333,6 +338,15 @@ const NotifiedCharacterEntry = struct {
     notified_at_ms: win32.Ticks,
 };
 
+/// Re-checked after login because EVE can reposition its own window while still loading.
+const PendingAutoMove = struct {
+    hwnd: win32.HWND,
+    target: config_mod.Position,
+    last_move: win32.Ticks,
+    checks_left: u8,
+    last_seen: ?win32.POINT = null,
+};
+
 /// One saved-position outline for the drag-time ghost overlay; `names` is the comma-joined list of every character sharing that exact rect.
 pub const GhostGroup = struct {
     rect: win32.RECT,
@@ -368,6 +382,7 @@ pub const Painter = struct {
     notified_queue: std.ArrayList(NotifiedCharacterEntry) = .empty,
     /// Thumbnails hideThumbnailsForRegionSelect hid, so restoreThumbnailsAfterRegionSelect only re-shows exactly those (not ones already manually hidden beforehand).
     region_select_hidden_hwnds: std.ArrayList(win32.HWND) = .empty,
+    pending_auto_moves: std.ArrayList(PendingAutoMove) = .empty,
     /// Ring buffer of the last NOTIF_HISTORY_CAPACITY notifications shown, across all characters, newest overwrites oldest; feeds notif_info_window.
     notification_history: [NOTIF_HISTORY_CAPACITY]NotificationHistoryEntry = undefined,
     notification_history_head: usize = 0,
@@ -386,7 +401,7 @@ pub const Painter = struct {
     drag_hint_bitmap: ?gdi_overlay.OverlayBitmap = null,
     /// Sole "who's focused" source of truth; write only via reconcileThumbnailStates.
     active_source_hwnd: ?win32.HWND = null,
-    /// Last EVE thumbnail hwnd that held focus; used by the auto-minimize exemption options to keep the most recently active client visible in the relevant focus-loss scenarios.
+    /// Last EVE thumbnail hwnd that held focus; used by checkAutoMinimize's exemptLastActiveOnFocusLoss option to identify which client to spare once EVE itself has no window focused.
     last_focused_source_hwnd: ?win32.HWND = null,
     /// Most recent foreground window that belongs to neither an EVE client nor this process; used by HotkeyAction.ReturnToLastApp.
     last_non_eve_foreground: ?win32.HWND = null,
@@ -488,6 +503,7 @@ pub const Painter = struct {
             .io = io,
             .thumbnails = .empty,
             .hwnd_to_thumbnail_index = std.AutoHashMap(win32.HWND, usize).init(allocator),
+            .last_focused_by_monitor = std.AutoHashMap(win32.HMONITOR, win32.HWND).init(allocator),
             .thumbnail_hwnd_to_index = std.AutoHashMap(win32.HWND, usize).init(allocator),
             .text_hwnd_to_index = std.AutoHashMap(win32.HWND, usize).init(allocator),
             .cached_fonts = std.AutoHashMap(u32, FontCacheEntry).init(allocator),
@@ -592,7 +608,9 @@ pub const Painter = struct {
         for (self.notified_queue.items) |entry| self.allocator.free(entry.character_name);
         self.notified_queue.deinit(self.allocator);
         self.region_select_hidden_hwnds.deinit(self.allocator);
+        self.pending_auto_moves.deinit(self.allocator);
         self.hwnd_to_thumbnail_index.deinit();
+        self.last_focused_by_monitor.deinit();
         self.thumbnail_hwnd_to_index.deinit();
         self.text_hwnd_to_index.deinit();
     }
@@ -790,6 +808,7 @@ pub const Painter = struct {
 
         if (removed_any) {
             self.rebuildHwndIndex(false);
+            if (self.thumbnails.items.len == 0) self.config.flushAutoColors();
         }
 
         // A logout must reflow the survivors to refill the region.
@@ -958,7 +977,34 @@ pub const Painter = struct {
         return scout_ptr.getWindows();
     }
 
-    /// Minimizes each EVE window `autoMinimize.delayMs` after it last stopped being Active/Minimized (see ThumbnailWindow.inactive_since); call once per tick.
+    /// A monitor with no live recorded last-active client exempts everyone on it rather than minimize clients with no known "last active".
+    fn isLastActiveOnItsMonitor(self: *const Painter, source_hwnd: win32.HWND) bool {
+        const monitor = win32.MonitorFromWindow(source_hwnd, win32.MONITOR_DEFAULTTONEAREST) orelse return true;
+        const last_active = self.last_focused_by_monitor.get(monitor) orelse return true;
+        if (!self.hwnd_to_thumbnail_index.contains(last_active)) return true;
+        return last_active == source_hwnd;
+    }
+
+    fn recordLastFocused(self: *Painter, source_hwnd: win32.HWND) void {
+        const monitor = win32.MonitorFromWindow(source_hwnd, win32.MONITOR_DEFAULTTONEAREST) orelse return;
+
+        // A window that moved monitors must not stay recorded under its old one.
+        var stale: ?win32.HMONITOR = null;
+        var it = self.last_focused_by_monitor.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == source_hwnd and entry.key_ptr.* != monitor) {
+                stale = entry.key_ptr.*;
+                break;
+            }
+        }
+        if (stale) |old_monitor| _ = self.last_focused_by_monitor.remove(old_monitor);
+
+        self.last_focused_by_monitor.put(monitor, source_hwnd) catch |err| {
+            slog.err("Failed to record last-focused client for monitor: {}", .{err});
+        };
+    }
+
+    /// Minimizes each EVE window `autoMinimize.delayMs` after it last stopped being Active/Minimized (see ThumbnailWindow.inactive_since); call once per tick. Each monitor's last-active client is spared while focus is on another monitor.
     fn checkAutoMinimize(self: *Painter) void {
         if (!self.config.autoMinimize.enabled) return;
         if (self.thumbnails.items.len == 0) return;
@@ -966,34 +1012,18 @@ pub const Painter = struct {
         const now = win32.Ticks.now();
         const delay_ms: u64 = self.config.autoMinimize.delayMs;
         var minimized_any = false;
-        const foreground_hwnd = win32.GetForegroundWindow();
-        // Windows can briefly report no foreground window while focus moves between EVE clients.
-        // Do not auto-minimize during that transition; the next tick will evaluate the real target.
-        if (foreground_hwnd == null) return;
 
-        const foreground_is_eve = if (foreground_hwnd) |hwnd| self.hwnd_to_thumbnail_index.contains(hwnd) else false;
-        // Do not minimize any EVE client while another application is foreground.
-        // This avoids treating a non-EVE focus transition as an inactive-client decision.
-        if (!foreground_is_eve) return;
-
-        var foreground_excludes_auto_minimize = false;
-        if (foreground_hwnd) |hwnd| {
-            if (self.getThumbnailBySourceHwnd(hwnd)) |thumbnail| {
-                foreground_excludes_auto_minimize = thumbnail.cached_excluded_from_minimize;
-            }
-        }
+        // active_source_hwnd is the literal foreground window, so it's non-null even on a non-EVE app.
+        const eve_has_focus = if (self.active_source_hwnd) |hwnd| self.hwnd_to_thumbnail_index.contains(hwnd) else false;
 
         for (self.thumbnails.items) |*thumbnail| {
             if (input.isThumbnailDragging(thumbnail)) continue;
             if (thumbnail.isFocused(foreground_hwnd)) continue;
             if (win32.isWindowIconic(thumbnail.source_hwnd)) continue;
-
-            const is_last_focused = self.last_focused_source_hwnd != null and thumbnail.source_hwnd == self.last_focused_source_hwnd;
-
-            // Spare the previously active client when focus leaves EVE, or when another focused
-            // EVE character is excluded from auto-minimize.
-            if (is_last_focused and (!foreground_is_eve or foreground_excludes_auto_minimize)) continue;
-
+            // Before any EVE window has been genuinely focused this session, last_focused_source_hwnd is null; exempt everyone rather than minimize all clients with no known "last active".
+            if (self.config.autoMinimize.exemptLastActiveOnFocusLoss and
+                !eve_has_focus and
+                (self.last_focused_source_hwnd == null or thumbnail.source_hwnd == self.last_focused_source_hwnd)) continue;
             if (now.elapsedSince(thumbnail.inactive_since) < delay_ms) continue;
             if (thumbnail.cached_excluded_from_minimize) continue;
             if (!win32.isWindow(thumbnail.source_hwnd)) continue;
@@ -1098,28 +1128,8 @@ pub const Painter = struct {
 
         self.active_source_hwnd = should_be_active_hwnd;
         const active_changed = old_active != should_be_active_hwnd;
-
-        // Track the previous EVE-focused window, not the currently active one.
-        // This keeps the last client you were on protected while another EVE client is foregrounded,
-        // and preserves that protection when focus leaves EVE entirely until a new EVE client is activated.
-        if (should_be_active_hwnd) |new_hwnd| {
-            if (new_active_is_eve) {
-                if (old_active_is_eve and old_active != null and old_active.? != new_hwnd) {
-                    self.last_focused_source_hwnd = old_active.?;
-                } else if (self.last_focused_source_hwnd == null) {
-                    self.last_focused_source_hwnd = new_hwnd;
-                }
-            } else if (old_active_is_eve) {
-                // The client that was active immediately before leaving EVE is the one to spare.
-                self.last_focused_source_hwnd = old_active.?;
-            }
-            // Otherwise: non-EVE foreground window, keep the previous EVE-focused client as the protected target.
-        } else {
-            // No foreground window or app deactivated; retain the last known EVE-focused client while EVE has no focus.
-            // If Windows reports a transient null foreground during an EVE-to-EVE switch, the
-            // EVE client that just lost focus is still the last active client to protect.
-            if (old_active_is_eve) self.last_focused_source_hwnd = old_active.?;
-        }
+        const any_eve_has_focus = if (should_be_active_hwnd) |hwnd| self.hwnd_to_thumbnail_index.contains(hwnd) else false;
+        if (any_eve_has_focus) self.last_focused_source_hwnd = should_be_active_hwnd.?;
 
         for (self.thumbnails.items) |*thumbnail| {
             // Unhide automatically-hidden thumbnails when EVE gains focus; manual hiding persists until the user toggles visibility.
@@ -1228,28 +1238,11 @@ pub const Painter = struct {
             self.trackNotifiedCharacter(thumbnail.character_name);
             self.pushNotificationHistory(source_hwnd, thumbnail.character_name, notification_text, notification_type);
 
-            // Speaks the same phrase the visual notification shows; self-contained, no global master switch.
-            if (type_config.tts_enabled) {
-                tts.setVoiceSettings(self.config.thumbnail.notifications.tts_volume, self.config.thumbnail.notifications.tts_rate);
-                if (self.config.thumbnail.notifications.tts_speak_character_name and thumbnail.character_name.len > 0) {
-                    const spoken_name = if (self.config.thumbnail.notifications.tts_use_display_name)
-                        thumbnail.cached_display_name
-                    else
-                        thumbnail.character_name;
-                    var speak_buf: [256]u8 = undefined;
-                    const spoken = std.fmt.bufPrint(&speak_buf, "{s}, {s}", .{ spoken_name, notification_text }) catch notification_text;
-                    tts.speakAlert(spoken);
-                } else {
-                    tts.speakAlert(notification_text);
-                }
-            }
-
-            // Self-contained too, like TTS above - there is no global sound master switch or shared volume.
-            if (type_config.sound_enabled) {
-                if (type_config.sound_path) |path| {
-                    sound.playAlert(path, type_config.sound_volume);
-                }
-            }
+            const spoken_name: ?[]const u8 = if (self.config.thumbnail.notifications.tts_speak_character_name and thumbnail.character_name.len > 0)
+                (if (self.config.thumbnail.notifications.tts_use_display_name) thumbnail.cached_display_name else thumbnail.character_name)
+            else
+                null;
+            self.playAlertEffects(type_config, notification_text, spoken_name);
 
             slog.debug("Queued notification for {s}: [{s}] {s} (border_color_override: {?})", .{ thumbnail.character_name, @tagName(notification_type), notification_text, type_config.border_color });
             return;
@@ -1257,6 +1250,81 @@ pub const Painter = struct {
 
         // Window not found - this can happen if thumbnail hasn't been created yet
         slog.debug("Window 0x{x} not found for notification update (thumbnail may not exist yet)", .{@intFromPtr(source_hwnd)});
+    }
+
+    /// Speaks the same phrase the visual notification shows and plays its sound; both are self-contained, with no global master switch or shared volume.
+    fn playAlertEffects(self: *Painter, type_config: config_mod.NotificationTypeConfig, text: []const u8, spoken_name: ?[]const u8) void {
+        if (type_config.tts_enabled) {
+            tts.setVoiceSettings(self.config.thumbnail.notifications.tts_volume, self.config.thumbnail.notifications.tts_rate);
+            if (spoken_name) |name| {
+                var speak_buf: [256]u8 = undefined;
+                const spoken = std.fmt.bufPrint(&speak_buf, "{s}, {s}", .{ name, text }) catch text;
+                tts.speakAlert(spoken);
+            } else {
+                tts.speakAlert(text);
+            }
+        }
+
+        if (type_config.sound_enabled) {
+            if (type_config.sound_path) |path| {
+                sound.playAlert(path, type_config.sound_volume);
+            }
+        }
+    }
+
+    /// Config dialog's "Test Notification": bypasses every suppression, force-shows hidden thumbnails for its duration, and skips history/cycle tracking; alerts play once rather than per thumbnail.
+    pub fn showTestNotification(
+        self: *Painter,
+        notification_type: types.NotificationType,
+        notification_text: []const u8,
+        type_config: config_mod.NotificationTypeConfig,
+    ) !void {
+        const now = win32.Ticks.now();
+        // A permanent (0) duration would never clear a test.
+        const duration_ms = if (type_config.duration_ms == 0) TEST_NOTIFICATION_PERMANENT_FALLBACK_MS else type_config.duration_ms;
+
+        for (self.thumbnails.items) |*thumbnail| {
+            self.pushNotification(thumbnail, .{
+                .text = try self.allocator.dupe(u8, notification_text),
+                .notification_type = notification_type,
+                .start_time = now,
+                .duration_ms = duration_ms,
+                .suppress_when_focused = type_config.suppress_when_focused,
+                .suppress_when_clicked = type_config.suppress_when_clicked,
+                .border_color_override = type_config.border_color,
+                .text_color_override = type_config.text_color,
+                .show_border = type_config.show_border,
+                .flash_border = type_config.flash_border,
+            });
+
+            // The alert blocks re-hiding, so the thumbnail stays up until updateNotifications() restores it.
+            if (!thumbnail.isVisible()) {
+                if (thumbnail.test_restore_visibility == null) thumbnail.test_restore_visibility = thumbnail.visibility_state;
+                thumbnail.setVisibility(.Visible);
+                self.renderThumbnailLogged(thumbnail, "test notification show");
+            }
+        }
+
+        self.playAlertEffects(type_config, notification_text, null);
+    }
+
+    /// Puts a thumbnail that a Test Notification force-showed back to its prior visibility.
+    fn restoreVisibilityAfterTest(self: *Painter, thumbnail: *ThumbnailWindow) void {
+        const prior = thumbnail.test_restore_visibility orelse return;
+        thumbnail.test_restore_visibility = null;
+
+        // Focus or the setting may have changed during the test, in which case auto-hiding no longer applies.
+        const restored: state_mod.VisibilityState = switch (prior) {
+            .HiddenAutomatic => if (self.config.thumbnail.hideWhenNoEveFocus and !self.isEveWindowForeground()) .HiddenAutomatic else .Visible,
+            else => prior,
+        };
+        thumbnail.setVisibility(restored);
+        self.renderThumbnailLogged(thumbnail, "test notification restore");
+    }
+
+    fn isEveWindowForeground(self: *const Painter) bool {
+        const foreground_hwnd = win32.GetForegroundWindow() orelse return false;
+        return self.hwnd_to_thumbnail_index.contains(foreground_hwnd);
     }
 
     /// Flags characters behind the group's current system by more than config.travel.window_seconds.
@@ -1554,6 +1622,8 @@ pub const Painter = struct {
                 // May still be sized from a previous RegionFit grid cell, so resize explicitly.
                 hdwp = win32.DeferWindowPos(hdwp, thumbnail.hwnd, win32.HWND_NOTOPMOST, pos.x, pos.y, nl.grid.cell_width, nl.grid.cell_height, win32.SWP_NOZORDER | win32.SWP_NOACTIVATE) orelse return;
                 hdwp = win32.DeferWindowPos(hdwp, thumbnail.text_hwnd, win32.HWND_TOPMOST, pos.x, pos.y, nl.grid.cell_width, nl.grid.cell_height, win32.SWP_NOACTIVATE) orelse return;
+                const props = makeThumbnailProps(nl.grid.cell_width, nl.grid.cell_height, win32.DWM_TNP_RECTDESTINATION);
+                _ = win32.DwmUpdateThumbnailProperties(thumbnail.thumbnail_id, &props);
                 continue;
             }
 
@@ -1732,6 +1802,10 @@ pub const Painter = struct {
                 thumbnail.needs_render = true;
             }
 
+            if (thumbnail.test_restore_visibility != null and thumbnail.active_notifications[0] == null) {
+                self.restoreVisibilityAfterTest(thumbnail);
+            }
+
             // Force a render each tick so the newest entry's alternating on/off flash phases actually paint.
             if (thumbnail.active_notifications[0]) |notif| {
                 if (notif.flash_border and now.elapsedSince(notif.start_time) < NOTIFICATION_FLASH_TOTAL_MS) {
@@ -1792,9 +1866,9 @@ pub const Painter = struct {
                 // RegionFit ignores the saved spot; the reflow below places it correctly instead.
                 if (thumbnail.win32_enabled and !isRegionFitActive(&self.config.display)) {
                     if (self.config.getCharacterPosition(change.new_name)) |saved_pos| {
-                        const thumb_size = self.getThumbnailSize(change.new_name, self.thumbnails.items.len, null);
-                        _ = win32.SetWindowPos(thumbnail.hwnd, win32.HWND_NOTOPMOST, saved_pos.x, saved_pos.y, thumb_size.width, thumb_size.height, win32.SWP_NOZORDER | win32.SWP_NOACTIVATE);
-                        _ = win32.SetWindowPos(thumbnail.text_hwnd, win32.HWND_TOPMOST, saved_pos.x, saved_pos.y, thumb_size.width, thumb_size.height, win32.SWP_NOACTIVATE);
+                        _ = win32.SetWindowPos(thumbnail.hwnd, win32.HWND_NOTOPMOST, saved_pos.x, saved_pos.y, 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE);
+                        _ = win32.SetWindowPos(thumbnail.text_hwnd, win32.HWND_TOPMOST, saved_pos.x, saved_pos.y, 0, 0, win32.SWP_NOSIZE | win32.SWP_NOACTIVATE);
+                        self.resizeThumbnailIfNeeded(thumbnail, null);
                         slog.info("Moved {s} thumbnail to saved position: ({}, {})", .{ change.new_name, saved_pos.x, saved_pos.y });
                     } else {
                         slog.debug("No saved thumbnail position for {s}, keeping current location", .{change.new_name});
@@ -1805,6 +1879,7 @@ pub const Painter = struct {
                 if (self.config.autoMovePosition.enabled and !self.config.isExcludedFromAutoMove(change.new_name)) {
                     if (self.config.getCharacterWindowPosition(change.new_name)) |window_pos| {
                         manager_mod.moveClientToPosition(thumbnail.source_hwnd, window_pos);
+                        self.queueAutoMoveVerification(thumbnail.source_hwnd, window_pos);
                         slog.info("Auto-moved {s} client window to saved position: ({}, {})", .{ change.new_name, window_pos.x, window_pos.y });
                     } else {
                         slog.debug("No saved window position for {s}, auto-move-on-login skipped", .{change.new_name});
@@ -1858,6 +1933,76 @@ pub const Painter = struct {
         return region_fit_active and (any_login_rank_change or (any_logout_rank_change and self.config.display.regionFitReorderLoggedOut));
     }
 
+    /// Callers gate on their own setting; only the per-character exclusion is checked here.
+    pub fn moveClientToSavedPosition(self: *Painter, hwnd: win32.HWND, character_name: []const u8) void {
+        if (self.config.isExcludedFromAutoMove(character_name)) return;
+        const pos = self.config.getCharacterWindowPosition(character_name) orelse return;
+        manager_mod.moveClientToPosition(hwnd, pos);
+        self.queueAutoMoveVerification(hwnd, pos);
+        slog.info("Moved {s} client window to saved position: ({}, {})", .{ character_name, pos.x, pos.y });
+    }
+
+    fn queueAutoMoveVerification(self: *Painter, hwnd: win32.HWND, pos: config_mod.Position) void {
+        if (self.config.autoMovePosition.verifyCount == 0) return;
+        const entry = PendingAutoMove{
+            .hwnd = hwnd,
+            .target = manager_mod.clampToVirtualScreen(pos),
+            .last_move = win32.Ticks.now(),
+            .checks_left = self.config.autoMovePosition.verifyCount,
+        };
+        for (self.pending_auto_moves.items) |*existing| {
+            if (existing.hwnd == hwnd) {
+                existing.* = entry;
+                return;
+            }
+        }
+        self.pending_auto_moves.append(self.allocator, entry) catch |err| {
+            slog.warn("Failed to queue auto-move verification: {}", .{err});
+        };
+    }
+
+    /// Polls without touching the window until its position stops changing between two consecutive polls (i.e. EVE is done repositioning it), then corrects it exactly once. Re-applying on every poll while EVE is still mid-move would re-grab focus each time, making clients visibly jump.
+    fn verifyPendingAutoMoves(self: *Painter) void {
+        const now = win32.Ticks.now();
+        var i: usize = 0;
+        while (i < self.pending_auto_moves.items.len) {
+            const entry = &self.pending_auto_moves.items[i];
+            if (!win32.isWindow(entry.hwnd)) {
+                _ = self.pending_auto_moves.swapRemove(i);
+                continue;
+            }
+            if (now.elapsedSince(entry.last_move) < self.config.autoMovePosition.verifyIntervalMs) {
+                i += 1;
+                continue;
+            }
+            entry.last_move = now;
+
+            var rect: win32.RECT = undefined;
+            if (!win32.toBool(win32.GetWindowRect(entry.hwnd, &rect))) {
+                slog.warn("Auto-move verification: GetWindowRect failed", .{});
+                _ = self.pending_auto_moves.swapRemove(i);
+                continue;
+            }
+
+            if (rect.left == entry.target.x and rect.top == entry.target.y) {
+                _ = self.pending_auto_moves.swapRemove(i);
+                continue;
+            }
+
+            entry.checks_left -= 1;
+            const settled = entry.last_seen != null and entry.last_seen.?.x == rect.left and entry.last_seen.?.y == rect.top;
+            if (settled or entry.checks_left == 0) {
+                slog.info("Client drifted to ({}, {}) after auto-move, re-applying ({}, {})", .{ rect.left, rect.top, entry.target.x, entry.target.y });
+                manager_mod.moveClientToPosition(entry.hwnd, entry.target);
+                _ = self.pending_auto_moves.swapRemove(i);
+                continue;
+            }
+
+            entry.last_seen = .{ .x = rect.left, .y = rect.top };
+            i += 1;
+        }
+    }
+
     /// Syncs thumbnail title text against Scout's latest scan, independent of character-name changes.
     fn syncThumbnailTitles(self: *Painter, eve_windows: []const scout_mod.EveWindow) void {
         for (eve_windows) |eve_window| {
@@ -1884,6 +2029,9 @@ pub const Painter = struct {
                     continue;
                 };
                 created_new = true;
+                if (self.config.autoMovePosition.enabled) {
+                    self.moveClientToSavedPosition(eve_window.hwnd, eve_window.character_name);
+                }
             }
         }
 
@@ -1896,6 +2044,7 @@ pub const Painter = struct {
         self.updateThumbnailStates();
         self.checkAutoMinimize();
         needs_region_reflow = self.applyNameChanges(name_changes, eve_windows) or needs_region_reflow;
+        self.verifyPendingAutoMoves();
         self.syncThumbnailTitles(eve_windows);
 
         // createThumbnail seeds title/character_name from eve_window, so new thumbnails need no re-sync.
@@ -2021,14 +2170,22 @@ pub const Painter = struct {
 
         region_select.registerWindowClass(self.instance) catch return error.RegisterRegionSelectClassFailed;
         region_select.setOnFinishedCallback(regionSelectFinishedCallback);
-
         g_window_class_registered = true;
     }
 
     /// Starts the "Start Region Selection" drag-to-select overlay; the result reaches the config dialog asynchronously via protocol.publishRegionSelectResult.
-    pub fn startRegionSelect(self: *Painter) void {
-        if (self.config.display.hideThumbnailsDuringRegionSelect) self.hideThumbnailsForRegionSelect();
-        region_select.start(self.instance, self.config.accentColor);
+    pub fn startRegionSelect(self: *Painter, request: protocol.RegionSelectRequest) void {
+        if (request.hide_thumbnails) self.hideThumbnailsForRegionSelect();
+        const cursor_monitor = cursorMonitorBounds().monitor;
+        const label_font = self.characterNameFont(cursor_monitor) catch |err| blk: {
+            slog.err("Failed to get font for region-select label: {}", .{err});
+            break :blk null;
+        };
+        region_select.start(self.instance, self.config.accentColor, .{
+            .font = label_font,
+            .color = self.config.thumbnail.characterNameColor | 0xFF000000,
+        }, request.edit_region, request.labels);
+        self.showRegionSelectHint(&request.labels, request.edit_region != null);
     }
 
     /// Reflows every thumbnail's RegionFit grid slot after a rank/count change (bulk create loops, group membership); no-op outside RegionFit.
@@ -2111,7 +2268,19 @@ pub const Painter = struct {
     }
 
     /// Bounds of the monitor nearest `hwnd`, falling back to primary-monitor metrics (GetSystemMetrics only reports the primary monitor) if the lookup fails; also returns the resolved monitor handle, if any, for a DPI lookup.
-    pub fn nearestMonitorBounds(hwnd: win32.HWND) struct { bounds: win32.RECT, monitor: ?win32.HMONITOR } {
+    pub fn nearestMonitorBounds(hwnd: win32.HWND) MonitorBounds {
+        return monitorBounds(win32.MonitorFromWindow(hwnd, win32.MONITOR_DEFAULTTONEAREST));
+    }
+
+    const MonitorBounds = struct { bounds: win32.RECT, monitor: ?win32.HMONITOR };
+
+    fn cursorMonitorBounds() MonitorBounds {
+        var cursor = win32.POINT{ .x = 0, .y = 0 };
+        _ = win32.GetCursorPos(&cursor);
+        return monitorBounds(win32.nearestMonitor(cursor));
+    }
+
+    fn monitorBounds(nearest: ?win32.HMONITOR) MonitorBounds {
         var bounds = win32.RECT{
             .left = 0,
             .top = 0,
@@ -2119,10 +2288,9 @@ pub const Painter = struct {
             .bottom = win32.GetSystemMetrics(win32.SM_CYSCREEN),
         };
         var monitor: ?win32.HMONITOR = null;
-        if (win32.MonitorFromWindow(hwnd, win32.MONITOR_DEFAULTTONEAREST)) |m| {
-            var info = win32.MONITORINFO{ .cbSize = @sizeOf(win32.MONITORINFO), .rcMonitor = undefined, .rcWork = undefined, .dwFlags = 0 };
-            if (win32.GetMonitorInfoA(m, &info) != win32.FALSE) {
-                bounds = info.rcMonitor;
+        if (nearest) |m| {
+            if (win32.monitorRect(m)) |rect| {
+                bounds = rect;
                 monitor = m;
             }
         }
@@ -2131,10 +2299,7 @@ pub const Painter = struct {
 
     /// DPI for a specific monitor; used before a window exists on it yet.
     fn getMonitorDpi(hmonitor: win32.HMONITOR) u32 {
-        var dpi_x: win32.UINT = 96;
-        var dpi_y: win32.UINT = 96;
-        _ = win32.GetDpiForMonitor(hmonitor, win32.MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y);
-        return dpi_x;
+        return win32.monitorDpi(hmonitor);
     }
 
     /// DPI of whichever monitor a window currently sits on; queried live, nothing to invalidate.
@@ -2147,9 +2312,7 @@ pub const Painter = struct {
         return win32.GetDpiForSystem();
     }
 
-    fn dpiToScale(dpi: u32) f32 {
-        return @as(f32, @floatFromInt(dpi)) / 96.0;
-    }
+    const dpiToScale = win32.dpiToScale;
 
     fn resolveMonitorPlacement(cfg: *const config_mod.Config.DisplayConfig) ?MonitorPlacement {
         return if (cfg.monitorIndex) |monitor_idx| getMonitorPlacement(monitor_idx, cfg.useMonitorWorkArea) else null;
@@ -2226,10 +2389,10 @@ pub const Painter = struct {
         return count;
     }
 
-    /// notLoggedInSpace's own auto-fit grid - same aspect-preserving column/row search as RegionFit's Thumbnail Space, but with its own spacing. Shares regionFitLimitToThumbnailSize with RegionFit since both cap against the same configured thumbnail size.
+    /// notLoggedInSpace's own auto-fit grid - same aspect-preserving column/row search as RegionFit's Thumbnail Space, but with its own spacing and size cap.
     fn notLoggedInSpaceGrid(self: *const Painter, space: win32.RECT, count: usize) RegionFitGrid {
         const cfg = &self.config.display;
-        return calculateRegionFitGrid(space, count, cfg.notLoggedInSpaceSpacing, cfg.notLoggedInSpaceSpacing, self.regionFitAspectRatio(), self.regionFitMaxCellSize(space));
+        return calculateRegionFitGrid(space, count, cfg.notLoggedInSpaceSpacing, cfg.notLoggedInSpaceSpacing, self.regionFitAspectRatio(), self.thumbnailSizeCap(space, cfg.notLoggedInSpaceLimitToThumbnailSize));
     }
 
     /// Auto-fits not-logged-in placeholders into `space`: same grid-fit as RegionFit's Thumbnail Space, just with its own item count, spacing, and region.
@@ -2327,11 +2490,15 @@ pub const Painter = struct {
 
     const RegionFitCap = struct { width: i32, height: i32 };
 
-    /// Physical-pixel cap on RegionFit's cell size, DPI-scaled for the region's own monitor (which may differ from the app's configured monitor); null when regionFitLimitToThumbnailSize is off.
     fn regionFitMaxCellSize(self: *const Painter, region: win32.RECT) ?RegionFitCap {
-        if (!self.config.display.regionFitLimitToThumbnailSize) return null;
+        return self.thumbnailSizeCap(region, self.config.display.regionFitLimitToThumbnailSize);
+    }
+
+    /// Physical-pixel cap on a space's cell size, DPI-scaled for the space's own monitor (which may differ from the app's configured monitor); null when `limit_enabled` is off.
+    fn thumbnailSizeCap(self: *const Painter, region: win32.RECT, limit_enabled: bool) ?RegionFitCap {
+        if (!limit_enabled) return null;
         const center = win32.POINT{ .x = @divTrunc(region.left + region.right, 2), .y = @divTrunc(region.top + region.bottom, 2) };
-        const dpi = if (win32.MonitorFromPoint(center, win32.MONITOR_DEFAULTTONEAREST)) |monitor| getMonitorDpi(monitor) else defaultDpi();
+        const dpi = if (win32.nearestMonitor(center)) |monitor| getMonitorDpi(monitor) else defaultDpi();
         const scale = dpiToScale(dpi);
         return .{ .width = scalePixels(self.config.thumbnail.width, scale), .height = scalePixels(self.config.thumbnail.height, scale) };
     }
@@ -2626,12 +2793,6 @@ pub const Painter = struct {
     }
 
     pub fn createThumbnail(self: *Painter, eve_window: *const scout_mod.EveWindow, initial_system_name: []const u8) !void {
-        if (self.config.autoMovePosition.enabled and !self.config.isExcludedFromAutoMove(eve_window.character_name)) {
-            if (self.config.getCharacterWindowPosition(eve_window.character_name)) |pos| {
-                manager_mod.moveClientToPosition(eve_window.hwnd, pos);
-            }
-        }
-
         if (self.config.display.viewMode != .Thumbnails) {
             return self.createTrackingOnlyEntry(eve_window, initial_system_name);
         }
@@ -2953,35 +3114,14 @@ pub const Painter = struct {
             const rect_w: usize = @intCast(group.rect.right - group.rect.left);
             const rect_h: usize = @intCast(group.rect.bottom - group.rect.top);
 
-            drawRectOutline(overlay.pixels, overlay.width, overlay.height, local_x, local_y, rect_w, rect_h, 2, outline_color);
+            gdi_overlay.drawRectOutline(overlay.pixels, overlay.width, overlay.height, local_x, local_y, rect_w, rect_h, 2, outline_color);
 
             const dims = measureText(overlay.mem_dc, group.names);
             renderText(overlay.mem_dc, group.names, local_x, local_y, text_color);
             gdi_overlay.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, local_x, local_y, dims.width, dims.height);
         }
 
-        const screen_dc = win32.GetDC(null) orelse return;
-        defer _ = win32.ReleaseDC(null, screen_dc);
-        const window_size = win32.SIZE{ .cx = @intCast(overlay.width), .cy = @intCast(overlay.height) };
-        const source_pos = win32.POINT{ .x = 0, .y = 0 };
-        var blend = win32.BLENDFUNCTION{
-            .BlendOp = win32.AC_SRC_OVER,
-            .BlendFlags = 0,
-            .SourceConstantAlpha = 255,
-            .AlphaFormat = win32.AC_SRC_ALPHA,
-        };
-
-        _ = win32.UpdateLayeredWindow(
-            hwnd,
-            screen_dc,
-            null,
-            @constCast(&window_size),
-            overlay.mem_dc,
-            @constCast(&source_pos),
-            0,
-            &blend,
-            win32.ULW_ALPHA,
-        );
+        gdi_overlay.presentLayered(hwnd, overlay, 255);
 
         _ = win32.ShowWindow(hwnd, win32.SW_SHOWNOACTIVATE);
     }
@@ -2995,24 +3135,34 @@ pub const Painter = struct {
 
     /// Shows (creating on first use) a topmost, click-through hint box centered on the monitor nearest `dragging_hwnd`; called once when a drag starts. Static for the duration of the drag.
     pub fn showDragHintOverlay(self: *Painter, dragging_hwnd: win32.HWND) void {
-        const line1 = "Hold Ctrl to move all thumbnails together";
-        const line2 = "Turn off dragging from the tray icon or settings";
-
         const nearest = nearestMonitorBounds(dragging_hwnd);
-        const bounds = nearest.bounds;
-        const monitor_dpi = if (nearest.monitor) |monitor| getMonitorDpi(monitor) else defaultDpi();
+        self.showHintBox("Hold Ctrl to move all thumbnails together", "Turn off dragging from the tray icon or settings", nearest.bounds, nearest.monitor);
+    }
 
-        const scale = dpiToScale(monitor_dpi);
-        const font = self.getCachedFont(.main, monitor_dpi, self.config.thumbnail.characterNameFontName, scalePixels(self.config.thumbnail.characterNameFontSize, scale), self.config.thumbnail.characterNameFontWeight) catch |err| {
-            slog.err("Failed to get font for drag hint overlay: {}", .{err});
+    /// Hint box centered on the monitor under the cursor, shown above the region-select overlay.
+    pub fn showRegionSelectHint(self: *Painter, labels: *const protocol.RegionSelectLabels, editing: bool) void {
+        const nearest = cursorMonitorBounds();
+        const line1 = protocol.labelText(if (editing) &labels.hint_edit else &labels.hint_new);
+        self.showHintBox(line1, protocol.labelText(&labels.hint_confirm), nearest.bounds, nearest.monitor);
+    }
+
+    fn characterNameFont(self: *Painter, monitor: ?win32.HMONITOR) !win32.HFONT {
+        const dpi = if (monitor) |m| getMonitorDpi(m) else defaultDpi();
+        const thumbnail = &self.config.thumbnail;
+        return self.getCachedFont(.main, dpi, thumbnail.characterNameFontName, scalePixels(thumbnail.characterNameFontSize, dpiToScale(dpi)), thumbnail.characterNameFontWeight);
+    }
+
+    fn showHintBox(self: *Painter, line1: []const u8, line2: []const u8, bounds: win32.RECT, monitor: ?win32.HMONITOR) void {
+        const font = self.characterNameFont(monitor) catch |err| {
+            slog.err("Failed to get font for hint overlay: {}", .{err});
             return;
         };
 
         const init_dc = win32.GetDC(null) orelse return;
         defer _ = win32.ReleaseDC(null, init_dc);
         const old_measure_font = win32.SelectObject(init_dc, font);
-        const dims1 = measureText(init_dc, line1);
-        const dims2 = measureText(init_dc, line2);
+        const dims1 = measureTextUtf8(init_dc, line1);
+        const dims2 = measureTextUtf8(init_dc, line2);
         if (old_measure_font) |of| _ = win32.SelectObject(init_dc, of);
 
         const line_gap = 4;
@@ -3058,43 +3208,22 @@ pub const Painter = struct {
 
         const overlay = &self.drag_hint_bitmap.?;
         clearPixels(overlay.pixels, overlay.width * overlay.height);
-        gdi_overlay.fillRect(overlay.pixels, overlay.width, overlay.height, 0, 0, overlay.width, overlay.height, color_mod.withAlpha(0x000000, 0xC8));
+        gdi_overlay.fillRect(overlay.pixels, overlay.width, overlay.height, 0, 0, overlay.width, overlay.height, gdi_overlay.HINT_BG_COLOR);
 
         const old_font = win32.SelectObject(overlay.mem_dc, font);
         defer {
             if (old_font) |of| _ = win32.SelectObject(overlay.mem_dc, of);
         }
 
-        const text_color: u32 = 0xFFFFFFFF;
-        renderText(overlay.mem_dc, line1, box_padding, box_padding, text_color);
+        const text_color: u32 = self.config.thumbnail.characterNameColor | 0xFF000000;
+        renderTextUtf8(overlay.mem_dc, line1, box_padding, box_padding, text_color);
         gdi_overlay.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, box_padding, box_padding, dims1.width, dims1.height);
 
         const line2_y: i32 = @intCast(box_padding + dims1.height + line_gap);
-        renderText(overlay.mem_dc, line2, box_padding, line2_y, text_color);
+        renderTextUtf8(overlay.mem_dc, line2, box_padding, line2_y, text_color);
         gdi_overlay.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, box_padding, line2_y, dims2.width, dims2.height);
 
-        const screen_dc = win32.GetDC(null) orelse return;
-        defer _ = win32.ReleaseDC(null, screen_dc);
-        const window_size = win32.SIZE{ .cx = @intCast(overlay.width), .cy = @intCast(overlay.height) };
-        const source_pos = win32.POINT{ .x = 0, .y = 0 };
-        var blend = win32.BLENDFUNCTION{
-            .BlendOp = win32.AC_SRC_OVER,
-            .BlendFlags = 0,
-            .SourceConstantAlpha = 255,
-            .AlphaFormat = win32.AC_SRC_ALPHA,
-        };
-
-        _ = win32.UpdateLayeredWindow(
-            hwnd,
-            screen_dc,
-            null,
-            @constCast(&window_size),
-            overlay.mem_dc,
-            @constCast(&source_pos),
-            0,
-            &blend,
-            win32.ULW_ALPHA,
-        );
+        gdi_overlay.presentLayered(hwnd, overlay, 255);
 
         _ = win32.ShowWindow(hwnd, win32.SW_SHOWNOACTIVATE);
     }
@@ -3106,11 +3235,7 @@ pub const Painter = struct {
     }
 };
 
-/// Scales a logical (96-DPI) pixel value to the given monitor scale factor, rounding to nearest.
-fn scalePixels(value: i32, scale: f32) i32 {
-    if (scale == 1.0) return value;
-    return @intFromFloat(@round(@as(f32, @floatFromInt(value)) * scale));
-}
+const scalePixels = win32.scalePixels;
 
 /// Clears all pixels to transparent via @memset on the typed slice.
 fn clearPixels(pixels: [*]u32, count: usize) void {
@@ -3423,21 +3548,6 @@ fn drawBorder(pixels: [*]u32, width: usize, height: usize, border_width: usize, 
     }
 }
 
-/// Draws a `thickness`-px outline of an arbitrary sub-rect within a `buf_width`x`buf_height` pixel buffer; unlike drawBorder (which frames the whole buffer), this frames a rect placed anywhere inside it. Clamped to the buffer bounds.
-fn drawRectOutline(pixels: [*]u32, buf_width: usize, buf_height: usize, x: i32, y: i32, w: usize, h: usize, thickness: usize, color: u32) void {
-    const left: usize = @intCast(std.math.clamp(x, 0, @as(i32, @intCast(buf_width))));
-    const top: usize = @intCast(std.math.clamp(y, 0, @as(i32, @intCast(buf_height))));
-    const right = @min(buf_width, left + w);
-    const bottom = @min(buf_height, top + h);
-    if (right <= left or bottom <= top) return;
-
-    const t = @min(thickness, @min(right - left, bottom - top));
-    gdi_overlay.fillRect(pixels, buf_width, buf_height, left, top, right - left, t, color);
-    gdi_overlay.fillRect(pixels, buf_width, buf_height, left, bottom - t, right - left, t, color);
-    gdi_overlay.fillRect(pixels, buf_width, buf_height, left, top, t, bottom - top, color);
-    gdi_overlay.fillRect(pixels, buf_width, buf_height, right - t, top, t, bottom - top, color);
-}
-
 /// Inserts comma thousands-separators into the leading run of ASCII digits in `text` (e.g. "12405.3 m3/min" -> "12,405.3 m3/min").
 fn insertThousandsSeparators(buf: []u8, text: []const u8) []const u8 {
     var digit_end: usize = 0;
@@ -3522,33 +3632,32 @@ fn fontSettingsChanged(cached_name: []const u8, cached_size: i32, cached_weight:
     return !stringsEqualFast(cached_name, new_name) or cached_size != new_size or cached_weight != new_weight;
 }
 
-fn toBufZ(text: []const u8) [TEXT_BUFFER_SIZE:0]u8 {
-    return gdi_overlay.toBufZ(TEXT_BUFFER_SIZE, text);
-}
-
 /// Measures text dimensions without rendering; the correct font must already be selected into `dc` by the caller.
 fn measureText(dc: win32.HDC, text: []const u8) TextDimensions {
-    const text_buffer = toBufZ(text);
-    const text_len = @min(text.len, text_buffer.len - 1);
-
-    var text_size: win32.SIZE = undefined;
-    _ = win32.GetTextExtentPoint32A(dc, &text_buffer, @intCast(text_len), &text_size);
-
+    const text_size = gdi_overlay.measureTextSize(TEXT_BUFFER_SIZE, dc, text);
     return .{
         .width = @intCast(@max(0, text_size.cx) + (TEXT_PADDING_X * 2)),
         .height = @intCast(@max(0, text_size.cy) + (TEXT_PADDING_Y * 2)),
     };
 }
 
+/// UTF-8 counterpart of measureText, for translated text.
+fn measureTextUtf8(dc: win32.HDC, text: []const u8) TextDimensions {
+    const text_size = gdi_overlay.measureTextSizeUtf8(TEXT_BUFFER_SIZE, dc, text);
+    return .{
+        .width = @intCast(@max(0, text_size.cx) + (TEXT_PADDING_X * 2)),
+        .height = @intCast(@max(0, text_size.cy) + (TEXT_PADDING_Y * 2)),
+    };
+}
+
+/// UTF-8 counterpart of renderText, for translated text.
+fn renderTextUtf8(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32) void {
+    gdi_overlay.drawTextUtf8(TEXT_BUFFER_SIZE, dc, x + TEXT_PADDING_X, y + TEXT_PADDING_Y, text, color);
+}
+
 /// Renders text onto the device context at the specified position; the correct font must already be selected into `dc` by the caller.
 fn renderText(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32) void {
-    _ = win32.SetBkMode(dc, win32.TRANSPARENT);
-    _ = win32.SetTextColor(dc, gdi_overlay.toColorRef(color));
-
-    const text_buffer = toBufZ(text);
-    const text_len = @min(text.len, text_buffer.len - 1);
-
-    _ = win32.TextOutA(dc, x + TEXT_PADDING_X, y + TEXT_PADDING_Y, &text_buffer, @intCast(text_len));
+    gdi_overlay.drawText(TEXT_BUFFER_SIZE, dc, x + TEXT_PADDING_X, y + TEXT_PADDING_Y, text, color);
 }
 
 fn renderThumbnailOverlay(thumbnail: *ThumbnailWindow, settings: RenderSettings, config: *const config_mod.Config) !void {
@@ -4392,6 +4501,7 @@ fn windowDestroyProc(
     _ = painter.thumbnails.orderedRemove(index);
 
     painter.rebuildHwndIndex(false);
+    if (painter.thumbnails.items.len == 0) painter.config.flushAutoColors();
 }
 
 /// Toggles WS_EX_TRANSPARENT on an already-created window, so clickThrough can change live without recreating it.
@@ -4433,8 +4543,8 @@ fn isExplorerOwned(hwnd: win32.HWND) bool {
 fn regionSelectFinishedCallback() void {
     const painter = g_painter_ptr orelse return;
     painter.restoreThumbnailsAfterRegionSelect();
+    painter.hideDragHintOverlay();
 }
-
 fn winEventProc(
     hWinEventHook: win32.HANDLE,
     event: win32.DWORD,

@@ -5,6 +5,7 @@ const scout = @import("scout.zig");
 const painter = @import("painter.zig");
 const input = @import("input.zig");
 const config_mod = @import("config.zig");
+const types = @import("types.zig");
 const hotkeys = @import("hotkeys.zig");
 const mouse_hook = @import("mouse_hook.zig");
 const chatlog = @import("chatlog.zig");
@@ -16,6 +17,7 @@ const tray = @import("tray.zig");
 const protocol = @import("protocol.zig");
 const update = @import("update.zig");
 const paste_upload = @import("paste_upload.zig");
+const fonts = @import("fonts.zig");
 const log = @import("log.zig");
 const slog = log.scoped("main");
 const build_options = @import("build_options");
@@ -99,10 +101,12 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
         win32.WM_HOTKEYS_STATE_CHANGED => {
             if (g_tray_icon) |*icon| {
                 if (g_hotkey_manager) |manager| {
-                    if (manager.areHotkeysSuspended()) {
-                        icon.showBalloon("EVE-Maj Preview", "Hotkeys suspended", win32.NIIF_WARNING);
-                    } else {
-                        icon.showBalloon("EVE-Maj Preview", "Hotkeys resumed", win32.NIIF_INFO);
+                    if (manager.config.suspendHotkeyNotification) {
+                        if (manager.areHotkeysSuspended()) {
+                            icon.showBalloon("EVE-Maj Preview", "Hotkeys suspended", win32.NIIF_WARNING);
+                        } else {
+                            icon.showBalloon("EVE-Maj Preview", "Hotkeys resumed", win32.NIIF_INFO);
+                        }
                     }
                 }
             }
@@ -157,6 +161,14 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
                         };
                     }
                 },
+                win32.PROTOCOL_TEST_NOTIFICATION => {
+                    if (cds.lpData) |data_ptr| {
+                        const json_data = @as([*]const u8, @ptrCast(data_ptr))[0..cds.cbData];
+                        showTestNotification(json_data) catch |err| {
+                            slog.err("Failed to show test notification: {}", .{err});
+                        };
+                    }
+                },
                 win32.PROTOCOL_REVERT_PREVIEW => revertThumbnailPreview(),
                 win32.PROTOCOL_DIALOG_SUSPEND_HOTKEYS => {
                     if (g_hotkey_manager) |manager| {
@@ -170,7 +182,7 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
                 },
                 win32.PROTOCOL_START_REGION_SELECT => {
                     if (g_painter) |painter_ptr| {
-                        painter_ptr.startRegionSelect();
+                        painter_ptr.startRegionSelect(protocol.regionSelectRequestFromCopyData(cds));
                     }
                 },
                 else => {},
@@ -653,6 +665,8 @@ fn mainImpl(init: std.process.Init) !void {
 
     slog.info("EVE-Maj Preview v{s}", .{build_options.version});
 
+    fonts.loadBundled();
+
     g_global_settings = try config_mod.GlobalSettings.load(g_allocator);
     defer g_global_settings.deinit();
     log.setLevel(g_global_settings.logLevel);
@@ -855,6 +869,9 @@ fn mainImpl(init: std.process.Init) !void {
     const eve_windows = g_scout.?.getWindows();
     for (eve_windows) |*eve_window| {
         try g_painter.?.createThumbnail(eve_window, "");
+        if (g_config.autoMovePosition.moveOnStartup) {
+            g_painter.?.moveClientToSavedPosition(eve_window.hwnd, eve_window.character_name);
+        }
     }
     g_painter.?.reflowIfRegionFitActive();
 
@@ -1233,6 +1250,40 @@ fn applyThumbnailPreview(json_data: []const u8) !void {
         painter_ptr.refreshAllThumbnailVisuals();
         if (layout_changed) painter_ptr.repositionAllThumbnails();
     }
+}
+
+/// Fires one event type on every thumbnail from the config dialog's unsaved per-type values; payload is `{type, text, config}`.
+fn showTestNotification(json_data: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(std.json.Value, g_allocator, json_data, .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidJsonFormat;
+    const obj = parsed.value.object;
+
+    const type_name = switch (obj.get("type") orelse return error.MissingNotificationType) {
+        .string => |s| s,
+        else => return error.InvalidJsonFormat,
+    };
+    const text = switch (obj.get("text") orelse return error.InvalidJsonFormat) {
+        .string => |s| s,
+        else => return error.InvalidJsonFormat,
+    };
+    const config_obj = switch (obj.get("config") orelse return error.InvalidJsonFormat) {
+        .object => |o| o,
+        else => return error.InvalidJsonFormat,
+    };
+
+    const ntype = std.meta.stringToEnum(types.NotificationType, type_name) orelse {
+        slog.warn("Unknown notification type in test request: {s}", .{type_name});
+        return error.InvalidNotificationType;
+    };
+
+    var type_config: config_mod.NotificationTypeConfig = .{};
+    defer type_config.deinit(g_allocator);
+    try type_config.applyJson(g_allocator, config_obj);
+
+    const painter_ptr = g_painter orelse return;
+    try painter_ptr.showTestNotification(ntype, text, type_config);
 }
 
 /// Discards live-previewed appearance and layout changes by reloading that section from disk, repainting, and repositioning; sent when the config dialog closes, a no-op if Save was already clicked.

@@ -762,7 +762,7 @@ function Start-NotificationStorm {
 }
 
 function Start-CharacterJumpSequence {
-    param([string]$CharName)
+    param([string]$CharName, [string[]]$Systems, [int]$IntervalSeconds = 10)
 
     $c = $clients[$CharName]
     $existing = $c.Jobs['jump']
@@ -773,12 +773,77 @@ function Start-CharacterJumpSequence {
     if ($existing) {
         Remove-Job -Job $existing -Force -ErrorAction SilentlyContinue
     }
-    $systems = Get-Random -InputObject $script:EveSystemNames -Count 3
-    $c.Jobs['jump'] = Start-JumpSequence -GamelogPath $c.Gamelog -ChatlogPath $c.Chatlog -FromSystem $c.System -Systems $systems
+    if (-not $Systems) {
+        $Systems = Get-Random -InputObject $script:EveSystemNames -Count 3
+    }
+    $c.Jobs['jump'] = Start-JumpSequence -GamelogPath $c.Gamelog -ChatlogPath $c.Chatlog -FromSystem $c.System -Systems $Systems -IntervalSeconds $IntervalSeconds
     # Updated immediately since the background job can't reach back into this script's state.
-    $c.System = $systems[-1]
+    $c.System = $Systems[-1]
     Save-CharacterState -CharName $CharName -ChatlogPath $c.Chatlog -GamelogPath $c.Gamelog -System $c.System
-    Write-Host "$CharName jump route: $($systems -join ' -> ') (10s apart)." -ForegroundColor Green
+    Write-Host "$CharName jump route: $($Systems -join ' -> ') (${IntervalSeconds}s apart)." -ForegroundColor Green
+}
+
+# Rules to enter under Settings > System Colors (Unique System Colors off so "default" is unambiguous).
+# Amarr sits after Ama* on purpose: exact names must beat patterns regardless of row order.
+$script:SystemColorTestRules = @(
+    @{ Name = 'jita, PERIMETER'; Color = 'gold' }
+    @{ Name = 'J######'; Color = 'cyan' }
+    @{ Name = 'J100000'; Color = 'red' }
+    @{ Name = 'Ama*'; Color = 'green' }
+    @{ Name = 'Amarr'; Color = 'magenta' }
+)
+
+$script:SystemColorTestSteps = @(
+    @{ System = 'Jita'; Expect = 'gold (first in a comma list; rule is lowercase)' }
+    @{ System = 'Perimeter'; Expect = 'gold (second in a comma list; rule is uppercase)' }
+    @{ System = 'J123456'; Expect = 'cyan (# matches digits)' }
+    @{ System = 'J100000'; Expect = 'red (exact beats J###### pattern)' }
+    @{ System = 'Jakri'; Expect = 'DEFAULT (J###### must not match letters)' }
+    @{ System = 'J12345'; Expect = 'DEFAULT (only 5 digits, pattern needs 6)' }
+    @{ System = 'Amamake'; Expect = 'green (Ama* pattern)' }
+    @{ System = 'Amarr'; Expect = 'magenta (exact beats Ama* despite row order)' }
+    @{ System = 'Rens'; Expect = 'DEFAULT (no rule)' }
+)
+
+# Enable Unique System Colors first; systems with a System Colors override (e.g. the [y] test rows) show that color instead.
+function Start-UniqueColorTest {
+    $movers = @($clients.Keys | Where-Object { $clients[$_].LoggedIn })
+    if ($movers.Count -eq 0) { Write-Warning 'No logged-in clients.'; return }
+
+    $pool = @($script:EveSystemNames)
+    for ($idx = 0; $idx -lt $movers.Count; $idx++) {
+        $c = $clients[$movers[$idx]]
+        $dest = $pool[$idx % $pool.Count]
+        Add-GamelogJump -Path $c.Gamelog -From $c.System -To $dest | Out-Null
+        Add-ChatlogJump -Path $c.Chatlog -System $dest | Out-Null
+        $c.System = $dest
+        Save-CharacterState -CharName $movers[$idx] -ChatlogPath $c.Chatlog -GamelogPath $c.Gamelog -System $c.System
+        Write-Host ("{0,-20} -> {1}" -f $movers[$idx], $dest)
+    }
+    Write-Host ''
+    Write-Host 'Compare the thumbnails: every system (and, with Unique Character Name Colors on, every character) should have a clearly different color.' -ForegroundColor Cyan
+    Write-Host 'Then restart the app: each must keep its color (stored in colors.json next to profiles).' -ForegroundColor Cyan
+}
+
+function Start-SystemColorTest {
+    param([string]$CharName, [int]$IntervalSeconds = 6)
+
+    Write-Host ''
+    Write-Host 'Add these rows under Settings > System Colors (in this order), with Unique System Colors OFF:' -ForegroundColor Cyan
+    foreach ($rule in $script:SystemColorTestRules) {
+        Write-Host ("  {0,-18} -> {1}" -f $rule.Name, $rule.Color)
+    }
+    Write-Host ''
+    Write-Host "Expected result per step (${IntervalSeconds}s apart, in order):" -ForegroundColor Cyan
+    for ($idx = 0; $idx -lt $script:SystemColorTestSteps.Count; $idx++) {
+        $step = $script:SystemColorTestSteps[$idx]
+        Write-Host ("  {0,2}) {1,-10} {2}" -f ($idx + 1), $step.System, $step.Expect)
+    }
+    Write-Host ''
+    Read-Host 'Press Enter once the rows are added to start jumping' | Out-Null
+
+    $systems = @($script:SystemColorTestSteps | ForEach-Object { $_.System })
+    Start-CharacterJumpSequence -CharName $CharName -Systems $systems -IntervalSeconds $IntervalSeconds
 }
 
 # Jumps everyone but $StragglerName to one new system, for testing Travel Mode's left-behind alert.
@@ -824,6 +889,8 @@ $menu = @'
   [m] mining burst (60s)     [c] combat burst (60s)     [j] jump to system
   [r] random 3-system route  [e] fire event type...     [x] notification storm (multi-alert test)
   [t] travel mode test (group jump, leave one behind)
+  [y] system color test (patterns, comma lists, precedence)
+  [u] unique color test (every client in its own system)
   [q] quit (stops everyone)
 '@
 
@@ -943,6 +1010,11 @@ try {
                 }
             }
         }
+        'y' {
+            $name = Select-Character
+            if ($name) { Start-SystemColorTest -CharName $name }
+        }
+        'u' { Start-UniqueColorTest }
         'q' {
             break mainLoop
         }

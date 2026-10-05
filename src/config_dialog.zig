@@ -8,7 +8,6 @@ const scout = @import("scout.zig");
 const ultra_potato = @import("ultra_potato.zig");
 const esi_prices = @import("esi_prices.zig");
 const update = @import("update.zig");
-const sound = @import("sound.zig");
 const log = @import("log.zig");
 
 const slog = log.scoped("config_dialog");
@@ -17,6 +16,7 @@ const config_html = @embedFile("config_dialog.html");
 const config_css = @embedFile("config_dialog.css");
 const config_js = @embedFile("config_dialog.js");
 const layout_preview_jpg = @embedFile("assets/layout_preview.jpg");
+const cascadia_code_woff2 = @embedFile("assets/fonts/CascadiaCode.woff2");
 
 const catalog_en = @embedFile("lang/en.json");
 const catalog_de = @embedFile("lang/de.json");
@@ -78,6 +78,9 @@ const DIALOG_WINDOW_TITLE = "EVE-Maj Preview Configuration";
 const DIALOG_DESIGN_WIDTH: f32 = 800.0;
 const DIALOG_DESIGN_HEIGHT: f32 = 950.0;
 
+/// Default spawn position; x isn't 0 since webui treats that as "unset" and centers the window instead.
+const DEFAULT_DIALOG_POSITION: win32.POINT = .{ .x = 20, .y = 20 };
+
 const PhysicalSize = struct { width: u32, height: u32 };
 
 /// Converts the 96-DPI design size into the physical pixels setSize/SetWindowPos expect at this DPI.
@@ -87,6 +90,15 @@ fn targetPhysicalSize(dpi: u32) PhysicalSize {
         .width = @intFromFloat(@round(DIALOG_DESIGN_WIDTH * scale)),
         .height = @intFromFloat(@round(DIALOG_DESIGN_HEIGHT * scale)),
     };
+}
+
+/// DPI of the monitor under `point`; falls back to 96 (unscaled) if it can't be resolved.
+fn dpiForPoint(point: win32.POINT) u32 {
+    const monitor = win32.MonitorFromPoint(point, win32.MONITOR_DEFAULTTONEAREST) orelse return 96;
+    var dpi_x: win32.UINT = 96;
+    var dpi_y: win32.UINT = 96;
+    _ = win32.GetDpiForMonitor(monitor, win32.MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y);
+    return dpi_x;
 }
 
 /// Set once by revealDialogWindow, once the WebView2 host window exists; consumed by setAlwaysOnTop.
@@ -199,11 +211,25 @@ fn mainImpl(init: std.process.Init) !void {
 
     var win = webui.newWindow();
 
-    // Physical-pixel size for per-monitor DPI awareness; GetDpiForSystem is just a startup guess, corrected in revealDialogWindow once the real monitor is known.
-    const startup_size = targetPhysicalSize(win32.GetDpiForSystem());
+    // Falls back to DEFAULT_DIALOG_POSITION, not webui's own centering, when nothing's been saved yet.
+    const initial_position: win32.POINT = if (startup_settings) |s|
+        (if (s.dialogX != null and s.dialogY != null)
+            win32.POINT{ .x = s.dialogX.?, .y = s.dialogY.? }
+        else
+            DEFAULT_DIALOG_POSITION)
+    else
+        DEFAULT_DIALOG_POSITION;
+
+    // Startup guess from the target position's monitor DPI; revealDialogWindow corrects it once the real monitor is known.
+    const startup_size = targetPhysicalSize(dpiForPoint(initial_position));
     win.setSize(startup_size.width, startup_size.height);
     win.setKiosk(false);
     win.setResizable(true);
+
+    // Before showWv, not after: webui reads win->x/win->y at creation time, so the first paint lands here instead of jumping.
+    if (initial_position.x >= 0 and initial_position.y >= 0) {
+        win.setPosition(@intCast(initial_position.x), @intCast(initial_position.y));
+    }
 
     _ = try win.bind("closeDialog", closeDialog);
     _ = try win.bind("loadConfig", loadConfig);
@@ -220,7 +246,6 @@ fn mainImpl(init: std.process.Init) !void {
     _ = try win.bind("browseChatlogDir", browseChatlogDir);
     _ = try win.bind("browseGamelogDir", browseGamelogDir);
     _ = try win.bind("browseSoundFile", browseSoundFile);
-    _ = try win.bind("testSoundFile", testSoundFile);
     _ = try win.bind("setCharacterWindowPosition", setCharacterWindowPosition);
     _ = try win.bind("clearCharacterWindowPosition", clearCharacterWindowPosition);
     _ = try win.bind("setAllCharacterWindowPositions", setAllCharacterWindowPositions);
@@ -231,6 +256,7 @@ fn mainImpl(init: std.process.Init) !void {
     _ = try win.bind("saveGlobalSettings", saveGlobalSettings);
     _ = try win.bind("fetchOrePrices", esi_prices.fetchOrePrices);
     _ = try win.bind("previewThumbnailConfig", previewThumbnailConfig);
+    _ = try win.bind("testNotification", testNotification);
     _ = try win.bind("suspendHotkeysForRecording", suspendHotkeysForRecording);
     _ = try win.bind("resumeHotkeysAfterRecording", resumeHotkeysAfterRecording);
     _ = try win.bind("switchProfileLive", switchProfileLive);
@@ -336,10 +362,29 @@ fn dialogWndProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam
         return 0;
     }
 
+    if (msg == win32.WM_EXITSIZEMOVE) {
+        var rect: win32.RECT = undefined;
+        _ = win32.GetWindowRect(hwnd, &rect);
+        persistDialogPosition(rect.left, rect.top);
+    }
+
     if (g_dialog_orig_wndproc != 0) {
         return win32.CallWindowProcA(g_dialog_orig_wndproc, hwnd, msg, wParam, lParam);
     }
     return win32.DefWindowProcA(hwnd, msg, wParam, lParam);
+}
+
+/// Reloads settings fresh from disk so this doesn't clobber changes made elsewhere since the dialog opened.
+fn persistDialogPosition(x: i32, y: i32) void {
+    var settings = config_mod.GlobalSettings.load(g_allocator) catch |err| {
+        slog.warn("Failed to load global settings to persist dialog position: {}", .{err});
+        return;
+    };
+    defer settings.deinit();
+
+    settings.saveDialogPosition(x, y) catch |err| {
+        slog.warn("Failed to save configuration dialog position: {}", .{err});
+    };
 }
 
 fn revealDialogWindow(win: anytype, initial_always_on_top: bool) void {
@@ -347,7 +392,7 @@ fn revealDialogWindow(win: anytype, initial_always_on_top: bool) void {
         g_dialog_hwnd = hwnd;
         installDpiChangeHandler(hwnd);
 
-        // Re-derive against the window's actual monitor DPI, since the startup size above was only a guess.
+        // Re-derive against the window's actual monitor DPI in case the startup guess was stale.
         const actual_dpi = win32.GetDpiForWindow(hwnd);
         const target = targetPhysicalSize(actual_dpi);
 
@@ -659,9 +704,58 @@ fn previewThumbnailConfig(e: *webui.Event) void {
     e.returnString("{\"success\": true}");
 }
 
+/// Fires one event type on the running app's thumbnails using the dialog's unsaved per-type values (see testNotification() in config_dialog.js).
+fn testNotification(e: *webui.Event) void {
+    const hwnd = findMainAppWindow() orelse {
+        slog.warn("Test notification skipped: main app window not found", .{});
+        e.returnString("{\"success\": false}");
+        return;
+    };
+
+    protocol.sendCommandToInstance(hwnd, protocol.Command{ .TestNotification = e.getString() });
+    e.returnString("{\"success\": true}");
+}
+
 /// Baseline sequence at startRegionSelect, so pollRegionSelectResult can tell a fresh result from a stale one left over from a previous session.
 var g_region_select_baseline_sequence: u32 = 0;
 var g_region_select_pending: bool = false;
+
+/// What config_dialog.js sends to startRegionSelect; `region` is [x, y, width, height] in screen coordinates, or null to start a fresh drag. Empty labels keep the overlay's English defaults.
+const RegionSelectRequestJson = struct {
+    hide: bool = false,
+    region: ?[4]i32 = null,
+    labels: struct {
+        save: []const u8 = "",
+        cancel: []const u8 = "",
+        hintNew: []const u8 = "",
+        hintEdit: []const u8 = "",
+        hintConfirm: []const u8 = "",
+    } = .{},
+};
+
+fn setLabel(comptime n: usize, field: *[n]u8, text: []const u8) void {
+    if (text.len > 0) field.* = protocol.fixedText(n, text);
+}
+
+fn parseRegionSelectRequest(json: []const u8) protocol.RegionSelectRequest {
+    const parsed = std.json.parseFromSlice(RegionSelectRequestJson, g_allocator, json, .{ .ignore_unknown_fields = true }) catch |err| {
+        slog.warn("Ignoring malformed region-select request: {}", .{err});
+        return .{};
+    };
+    defer parsed.deinit();
+    const value = parsed.value;
+
+    var request = protocol.RegionSelectRequest{ .hide_thumbnails = value.hide };
+    if (value.region) |r| {
+        if (r[2] > 0 and r[3] > 0) request.edit_region = .{ .left = r[0], .top = r[1], .right = r[0] + r[2], .bottom = r[1] + r[3] };
+    }
+    setLabel(32, &request.labels.save, value.labels.save);
+    setLabel(32, &request.labels.cancel, value.labels.cancel);
+    setLabel(192, &request.labels.hint_new, value.labels.hintNew);
+    setLabel(192, &request.labels.hint_edit, value.labels.hintEdit);
+    setLabel(192, &request.labels.hint_confirm, value.labels.hintConfirm);
+    return request;
+}
 
 /// Triggers the main app's drag-to-select overlay; config_dialog.js's startRegionSelectFlow() then polls pollRegionSelectResult.
 fn startRegionSelect(e: *webui.Event) void {
@@ -669,11 +763,12 @@ fn startRegionSelect(e: *webui.Event) void {
         e.returnString("{\"success\": false, \"error\": \"Main app is not running\"}");
         return;
     };
+    const request = parseRegionSelectRequest(e.getString());
 
     g_region_select_baseline_sequence = if (protocol.readRegionSelectResult()) |result| result.sequence else 0;
     g_region_select_pending = true;
 
-    protocol.sendCommandToInstance(hwnd, protocol.Command{ .StartRegionSelect = {} });
+    protocol.sendCommandToInstance(hwnd, protocol.Command{ .StartRegionSelect = request });
     e.returnString("{\"success\": true}");
 }
 
@@ -695,19 +790,21 @@ fn pollRegionSelectResult(e: *webui.Event) void {
 
     g_region_select_pending = false;
 
-    if (result.status == 1) {
-        var buf: [160]u8 = undefined;
-        const json = std.fmt.bufPrintZ(
-            &buf,
-            "{{\"done\": true, \"cancelled\": false, \"x\": {}, \"y\": {}, \"width\": {}, \"height\": {}}}",
-            .{ result.x, result.y, result.width, result.height },
-        ) catch {
-            e.returnString("{\"done\": true, \"cancelled\": true}");
-            return;
-        };
-        e.returnString(json);
-    } else {
-        e.returnString("{\"done\": true, \"cancelled\": true}");
+    switch (result.status) {
+        .success => {
+            var buf: [160]u8 = undefined;
+            const json = std.fmt.bufPrintZ(
+                &buf,
+                "{{\"done\": true, \"cancelled\": false, \"x\": {}, \"y\": {}, \"width\": {}, \"height\": {}}}",
+                .{ result.x, result.y, result.width, result.height },
+            ) catch {
+                e.returnString("{\"done\": true, \"cancelled\": true}");
+                return;
+            };
+            e.returnString(json);
+        },
+        .too_small => e.returnString("{\"done\": true, \"cancelled\": true, \"tooSmall\": true}"),
+        .none, .cancelled => e.returnString("{\"done\": true, \"cancelled\": true}"),
     }
 }
 
@@ -893,6 +990,16 @@ fn saveGlobalSettings(e: *webui.Event) void {
     };
     defer settings.deinit();
 
+    // Position is persisted independently on every drag (persistDialogPosition), so keep whatever is on disk here.
+    if (config_mod.GlobalSettings.load(allocator)) |current| {
+        var current_mut = current;
+        defer current_mut.deinit();
+        settings.dialogX = current_mut.dialogX;
+        settings.dialogY = current_mut.dialogY;
+    } else |err| {
+        slog.warn("Failed to load current global settings to preserve dialog position: {}", .{err});
+    }
+
     settings.save() catch |err| {
         slog.err("Failed to save global settings: {}", .{err});
         e.returnString("{\"success\": false, \"error\": \"Failed to write file\"}");
@@ -974,6 +1081,7 @@ fn enumClientsCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win3
 const WindowRectScanContext = struct {
     target_name: []const u8,
     rect: ?win32.RECT = null,
+    minimized: bool = false,
 };
 
 /// EnumWindows callback that captures the rect of the window matching ctx.target_name.
@@ -984,6 +1092,12 @@ fn findWindowRectCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) w
     const char_name = matchEveClientTitle(hwnd, &title_buf) orelse return win32.TRUE;
     if (!std.mem.eql(u8, char_name, ctx.target_name)) return win32.TRUE;
 
+    // A minimized window's rect is the off-screen parking spot (-32000, -32000), not a real position.
+    if (win32.isWindowIconic(hwnd)) {
+        ctx.minimized = true;
+        return win32.FALSE;
+    }
+
     var rect: win32.RECT = undefined;
     if (win32.GetWindowRect(hwnd, &rect) == 0) return win32.TRUE;
 
@@ -991,11 +1105,14 @@ fn findWindowRectCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) w
     return win32.FALSE;
 }
 
-/// Returns `character_name`'s live window's current screen rect, or null if it's not open.
-fn findWindowRectByCharacterName(character_name: []const u8) ?win32.RECT {
+const WindowRectError = error{ CharacterNotOpen, CharacterMinimized };
+
+/// Returns `character_name`'s live window's current screen rect; minimized windows have no usable position.
+fn findWindowRectByCharacterName(character_name: []const u8) WindowRectError!win32.RECT {
     var ctx = WindowRectScanContext{ .target_name = character_name };
     _ = win32.EnumWindows(findWindowRectCallback, win32.ptrToLparam(&ctx));
-    return ctx.rect;
+    if (ctx.minimized) return error.CharacterMinimized;
+    return ctx.rect orelse error.CharacterNotOpen;
 }
 
 /// Loads the current profile's config, or writes a load-failure JSON response and returns null.
@@ -1015,8 +1132,11 @@ fn setCharacterWindowPosition(e: *webui.Event) void {
 
     slog.debug("setCharacterWindowPosition requested for '{s}'", .{character_name});
 
-    const rect = findWindowRectByCharacterName(character_name) orelse {
-        e.returnString("{\"success\": false, \"error\": \"Character is not currently open\"}");
+    const rect = findWindowRectByCharacterName(character_name) catch |err| {
+        e.returnString(switch (err) {
+            error.CharacterMinimized => "{\"success\": false, \"error\": \"Character's window is minimized\"}",
+            error.CharacterNotOpen => "{\"success\": false, \"error\": \"Character is not currently open\"}",
+        });
         return;
     };
     const pos = config_mod.Position{ .x = @intCast(rect.left), .y = @intCast(rect.top) };
@@ -1064,8 +1184,11 @@ fn setAllCharacterWindowPositions(e: *webui.Event) void {
 
     slog.debug("setAllCharacterWindowPositions requested, source '{s}'", .{source_character_name});
 
-    const rect = findWindowRectByCharacterName(source_character_name) orelse {
-        e.returnString("{\"success\": false, \"error\": \"Selected character is not currently open\"}");
+    const rect = findWindowRectByCharacterName(source_character_name) catch |err| {
+        e.returnString(switch (err) {
+            error.CharacterMinimized => "{\"success\": false, \"error\": \"Selected character's window is minimized\"}",
+            error.CharacterNotOpen => "{\"success\": false, \"error\": \"Selected character is not currently open\"}",
+        });
         return;
     };
     const pos = config_mod.Position{ .x = @intCast(rect.left), .y = @intCast(rect.top) };
@@ -2089,17 +2212,6 @@ fn browseSoundFile(e: *webui.Event) void {
     }
 }
 
-// Plays directly rather than via sound.zig's worker queue - only one test can run at a time here.
-fn testSoundFile(e: *webui.Event) void {
-    const path = e.getStringAt(0);
-    const volume_str = e.getStringAt(1);
-    const volume = std.fmt.parseInt(u8, volume_str, 10) catch 100;
-
-    sound.playBlocking(g_allocator, path, volume) catch |err| {
-        slog.warn("Test sound playback failed for '{s}': {}", .{ path, err });
-    };
-}
-
 /// Bound to config_dialog.js's window.onerror/unhandledrejection handlers and its
 /// logError()/logWarn() wrappers around console.error/console.warn, so JS-side
 /// failures land in eve-maj.log next to everything else instead of only being
@@ -2186,6 +2298,17 @@ fn injectResources(allocator: std.mem.Allocator, lang: SupportedLang) ![:0]u8 {
         _ = encoder.encode(encoded, layout_preview_jpg);
         const temp = html;
         html = try std.mem.replaceOwned(u8, allocator, temp, layout_preview_placeholder, encoded);
+        allocator.free(temp);
+    }
+
+    const font_placeholder = "CASCADIA_CODE_WOFF2_PLACEHOLDER";
+    if (std.mem.indexOf(u8, html, font_placeholder)) |_| {
+        const encoder = std.base64.standard.Encoder;
+        const encoded = try allocator.alloc(u8, encoder.calcSize(cascadia_code_woff2.len));
+        defer allocator.free(encoded);
+        _ = encoder.encode(encoded, cascadia_code_woff2);
+        const temp = html;
+        html = try std.mem.replaceOwned(u8, allocator, temp, font_placeholder, encoded);
         allocator.free(temp);
     }
 

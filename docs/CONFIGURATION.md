@@ -230,7 +230,7 @@ Rather than a fixed per-thumbnail size and an unbounded grid, `RegionFit` mode f
 
 Cells are packed snugly against each other (using `spacing`, not stretched to fill the region) so any slack collects as one block at the region's far edge instead of gaps between thumbnails. It reflows automatically on login, and on logout if `regionFitReorderLoggedOut` is true; while active it fully replaces per-character manual dragging and the global/per-character thumbnail size (`thumbnail.width`/`height`, `CharacterThumbnailSize`) - those are ignored.
 
-The region itself is set via the config dialog's "Start Region Selection" button, which asks the running main app to show a full-desktop drag-to-select overlay; the captured rectangle is written into `regionX`/`regionY`/`regionWidth`/`regionHeight` (all `null` until first captured). If `hideThumbnailsDuringRegionSelect` (default `true`) is on, currently-visible thumbnails are hidden for the duration of that overlay so they don't cover it, then restored exactly as they were once it closes (a thumbnail already hidden beforehand, e.g. manually, is left alone).
+The region itself is set via the config dialog's "New Thumbnail Region" button, which asks the running main app to show a full-desktop drag-to-select overlay; the captured rectangle is written into `regionX`/`regionY`/`regionWidth`/`regionHeight` (all `null` until first captured). Once a region exists, "Edit Region" reopens the overlay with the region's edges and body draggable, and the x button clears it. The overlay finishes with Save/Cancel buttons (or Enter/Esc). If `hideThumbnailsDuringRegionSelect` (default `true`) is on, currently-visible thumbnails are hidden for the duration of that overlay so they don't cover it, then restored exactly as they were once it closes (a thumbnail already hidden beforehand, e.g. manually, is left alone).
 
 If `regionFitLimitToThumbnailSize` (default `false`) is on, cell size is additionally capped at the configured thumbnail size (`thumbnail.width`/`height`, DPI-scaled for the region's own monitor) instead of always growing to fill the region; once cells hit that cap, extra thumbnails just wrap into more rows/columns, leaving unused space in the region rather than shrinking further.
 
@@ -268,7 +268,7 @@ Fill order is controlled by two independent settings:
 
 ## Not-Logged-In Thumbnail Space
 
-A separate, optional auto-fit area just for not-yet-logged-in "EVE" placeholder windows, independent of `layoutMode`. When `notLoggedInSpaceEnabled` is on and `notLoggedInSpaceX`/`Y`/`Width`/`Height` are captured (same drag-to-select flow as Thumbnail Space, via its own "Start Region Selection" button), placeholders auto-fit to fill that rectangle - the same column/row/aspect-ratio grid-fit `RegionFit` itself uses (see above), sized for however many placeholders currently exist - instead of joining the regular unpositioned-thumbnail flow at `startX`/`startY`. It has its own `notLoggedInSpaceSpacing`, independent of `RegionFit`'s `spacing`.
+A separate, optional auto-fit area just for not-yet-logged-in "EVE" placeholder windows, independent of `layoutMode`. When `notLoggedInSpaceEnabled` is on and `notLoggedInSpaceX`/`Y`/`Width`/`Height` are captured (same drag-to-select flow as Thumbnail Space, via its own "New Thumbnail Region" button, with the same Edit Region and clear controls), placeholders auto-fit to fill that rectangle - the same column/row/aspect-ratio grid-fit `RegionFit` itself uses (see above), sized for however many placeholders currently exist - instead of joining the regular unpositioned-thumbnail flow at `startX`/`startY`. It has its own `notLoggedInSpaceSpacing`, independent of `RegionFit`'s `spacing`, its own `notLoggedInSpaceHideThumbnailsDuringRegionSelect` (default `true`, same as `hideThumbnailsDuringRegionSelect` for this space's overlay), and its own `notLoggedInSpaceLimitToThumbnailSize` (default `false`), which caps its cell size at the configured thumbnail size the same way `regionFitLimitToThumbnailSize` does for the Thumbnail Space.
 
 It coexists with `RegionFit`: placeholders are carved out of the `RegionFit` grid entirely (they don't take a cell, and don't count toward its cell-count math) and auto-fit into the not-logged-in space instead, reflowing back into the grid the moment they log in. Both grids reflow (resizing every member, not just the one that changed) whenever a placeholder crosses between them.
 
@@ -280,7 +280,8 @@ It coexists with `RegionFit`: placeholders are carved out of the `RegionFit` gri
     "notLoggedInSpaceY": 100,
     "notLoggedInSpaceWidth": 400,
     "notLoggedInSpaceHeight": 300,
-    "notLoggedInSpaceSpacing": 10
+    "notLoggedInSpaceSpacing": 10,
+    "notLoggedInSpaceLimitToThumbnailSize": false
   }
 }
 ```
@@ -315,7 +316,7 @@ All pixel-based values here (thumbnail size, `startX`/`startY`, spacing, font si
 - `layoutMode`: `Custom` or `RegionFit`
 - `regionX`, `regionY`, `regionWidth`, `regionHeight`: Thumbnail Space rectangle for `RegionFit` mode (null until captured) - see [Thumbnail Space (Region Fit)](#thumbnail-space-region-fit)
 - `regionFitOrder`, `regionFitDirection`, `regionFitReorderLoggedOut`, `hideThumbnailsDuringRegionSelect`, `regionFitLimitToThumbnailSize`: `RegionFit` fill order, logout behavior, select-overlay hiding, and thumbnail-size cap - see [Thumbnail Space (Region Fit)](#thumbnail-space-region-fit)
-- `notLoggedInSpaceEnabled`, `notLoggedInSpaceX`, `notLoggedInSpaceY`, `notLoggedInSpaceWidth`, `notLoggedInSpaceHeight`, `notLoggedInSpaceSpacing`: Separate auto-fit area just for not-logged-in placeholders - see [Not-Logged-In Thumbnail Space](#not-logged-in-thumbnail-space)
+- `notLoggedInSpaceEnabled`, `notLoggedInSpaceX`, `notLoggedInSpaceY`, `notLoggedInSpaceWidth`, `notLoggedInSpaceHeight`, `notLoggedInSpaceSpacing`, `notLoggedInSpaceLimitToThumbnailSize`, `notLoggedInSpaceHideThumbnailsDuringRegionSelect`: Separate auto-fit area just for not-logged-in placeholders - see [Not-Logged-In Thumbnail Space](#not-logged-in-thumbnail-space)
 - `monitorIndex`: Target monitor (0-based, null = absolute)
 - `useMonitorWorkArea`: Respect taskbar
 - `honorSavedPositions`: Use saved character positions
@@ -375,7 +376,8 @@ Setting `viewMode` to `Nothing` disables all visual output - no thumbnails and n
     "enableDragging": true,
     "animationStyle": "NoAnimation",
     "clickTrigger": "MouseDown",
-    "clickThrough": false
+    "clickThrough": false,
+    "hoverCursor": "Default"
   }
 }
 ```
@@ -389,6 +391,12 @@ Setting `viewMode` to `Nothing` disables all visual output - no thumbnails and n
   - `"MouseDown"` (default): Activate immediately on mouse button press
   - `"MouseUp"`: Activate on mouse button release
 - `clickThrough`: Make thumbnails ignore all mouse input (default: `false`), so clicks and drags pass through to whatever is behind them on screen. Disables click-to-focus, shift-click exclusion toggling, and dragging on every thumbnail while enabled.
+- `hoverCursor`: System mouse cursor shown while hovering a thumbnail (thumbnails only, not the Client List or History panels)
+  - `"Default"` (default): The standard arrow
+  - `"Hand"`: Link-select hand
+  - `"Crosshair"`: Precision-select crosshair
+  - `"Move"`: Four-way move arrows
+  - `"Help"`: Arrow with a question mark
 
 **Animation Style Details:**
 
@@ -473,16 +481,39 @@ Automatically minimize inactive EVE clients after a delay:
   "autoMinimize": {
     "enabled": false,
     "delayMs": 5000,
-    "exemptLastActiveOnFocusLoss": false
+    "exemptLastActiveOnFocusLoss": true
   }
 }
 ```
 
 `delayMs` is clamped between `0` and `10000`.
 
-`exemptLastActiveOnFocusLoss` (default: `false`) keeps the last-focused client visible when EVE itself loses focus entirely (e.g. switching to another app), instead of minimizing it along with the rest once its delay elapses.
+The last-focused client on each monitor (by the monitor its EVE window is on) is treated as that monitor's last-active client. While an EVE client is focused, the last-active client on every other monitor stays visible, so one client per monitor can remain on screen; other clients minimize after the delay.
+
+`exemptLastActiveOnFocusLoss` (default: `true`) keeps each monitor's last-active client visible when EVE itself loses focus entirely (e.g. switching to another app), instead of minimizing it along with the rest once its delay elapses.
 
 Exclusions are configured per character, not here - set `excludeFromMinimize` on the character entry (see [Per-Character Configuration](#per-character-configuration)).
+
+## Auto-Move Position
+
+Move EVE client windows to their saved window positions automatically:
+
+```json
+{
+  "autoMovePosition": {
+    "enabled": false,
+    "moveOnStartup": false,
+    "verifyIntervalMs": 2000,
+    "verifyCount": 6
+  }
+}
+```
+
+`enabled` moves a client when a character logs in. `moveOnStartup` moves clients that are already running when the application starts; it works independently of `enabled`.
+
+After each move, the client's position is re-checked every `verifyIntervalMs` (clamped `250`-`10000`), up to `verifyCount` times (clamped `0`-`30`; `0` disables re-checking), and re-applied if EVE shifted its own window while loading.
+
+Exclusions are configured per character - set `excludeFromAutoMove` on the character entry (see [Per-Character Configuration](#per-character-configuration)).
 
 ## Close All
 
@@ -847,6 +878,7 @@ Detects a tracked character falling behind while the rest of the group jumps tog
   "hotkeys": {
     "requireEveFocus": false,
     "allowHotkeyAutoRepeat": false,
+    "suspendHotkeyNotification": true,
     "hotkeyMinimizeAll": null,
     "hotkeyCloseAll": null,
     "hotkeyToggleVisibility": null,
@@ -867,6 +899,8 @@ Detects a tracked character falling behind while the rest of the group jumps tog
 **resetGroupIndexOnNonGroupFocus**: Reset a hotkey group's cycle position when focus leaves that group
 
 **allowHotkeyAutoRepeat**: When `false` (default), holding a keyboard hotkey down fires its action once; when `true`, Windows' key-repeat re-fires it while held. Mouse-button hotkeys always fire once per click regardless (mouse buttons don't auto-repeat).
+
+**suspendHotkeyNotification**: When `true` (default), pressing **hotkeySuspend** shows a tray balloon notification announcing whether hotkeys are now suspended or resumed.
 
 **Global Hotkeys**: Set to a virtual key code string (e.g., `"F9"`, `"F10"`, `"0x70"`), a modifier combo (e.g., `"Ctrl+F9"`, `"Alt+Shift+F1"`, `"LWin+M"`), or `null` to disable
 - **hotkeyMinimizeAll**: Minimize all EVE client windows
@@ -1062,13 +1096,18 @@ Define custom colors for specific solar systems:
 ```json
 {
   "systemColors": [
-    { "systemName": "Jita", "color": "0xFFD700" },
-    { "systemName": "Amarr", "color": "0xFFD700" },
-    { "systemName": "Rancer", "color": "0xFF0000" },
-    { "systemName": "Amamake", "color": "0xFF0000" }
+    { "systemName": "Jita, Amarr", "color": "0xFFD700" },
+    { "systemName": "Rancer, Amamake", "color": "0xFF0000" },
+    { "systemName": "J######", "color": "0x00BFFF" }
   ]
 }
 ```
+
+`systemName` is a comma-separated list of names and patterns. Matching ignores case and leading/trailing spaces around each name. Patterns support `*` (any text), `?` (any one character) and `#` (any one digit), so `J######` matches every wormhole system but not `Jita`.
+
+> **Note**: An exact name always beats a pattern, regardless of row order; otherwise the first matching row wins.
+
+With `useUniqueSystemColors` on, systems without an override get an automatically assigned color: the palette color farthest from your overrides and every other assigned color. `useUniqueCharacterNameColors` does the same for character names, and `useUniqueCharacterBorderColors` for the focused border (a character's own `borderColors.activeBorderColor` wins); a character gets one stored color used for both, avoiding every character's own `nameColor` and active border color. Assignments are kept for the 64 most recently seen systems and 64 most recently seen characters in `colors.json` next to the `profiles` folder (shared by all profiles), written when the last EVE client closes or the app exits; delete the file to reassign them.
 
 > **Note**: The key is `systemName`, not `name` - an entry using the wrong key will fail to load and abort loading the entire profile.
 

@@ -127,6 +127,7 @@
                             <li>Technoprobe</li>
                             <li>Yabu Kusanagi</li>
                             <li>Sevey</li>
+                            <li>GlassBlunt</li>
                         </ul>
                     </div>
 
@@ -135,6 +136,7 @@
                             <h3 data-i18n="tab.about.section.license.heading">License</h3>
                         </div>
                         <p class="hint" data-i18n="misc.license-text">This project is open source and released under the GNU General Public License v3.0 (GPLv3). A copy of the license is included with the application.</p>
+                        <p class="hint" data-i18n="misc.license-third-party-text">This application bundles third-party components: the Cascadia Code fonts (SIL Open Font License 1.1), WebUI (MIT License) and WebView2Loader (BSD-style license). Their license texts are included with the application.</p>
                     </div>
 
                     <div class="section">
@@ -290,18 +292,18 @@
                         <p class="hint" data-i18n="tab.thumbnails.section.region-fit.hint">Drag a rectangle on screen; thumbnails auto-fit to fill it and reflow as characters log in/out.</p>
 
                         <label>
-                            <input type="checkbox" id="regionFitLimitToThumbnailSize">
-                            <span class="label-body" data-i18n="field.regionFitLimitToThumbnailSize.label">Cap Thumbnail Size to Configured Dimensions</span>
-                        </label>
-                        <p class="hint hint-extra" data-i18n="field.regionFitLimitToThumbnailSize.hint">Stops thumbnails from growing past the Thumbnail Size setting, leaving unused space in the region instead. Also applies to the Not-Logged-In Thumbnail Space below.</p>
-
-                        <label>
                             <input type="checkbox" id="regionFitEnabled" onchange="toggleRegionFitOptions()">
                             <span class="label-body" data-i18n="field.regionFitEnabled.label">Enable Thumbnail Space</span>
                         </label>
                         <p class="hint hint-extra" data-i18n="field.regionFitEnabled.hint">Switches this profile's layout mode to Region Fit, taking over thumbnail placement instead of using saved positions.</p>
 
                         <div id="regionFitOptions">
+                            <label>
+                                <input type="checkbox" id="regionFitLimitToThumbnailSize">
+                                <span class="label-body" data-i18n="field.regionFitLimitToThumbnailSize.label">Cap Thumbnail Size to Configured Dimensions</span>
+                            </label>
+                            <p class="hint hint-extra" data-i18n="field.regionFitLimitToThumbnailSize.hint">Stops thumbnails from growing past the Thumbnail Size setting, leaving unused space in the region instead.</p>
+
                             <div class="binding-list">
                                 <div class="binding">
                                     <label for="regionFitOrder" data-i18n="field.regionFitOrder.label">Order By</label>
@@ -339,11 +341,15 @@
                                 <p class="hint hint-extra" data-i18n="field.spacing.hint">Gap between thumbnails inside the Thumbnail Space.</p>
                             </div>
                             <label>
-                                <input type="checkbox" id="hideThumbnailsDuringRegionSelect">
+                                <input type="checkbox" id="hideThumbnailsDuringRegionSelect" checked>
                                 <span class="label-body" data-i18n="field.hideThumbnailsDuringRegionSelect.label">Hide Thumbnails During Region Selection</span>
                             </label>
                             <p class="hint hint-extra" data-i18n="field.hideThumbnailsDuringRegionSelect.hint">Temporarily hides visible thumbnails so they don't cover the drag-to-select overlay.</p>
-                            <button type="button" id="defineRegionButton" class="full-width-btn" onclick="startRegionSelectFlow()" data-i18n="field.regionFit.button">▭ Start Region Selection</button>
+                            <div class="button-row-flex">
+                                <button type="button" onclick="startRegionSelectFlow(REGION_FIELD_IDS)" data-i18n="field.newRegion.button">▭ New Thumbnail Region</button>
+                                <button type="button" id="editRegionButton" onclick="startRegionSelectFlow(REGION_FIELD_IDS, true)" data-i18n="field.editRegion.button" disabled>✎ Edit Region</button>
+                                <button type="button" id="clearRegionButton" class="button-icon button-icon-danger" onclick="confirmRemove('clearRegionButton', () => clearRegion(REGION_FIELD_IDS), '✓')" title="Clear region" data-i18n-title="field.clearRegion.title" disabled>&times;</button>
+                            </div>
                             <!-- Bound via CONFIG_SCHEMA; not something a user needs to see or edit. -->
                             <div class="binding-list" style="display: none;">
                                 <div class="binding">
@@ -389,6 +395,12 @@
                         </label>
 
                         <div id="notLoggedInSpaceOptions">
+                            <label>
+                                <input type="checkbox" id="notLoggedInSpaceLimitToThumbnailSize">
+                                <span class="label-body" data-i18n="field.regionFitLimitToThumbnailSize.label">Cap Thumbnail Size to Configured Dimensions</span>
+                            </label>
+                            <p class="hint hint-extra" data-i18n="field.regionFitLimitToThumbnailSize.hint">Stops thumbnails from growing past the Thumbnail Size setting, leaving unused space in the region instead.</p>
+
                             <div class="binding-list">
                                 <div class="binding">
                                     <label for="notLoggedInSpaceSpacing" data-i18n="field.notLoggedInSpaceSpacing.label">Spacing (px)</label>
@@ -396,7 +408,16 @@
                                 </div>
                                 <p class="hint hint-extra" data-i18n="field.notLoggedInSpaceSpacing.hint">Gap between placeholders inside this space.</p>
                             </div>
-                            <button type="button" id="defineNotLoggedInSpaceButton" class="full-width-btn" onclick="startRegionSelectFlow('defineNotLoggedInSpaceButton', { x: 'notLoggedInSpaceX', y: 'notLoggedInSpaceY', width: 'notLoggedInSpaceWidth', height: 'notLoggedInSpaceHeight' })" data-i18n="field.notLoggedInSpace.button">▭ Start Region Selection</button>
+                            <label>
+                                <input type="checkbox" id="notLoggedInSpaceHideThumbnailsDuringRegionSelect" checked>
+                                <span class="label-body" data-i18n="field.hideThumbnailsDuringRegionSelect.label">Hide Thumbnails During Region Selection</span>
+                            </label>
+                            <p class="hint hint-extra" data-i18n="field.hideThumbnailsDuringRegionSelect.hint">Temporarily hides visible thumbnails so they don't cover the drag-to-select overlay.</p>
+                            <div class="button-row-flex">
+                                <button type="button" onclick="startRegionSelectFlow(NOT_LOGGED_IN_FIELD_IDS)" data-i18n="field.newRegion.button">▭ New Thumbnail Region</button>
+                                <button type="button" id="editNotLoggedInSpaceButton" onclick="startRegionSelectFlow(NOT_LOGGED_IN_FIELD_IDS, true)" data-i18n="field.editRegion.button" disabled>✎ Edit Region</button>
+                                <button type="button" id="clearNotLoggedInSpaceButton" class="button-icon button-icon-danger" onclick="confirmRemove('clearNotLoggedInSpaceButton', () => clearRegion(NOT_LOGGED_IN_FIELD_IDS), '✓')" title="Clear region" data-i18n-title="field.clearRegion.title" disabled>&times;</button>
+                            </div>
                             <!-- Bound via CONFIG_SCHEMA; not something a user needs to see or edit. -->
                             <div class="binding-list" style="display: none;">
                                 <div class="binding">
@@ -743,7 +764,7 @@
 
                         <div id="borderOptions">
                             <label>
-                                <input type="checkbox" id="assignUniqueCharacterColors" onchange="toggleUniqueCharacterColors()">
+                                <input type="checkbox" id="useUniqueCharacterBorderColors" onchange="toggleUniqueCharacterColors()">
                                 <span class="label-body" data-i18n="field.assignUniqueCharacterColors.label">Unique Character Border Colors</span>
                             </label>
                             <p class="hint hint-extra" data-i18n="field.assignUniqueCharacterColors.hint">Auto-generates a color per character name, overriding the Focused/Inactive Color settings below.</p>
@@ -979,7 +1000,7 @@
                             <h3 data-i18n="tab.overlay-text.section.system-color-overrides.heading">System Colors</h3>
                             <span class="scope-chip" data-i18n="common.scopeProfile">profile</span>
                         </div>
-                        <p class="hint" data-i18n="tab.overlay-text.section.system-color-overrides.hint">Define custom colors for specific solar systems (only used when Unique System Colors is enabled).</p>
+                        <p class="hint" data-i18n="tab.overlay-text.section.system-color-overrides.hint">Define custom colors for specific solar systems. These take priority over Unique System Colors and the default color. Separate names with commas; * matches any text, ? any character, # any digit (e.g. J######).</p>
                         
                         <div id="systemColorsList" class="list-container">
                             <!-- System colors will be dynamically populated here -->
@@ -1072,6 +1093,17 @@
                                     </select>
                                 </div>
                                 <p class="hint hint-extra" data-i18n="field.clickTrigger.hint">Mouse Up avoids accidental drags from a quick click.</p>
+                                <div class="binding">
+                                    <label for="hoverCursor" data-i18n="field.hoverCursor.label">Hover Cursor</label>
+                                    <select id="hoverCursor">
+                                        <option value="Default" data-i18n="field.hoverCursor.option.default">Default (Arrow)</option>
+                                        <option value="Hand" data-i18n="field.hoverCursor.option.hand">Hand</option>
+                                        <option value="Crosshair" data-i18n="field.hoverCursor.option.crosshair">Crosshair</option>
+                                        <option value="Move" data-i18n="field.hoverCursor.option.move">Move</option>
+                                        <option value="Help" data-i18n="field.hoverCursor.option.help">Help</option>
+                                    </select>
+                                </div>
+                                <p class="hint hint-extra" data-i18n="field.hoverCursor.hint">Mouse cursor shown while hovering a thumbnail.</p>
                             </div>
                         </div>
                     </div>
@@ -1174,14 +1206,39 @@
                     <div class="section">
                         <div class="section-heading">
                             <h3 data-i18n="tab.behavior.section.window-position.heading">Window Position</h3>
-                            <span class="scope-chip" data-i18n="common.scopeProfile">profile</span>
+                            <div class="section-heading-actions">
+                                <span class="scope-chip" data-i18n="common.scopeProfile">profile</span>
+                                <button class="button-icon hint-toggle" type="button" onclick="toggleSectionHint(this)" data-i18n-title="common.showHintTitle" title="Show hint">?</button>
+                            </div>
                         </div>
                         <p class="hint" data-i18n="tab.behavior.section.window-position.hint">Saves each character's real EVE client window position, restored via the Move to Saved Positions hotkey or automatically on login. Set All copies the selected window's current position to every character; Clear All removes every saved position.</p>
 
                         <label>
                             <input type="checkbox" id="autoMovePositionEnabled">
-                            <span class="label-body" data-i18n="field.autoMovePositionEnabled.label">Automatically Move to Saved Position on Login</span>
+                            <span class="label-body" data-i18n="field.autoMovePositionEnabled.label">Restore Saved Position on Login</span>
                         </label>
+                        <p class="hint hint-extra" data-i18n="field.autoMovePositionEnabled.hint">Moves a client to its saved position when its character logs in.</p>
+
+                        <label>
+                            <input type="checkbox" id="autoMoveOnStartup">
+                            <span class="label-body" data-i18n="field.autoMoveOnStartup.label">Restore Saved Position on App Startup</span>
+                        </label>
+                        <p class="hint hint-extra" data-i18n="field.autoMoveOnStartup.hint">Moves clients already logged in when the app launches.</p>
+
+                        <div class="advanced-section">
+                            <div class="binding-list">
+                                <div class="binding">
+                                    <label for="autoMoveVerifyInterval" data-i18n="field.autoMoveVerifyInterval.label">Re-check Interval (s)</label>
+                                    <input type="number" id="autoMoveVerifyInterval" min="0.25" max="10" step="0.25">
+                                </div>
+                                <p class="hint hint-extra" data-i18n="field.autoMoveVerifyInterval.hint">How often a moved client's position is re-checked; EVE can shift its own window while loading.</p>
+                                <div class="binding">
+                                    <label for="autoMoveVerifyCount" data-i18n="field.autoMoveVerifyCount.label">Re-check Count</label>
+                                    <input type="number" id="autoMoveVerifyCount" min="0" max="30" step="1">
+                                </div>
+                                <p class="hint hint-extra" data-i18n="field.autoMoveVerifyCount.hint">How many times to re-check and re-apply the position after a move. 0 disables re-checking.</p>
+                            </div>
+                        </div>
 
                         <div class="field-row">
                             <select id="windowPositionSourceSelect" title="Copy Position From" data-i18n-title="field.windowPositionSourceSelect.label"></select>
@@ -1298,6 +1355,11 @@
                             <span class="scope-chip" data-i18n="common.scopeProfile">profile</span>
                         </div>
                         <p class="hint" data-i18n="tab.hotkeys.section.system.hint">Suspends or resumes every hotkey. This one always works, even while the rest are suspended.</p>
+
+                        <label>
+                            <input type="checkbox" id="suspendHotkeyNotification">
+                            <span class="label-body" data-i18n="field.suspendHotkeyNotification.label">Show Notification When Toggled</span>
+                        </label>
 
                         <div class="binding-list" id="suspendBindings"></div>
                     </div>
@@ -1516,10 +1578,6 @@
 
                         <div id="notificationTypesList" class="list-container">
                             <!-- Notification type configs will be dynamically populated here -->
-                        </div>
-                        <div class="button-row">
-                            <button type="button" class="button-danger" onclick="resetNotificationTextColors()" data-i18n="button.reset-notification-text-colors.label">↻ Reset All Text Colors</button>
-                            <button type="button" class="button-danger" onclick="resetNotificationBorderColors()" data-i18n="button.reset-notification-border-colors.label">↻ Reset All Border Colors</button>
                         </div>
                     </div>
 

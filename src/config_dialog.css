@@ -1,3 +1,10 @@
+@font-face {
+    font-family: 'Cascadia Code';
+    src: url(data:font/woff2;base64,CASCADIA_CODE_WOFF2_PLACEHOLDER) format('woff2');
+    font-weight: 200 700;
+    font-display: block;
+}
+
 * {
     -webkit-user-drag: none;
     box-sizing: border-box;
@@ -1439,6 +1446,17 @@ body:not(.advanced-mode) .panel-content.advanced-tab-panel {
     margin-top: var(--space-2);
 }
 
+/* Like .button-row, but a trailing square icon button keeps its own width instead of taking an equal column. */
+.button-row-flex {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+.button-row-flex > button:not(.button-icon) {
+    flex: 1;
+}
+
 /* The ore table reuses .notification-types-table (see above) wholesale for identical visual/scrolling behavior - this is the one thing that table never needed. */
 /* Wider than the shared number-input rule (sized for notifications' Duration/Throttle) - fetched ISK prices run up to 6+ digits. */
 .notification-types-table input.ore-price-input {
@@ -2773,6 +2791,31 @@ input[type="range"]::-moz-range-thumb {
    among other Notifications sections rather than alone filling its own tab. */
 #notificationTypesList .master-detail {
     height: 640px;
+}
+
+/* Only the form scrolls, so the Test Notification button stays pinned to the bottom of the panel. */
+#notificationTypesList .detail-stack {
+    display: flex;
+    flex-direction: column;
+    overflow-y: hidden;
+}
+
+#notificationTypesList .detail-panel.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+#notificationTypesList .detail-form {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    align-content: start;
+}
+
+#notificationTypesList .detail-panel > .button-row {
+    flex: none;
 }
 
 /* Same reasoning as #notificationTypesList above - Window Filters is one of

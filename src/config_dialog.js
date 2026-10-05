@@ -304,6 +304,7 @@ const CONFIG_SCHEMA = [
     { id: 'animationStyle', path: 'interaction.animationStyle' },
     { id: 'clickTrigger', path: 'interaction.clickTrigger' },
     { id: 'clickThrough', path: 'interaction.clickThrough' },
+    { id: 'hoverCursor', path: 'interaction.hoverCursor', default: 'Default' },
 
     { id: 'snappingEnabled', path: 'snapping.enabled' },
     { id: 'snappingThreshold', path: 'snapping.threshold' },
@@ -346,6 +347,7 @@ const CONFIG_SCHEMA = [
     // exclusionOverlayColor/exclusionOverlayOpacity are special-cased below.
     { id: 'useUniqueSystemColors', path: 'thumbnail.useUniqueSystemColors' },
     { id: 'useUniqueCharacterNameColors', path: 'thumbnail.useUniqueCharacterNameColors' },
+    { id: 'useUniqueCharacterBorderColors', path: 'thumbnail.useUniqueCharacterBorderColors' },
     { id: 'characterNameFontName', path: 'thumbnail.characterNameFontName' },
     { id: 'characterNameFontSize', path: 'thumbnail.characterNameFontSize' },
     { id: 'characterNameFontWeight', path: 'thumbnail.characterNameFontWeight' },
@@ -375,7 +377,9 @@ const CONFIG_SCHEMA = [
     { id: 'regionFitOrder', path: 'display.regionFitOrder' },
     { id: 'regionFitReorderLoggedOut', path: 'display.regionFitReorderLoggedOut' },
     { id: 'hideThumbnailsDuringRegionSelect', path: 'display.hideThumbnailsDuringRegionSelect', default: true },
+    { id: 'notLoggedInSpaceHideThumbnailsDuringRegionSelect', path: 'display.notLoggedInSpaceHideThumbnailsDuringRegionSelect', default: true },
     { id: 'regionFitLimitToThumbnailSize', path: 'display.regionFitLimitToThumbnailSize', default: false },
+    { id: 'notLoggedInSpaceLimitToThumbnailSize', path: 'display.notLoggedInSpaceLimitToThumbnailSize', default: false },
     { id: 'notLoggedInSpaceEnabled', path: 'display.notLoggedInSpaceEnabled', default: false },
     { id: 'notLoggedInSpaceSpacing', path: 'display.notLoggedInSpaceSpacing' },
     { id: 'notLoggedInSpaceX', path: 'display.notLoggedInSpaceX', transform: 'nullable' },
@@ -405,6 +409,9 @@ const CONFIG_SCHEMA = [
     { id: 'autoMinimizeExemptLastActiveWhenAnyEveFocused', path: 'autoMinimize.exemptLastActiveWhenAnyEveFocused' },
 
     { id: 'autoMovePositionEnabled', path: 'autoMovePosition.enabled' },
+    { id: 'autoMoveOnStartup', path: 'autoMovePosition.moveOnStartup' },
+    { id: 'autoMoveVerifyInterval', path: 'autoMovePosition.verifyIntervalMs', transform: 'ms' },
+    { id: 'autoMoveVerifyCount', path: 'autoMovePosition.verifyCount' },
 
     { id: 'enableShiftClickExclude', path: 'exclusion.enableShiftClickExclude' },
     { id: 'autoMinimizeExcludedCharacters', path: 'exclusion.autoMinimizeExcluded' },
@@ -414,6 +421,7 @@ const CONFIG_SCHEMA = [
     { id: 'requireEveFocus', path: 'hotkeys.requireEveFocus' },
     { id: 'resetGroupIndexOnNonGroupFocus', path: 'hotkeys.resetGroupIndexOnNonGroupFocus' },
     { id: 'allowHotkeyAutoRepeat', path: 'hotkeys.allowHotkeyAutoRepeat' },
+    { id: 'suspendHotkeyNotification', path: 'hotkeys.suspendHotkeyNotification' },
     { id: 'hotkeyMinimizeAll', path: 'hotkeys.hotkeyMinimizeAll', transform: 'vkhex' },
     { id: 'hotkeyCloseAll', path: 'hotkeys.hotkeyCloseAll', transform: 'vkhex' },
     { id: 'hotkeyToggleVisibility', path: 'hotkeys.hotkeyToggleVisibility', transform: 'vkhex' },
@@ -860,7 +868,7 @@ const THUMBNAIL_PREVIEW_FIELD_IDS = [
     'showText', 'showCharacterName', 'showSystemName', 'useUniqueSystemColors',
     'characterNameFontName', 'characterNameFontSize', 'characterNameFontWeight',
     'characterNamePosition', 'characterNameOffsetX', 'characterNameOffsetY', 'characterNameColor',
-    'useUniqueCharacterNameColors',
+    'useUniqueCharacterNameColors', 'useUniqueCharacterBorderColors',
     'systemNamePosition', 'systemNameOffsetX', 'systemNameOffsetY', 'systemNameColor',
     'systemNameFontName', 'systemNameFontSize', 'systemNameFontWeight',
     'showQuickGroupBadge', 'quickGroupBadgePosition', 'quickGroupBadgeOffsetX', 'quickGroupBadgeOffsetY', 'quickGroupBadgeColor',
@@ -874,7 +882,7 @@ const THUMBNAIL_PREVIEW_FIELD_IDS = [
     'notifInfoPanelOpacity', 'notifInfoPanelFontName', 'notifInfoPanelFontSize', 'notifInfoPanelFontWeight',
     'spacing', 'newThumbnailSpacing', 'layoutMode', 'regionFitDirection',
     'regionFitEnabled', 'regionFitOrder', 'regionFitReorderLoggedOut', 'hideThumbnailsDuringRegionSelect', 'regionFitLimitToThumbnailSize', 'regionX', 'regionY', 'regionWidth', 'regionHeight',
-    'notLoggedInSpaceEnabled', 'notLoggedInSpaceSpacing', 'notLoggedInSpaceX', 'notLoggedInSpaceY', 'notLoggedInSpaceWidth', 'notLoggedInSpaceHeight',
+    'notLoggedInSpaceEnabled', 'notLoggedInSpaceSpacing', 'notLoggedInSpaceLimitToThumbnailSize', 'notLoggedInSpaceHideThumbnailsDuringRegionSelect', 'notLoggedInSpaceX', 'notLoggedInSpaceY', 'notLoggedInSpaceWidth', 'notLoggedInSpaceHeight',
     'monitorIndex', 'useMonitorWorkArea', 'honorSavedPositions',
     'notificationsEnabled', 'notificationPosition', 'notificationOffsetX', 'notificationOffsetY',
     'notificationFontName', 'notificationFontSize', 'notificationFontWeight',
@@ -934,6 +942,7 @@ function buildThumbnailPreviewPatch(includePositions = false) {
         characterNameColor: getFieldValue('characterNameColor'),
         characterNameBgColor: zigColorWithAlpha(getFieldValue('characterNameBgColor'), percentToOpacity(getFieldValue('characterNameBgOpacity'))),
         useUniqueCharacterNameColors: getFieldValue('useUniqueCharacterNameColors'),
+        useUniqueCharacterBorderColors: getFieldValue('useUniqueCharacterBorderColors'),
         systemNamePosition: getFieldValue('systemNamePosition'),
         systemNameOffsetX: getFieldValue('systemNameOffsetX'),
         systemNameOffsetY: getFieldValue('systemNameOffsetY'),
@@ -987,6 +996,8 @@ function buildThumbnailPreviewPatch(includePositions = false) {
             regionHeight: getNullableFieldValue('regionHeight'),
             notLoggedInSpaceEnabled: getFieldValue('notLoggedInSpaceEnabled'),
             notLoggedInSpaceSpacing: getFieldValue('notLoggedInSpaceSpacing'),
+            notLoggedInSpaceLimitToThumbnailSize: getFieldValue('notLoggedInSpaceLimitToThumbnailSize'),
+            notLoggedInSpaceHideThumbnailsDuringRegionSelect: getFieldValue('notLoggedInSpaceHideThumbnailsDuringRegionSelect'),
             notLoggedInSpaceX: getNullableFieldValue('notLoggedInSpaceX'),
             notLoggedInSpaceY: getNullableFieldValue('notLoggedInSpaceY'),
             notLoggedInSpaceWidth: getNullableFieldValue('notLoggedInSpaceWidth'),
@@ -1506,26 +1517,66 @@ const REGION_SELECT_POLL_MS = 300;
 const REGION_SELECT_TIMEOUT_MS = 120000;
 let regionSelectPollTimer = null;
 
-function stopRegionSelectPolling(button) {
+function stopRegionSelectPolling() {
     if (regionSelectPollTimer) {
         clearInterval(regionSelectPollTimer);
         regionSelectPollTimer = null;
     }
-    if (button) {
-        button.disabled = false;
-        if (button.dataset.originalText) button.textContent = button.dataset.originalText;
-    }
-    hideStatus();
 }
 
-// buttonId/fieldIds let the same drag-to-select overlay feed either RegionFit or notLoggedInSpace.
-async function startRegionSelectFlow(buttonId = 'defineRegionButton', fieldIds = { x: 'regionX', y: 'regionY', width: 'regionWidth', height: 'regionHeight' }) {
+const REGION_FIELD_IDS = { x: 'regionX', y: 'regionY', width: 'regionWidth', height: 'regionHeight', hideThumbnails: 'hideThumbnailsDuringRegionSelect' };
+const NOT_LOGGED_IN_FIELD_IDS = { x: 'notLoggedInSpaceX', y: 'notLoggedInSpaceY', width: 'notLoggedInSpaceWidth', height: 'notLoggedInSpaceHeight', hideThumbnails: 'notLoggedInSpaceHideThumbnailsDuringRegionSelect' };
+
+function currentRegionValues(fieldIds) {
+    const values = [fieldIds.x, fieldIds.y, fieldIds.width, fieldIds.height].map(id => currentConfig?.display?.[id]);
+    return values.every(Number.isInteger) && values[2] > 0 && values[3] > 0 ? values : null;
+}
+
+// Edit and clear need an existing region to act on, so they're greyed out until one is set.
+function refreshRegionButtons() {
+    const rows = [
+        [['editRegionButton', 'clearRegionButton'], REGION_FIELD_IDS],
+        [['editNotLoggedInSpaceButton', 'clearNotLoggedInSpaceButton'], NOT_LOGGED_IN_FIELD_IDS],
+    ];
+    for (const [buttonIds, fieldIds] of rows) {
+        const disabled = !currentRegionValues(fieldIds);
+        for (const buttonId of buttonIds) {
+            const button = document.getElementById(buttonId);
+            if (button) button.disabled = disabled;
+        }
+    }
+}
+
+function clearRegion(fieldIds) {
+    for (const id of [fieldIds.x, fieldIds.y, fieldIds.width, fieldIds.height]) {
+        setFieldValue(id, null);
+        currentConfig.display[id] = null;
+    }
+    refreshRegionButtons();
+    markAsChanged();
+    scheduleThumbnailPreview();
+}
+
+// fieldIds let the same overlay feed either RegionFit or notLoggedInSpace; edit adjusts the existing region's borders instead of dragging a new one.
+async function startRegionSelectFlow(fieldIds, edit = false) {
     if (typeof webui === 'undefined' || regionSelectPollTimer) return;
 
-    const button = document.getElementById(buttonId);
-
     try {
-        const { success, error } = JSON.parse(await webui.call('startRegionSelect'));
+        const regionToEdit = edit ? currentRegionValues(fieldIds) : null;
+        if (edit && !regionToEdit) return;
+        const request = {
+            hide: !!document.getElementById(fieldIds.hideThumbnails)?.checked,
+            region: regionToEdit,
+            // The overlay lives in the main app, which has no language files, so it gets its text from here.
+            labels: {
+                save: t('button.save-configuration.label'),
+                cancel: t('common.cancel'),
+                hintNew: t('overlay.regionHintNew'),
+                hintEdit: t('overlay.regionHintEdit'),
+                hintConfirm: t('overlay.regionHintConfirm'),
+            },
+        };
+        const { success, error } = JSON.parse(await webui.call('startRegionSelect', JSON.stringify(request)));
         if (!success) {
             showStatus(t('status.regionSelectFailedPrefix') + (error || ''), 'error');
             return;
@@ -1536,17 +1587,10 @@ async function startRegionSelectFlow(buttonId = 'defineRegionButton', fieldIds =
         return;
     }
 
-    if (button) {
-        button.disabled = true;
-        button.dataset.originalText = button.textContent;
-        button.textContent = 'Drag on screen... (Esc to cancel)';
-    }
-    showStatus(t('status.regionSelectDragHint'), 'info');
-
     const startedAt = Date.now();
     regionSelectPollTimer = setInterval(async () => {
         if (Date.now() - startedAt > REGION_SELECT_TIMEOUT_MS) {
-            stopRegionSelectPolling(button);
+            stopRegionSelectPolling();
             return;
         }
 
@@ -1554,7 +1598,8 @@ async function startRegionSelectFlow(buttonId = 'defineRegionButton', fieldIds =
             const result = JSON.parse(await webui.call('pollRegionSelectResult'));
             if (!result.done) return;
 
-            stopRegionSelectPolling(button);
+            stopRegionSelectPolling();
+            if (result.tooSmall) showStatus(t('status.regionSelectTooSmall'), 'info');
             if (result.cancelled) return;
 
             setFieldValue(fieldIds.x, result.x);
@@ -1565,11 +1610,13 @@ async function startRegionSelectFlow(buttonId = 'defineRegionButton', fieldIds =
             currentConfig.display[fieldIds.y] = result.y;
             currentConfig.display[fieldIds.width] = result.width;
             currentConfig.display[fieldIds.height] = result.height;
+            refreshRegionButtons();
             markAsChanged();
             scheduleThumbnailPreview();
+            showStatus(t('status.regionSet'), 'success');
         } catch (err) {
             logWarn('Failed to poll region select result:', err);
-            stopRegionSelectPolling(button);
+            stopRegionSelectPolling();
         }
     }, REGION_SELECT_POLL_MS);
 }
@@ -1676,6 +1723,7 @@ function populateFormFields() {
     toggleSnappingOptions();
     toggleRegionFitOptions();
     toggleNotLoggedInSpaceOptions();
+    refreshRegionButtons();
     toggleNotifInfoPanelOptions();
     toggleShiftClickExcludeOptions();
     toggleBorderOptions();
@@ -5856,56 +5904,15 @@ function selectCharacter(index) {
     selectMasterDetailRow('charactersList', index);
 }
 
-function generateUniqueColor(index) {
-    // Use golden ratio to distribute colors evenly around color wheel
-    const goldenRatio = 0.618033988749895;
-    const hue = (index * goldenRatio * 360) % 360;
-    // Use high saturation and medium lightness for vibrant, visible colors
-    const saturation = 75;
-    const lightness = 55;
-
-    const h = hue / 360;
-    const s = saturation / 100;
-    const l = lightness / 100;
-    
-    let r, g, b;
-    if (s === 0) {
-        r = g = b = l;
-    } else {
-        const hue2rgb = (p, q, t) => {
-            if (t < 0) t += 1;
-            if (t > 1) t -= 1;
-            if (t < 1/6) return p + (q - p) * 6 * t;
-            if (t < 1/2) return q;
-            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-            return p;
-        };
-        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-        const p = 2 * l - q;
-        r = hue2rgb(p, q, h + 1/3);
-        g = hue2rgb(p, q, h);
-        b = hue2rgb(p, q, h - 1/3);
-    }
-
-    const toHex = (x) => Math.round(x * 255).toString(16).padStart(2, '0').toUpperCase();
-    return `0xFF${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
 function addCharacter() {
     if (!currentConfig) return;
     if (!currentConfig.characters) currentConfig.characters = [];
     saveCharacters();
 
-    const assignUniqueColors = document.getElementById('assignUniqueCharacterColors')?.checked || false;
-    
-    const colorIndex = currentConfig.characters.length;
     const newChar = {
         name: '',
         position: null, // Unset -> backend auto-arranges via layoutMode instead of pinning to (0,0)
-        borderColors: assignUniqueColors ? {
-            activeBorderColor: generateUniqueColor(colorIndex),
-            inactiveBorderColor: null
-        } : null,
+        borderColors: null,
         thumbnailSize: null,
         displayName: null,
         hotkey: null
@@ -7152,9 +7159,11 @@ function populateNotificationTypes() {
                         <input type="range" id="notif_${notifType.key}_soundVolume" min="0" max="100"
                                value="${config.sound_volume ?? 100}" data-value-target="notif_${notifType.key}_soundVolumeValue">
                         <span id="notif_${notifType.key}_soundVolumeValue">${config.sound_volume ?? 100}</span>
-                        <button type="button" class="btn-nowrap" id="notif_${notifType.key}_soundTestBtn" onclick="testSound('${notifType.key}')">${t('tab.notifications.detail.sound.test')}</button>
                     </div>
                 </div>
+            </div>
+            <div class="button-row">
+                <button type="button" id="notif_${notifType.key}_testBtn" onclick="testNotification('${notifType.key}')">${t('tab.notifications.detail.test.button')}</button>
             </div>
         </div>
     `;
@@ -7194,11 +7203,12 @@ function toggleNotificationTypeEnabled(typeKey) {
     const soundPathInput = document.getElementById(`notif_${typeKey}_soundPath`);
     const soundBrowseBtn = document.getElementById(`notif_${typeKey}_soundBrowseBtn`);
     const soundClearBtn = document.getElementById(`notif_${typeKey}_soundClearBtn`);
-    const soundTestBtn = document.getElementById(`notif_${typeKey}_soundTestBtn`);
     const soundVolumeInput = document.getElementById(`notif_${typeKey}_soundVolume`);
+    const testBtn = document.getElementById(`notif_${typeKey}_testBtn`);
 
     const isEnabled = enabledCheckbox && enabledCheckbox.checked;
 
+    if (testBtn) testBtn.disabled = !isEnabled;
     if (durationInput) durationInput.disabled = !isEnabled;
     if (suppressFocusedCheckbox) suppressFocusedCheckbox.disabled = !isEnabled;
     if (suppressClickedCheckbox) suppressClickedCheckbox.disabled = !isEnabled;
@@ -7208,13 +7218,12 @@ function toggleNotificationTypeEnabled(typeKey) {
     if (showBorderCheckbox) showBorderCheckbox.disabled = !isEnabled;
     // Sound alert is self-contained as well.
     if (soundEnabledCheckbox) soundEnabledCheckbox.disabled = !isEnabled;
-    // The checkbox only gates whether the alert fires for real - picking/clearing/testing a file and setting its
+    // The checkbox only gates whether the alert fires for real - picking/clearing a file and setting its
     // volume are always allowed while the type is enabled, regardless of the checkbox (browseSoundFile() checks
     // it automatically once a file is set).
     if (soundPathInput) soundPathInput.disabled = !isEnabled;
     if (soundBrowseBtn) soundBrowseBtn.disabled = !isEnabled;
     if (soundClearBtn) soundClearBtn.disabled = !isEnabled;
-    if (soundTestBtn) soundTestBtn.disabled = !isEnabled;
     if (soundVolumeInput) soundVolumeInput.disabled = !isEnabled;
     // Text color isn't tied to the border - it renders whenever the notification is enabled, regardless of border visibility.
     if (textColorEnabledCheckbox) textColorEnabledCheckbox.disabled = !isEnabled;
@@ -7256,28 +7265,6 @@ function syncNotifSwatchClearedState(checkboxId, inputId) {
         input.dataset.cleared = 'true';
         input.title = t('tab.notifications.detail.notSetInheritingDefaultColor');
     }
-}
-
-function resetNotificationColors(kind, defaultColorHtml) {
-    NOTIFICATION_TYPES.forEach((notifType) => {
-        const cb = document.getElementById(`notif_${notifType.key}_${kind}ColorEnabled`);
-        const input = document.getElementById(`notif_${notifType.key}_${kind}Color`);
-        if (cb) cb.checked = false;
-        if (input) {
-            input.value = defaultColorHtml();
-            input.dataset.cleared = 'true';
-            input.title = t('tab.notifications.detail.notSetInheritingDefaultColor');
-        }
-    });
-    markAsChanged();
-}
-
-function resetNotificationBorderColors() {
-    resetNotificationColors('border', notifDefaultBorderColorHtml);
-}
-
-function resetNotificationTextColors() {
-    resetNotificationColors('text', notifDefaultTextColorHtml);
 }
 
 // Returns the checkbox's checked state (or undefined if either element is missing) so callers that need to chain extra logic still can.
@@ -7419,7 +7406,7 @@ function toggleInactiveBorderOptions() {
 }
 
 function toggleUniqueCharacterColors() {
-    const uniqueColorsCheckbox = document.getElementById('assignUniqueCharacterColors');
+    const uniqueColorsCheckbox = document.getElementById('useUniqueCharacterBorderColors');
     const focusedBorderColorOptions = document.getElementById('focusedBorderColorOptions');
     const inactiveBorderColorOptions = document.getElementById('inactiveBorderColorOptions');
 
@@ -7428,23 +7415,7 @@ function toggleUniqueCharacterColors() {
         // it dims along with the focused field instead of staying interactive while overridden.
         focusedBorderColorOptions?.classList.toggle('is-disabled', uniqueColorsCheckbox.checked);
         inactiveBorderColorOptions?.classList.toggle('is-disabled', uniqueColorsCheckbox.checked);
-
-        if (uniqueColorsCheckbox.checked) {
-            assignUniqueColorsToAllCharacters();
-        }
     }
-}
-
-function assignUniqueColorsToAllCharacters() {
-    if (!currentConfig.characters) return;
-    saveCharacters();
-    currentConfig.characters.forEach((char, index) => {
-        if (!char.borderColors) {
-            char.borderColors = {};
-        }
-        char.borderColors.activeBorderColor = generateUniqueColor(index);
-    });
-    populateCharacters();
 }
 
 function toggleTextDisplayOptions() {
@@ -8266,21 +8237,50 @@ function clearSoundFile(typeKey) {
     }
 }
 
-async function testSound(typeKey) {
-    const input = document.getElementById(`notif_${typeKey}_soundPath`);
-    const path = input ? input.dataset.fullPath : '';
-    if (!path) return;
-    const volumeInput = document.getElementById(`notif_${typeKey}_soundVolume`);
-    const volume = volumeInput ? volumeInput.value : '100';
-    try {
-        if (typeof webui === 'undefined') {
-            logWarn('WebUI not available for testing sound');
-            return;
-        }
-        await webui.call('testSoundFile', path, volume);
-    } catch (error) {
-        logError('Failed to test sound:', error);
-    }
+// Null if the type's panel isn't rendered.
+function readNotificationTypeConfig(typeKey) {
+    const enabled = document.getElementById(`notif_${typeKey}_enabled`);
+    if (!enabled) return null;
+
+    const duration = document.getElementById(`notif_${typeKey}_duration`);
+    const suppressFocused = document.getElementById(`notif_${typeKey}_suppressFocused`);
+    const suppressClicked = document.getElementById(`notif_${typeKey}_suppressClicked`);
+    const throttle = document.getElementById(`notif_${typeKey}_throttle`);
+    const ttsTypeEnabled = document.getElementById(`notif_${typeKey}_tts`);
+    const soundTypeEnabled = document.getElementById(`notif_${typeKey}_soundEnabled`);
+    const soundPath = document.getElementById(`notif_${typeKey}_soundPath`);
+    const soundVolume = document.getElementById(`notif_${typeKey}_soundVolume`);
+    const showBorder = document.getElementById(`notif_${typeKey}_showBorder`);
+    const flashBorder = document.getElementById(`notif_${typeKey}_flashBorder`);
+    const borderColorEnabled = document.getElementById(`notif_${typeKey}_borderColorEnabled`);
+    const borderColorInput = document.getElementById(`notif_${typeKey}_borderColor`);
+    const textColorEnabled = document.getElementById(`notif_${typeKey}_textColorEnabled`);
+    const textColorInput = document.getElementById(`notif_${typeKey}_textColor`);
+
+    const durationValue = duration && duration.value ? parseFloat(duration.value) * 1000 : 5000;
+    const throttleValue = throttle && throttle.value ? parseFloat(throttle.value) * 1000 : 0;
+
+    return {
+        enabled: enabled.checked,
+        duration_ms: Math.round(durationValue),
+        suppress_when_focused: suppressFocused ? suppressFocused.checked : false,
+        suppress_when_clicked: suppressClicked ? suppressClicked.checked : false,
+        throttle_ms: Math.round(throttleValue),
+        tts_enabled: ttsTypeEnabled ? ttsTypeEnabled.checked : false,
+        sound_enabled: soundTypeEnabled ? soundTypeEnabled.checked : false,
+        sound_path: soundPath && soundPath.dataset.fullPath ? soundPath.dataset.fullPath : null,
+        sound_volume: soundVolume ? parseInt(soundVolume.value, 10) : 100,
+        show_border: showBorder ? showBorder.checked : false,
+        flash_border: flashBorder ? flashBorder.checked : false,
+        // null = use Alert state color; the override checkbox opts in.
+        border_color: (borderColorEnabled && borderColorEnabled.checked && borderColorInput && borderColorInput.value)
+            ? htmlColorToZig(borderColorInput.value)
+            : null,
+        // null = use default text color.
+        text_color: (textColorEnabled && textColorEnabled.checked && textColorInput && textColorInput.value)
+            ? htmlColorToZig(textColorInput.value)
+            : null,
+    };
 }
 
 function saveNotificationTypes() {
@@ -8289,66 +8289,34 @@ function saveNotificationTypes() {
     if (!currentConfig.thumbnail.notifications.type_configs) {
         currentConfig.thumbnail.notifications.type_configs = {};
     }
-    
+
     const typeConfigs = currentConfig.thumbnail.notifications.type_configs;
 
     NOTIFICATION_TYPES.forEach((notifType) => {
-        const enabled = document.getElementById(`notif_${notifType.key}_enabled`);
-        const duration = document.getElementById(`notif_${notifType.key}_duration`);
-        const suppressFocused = document.getElementById(`notif_${notifType.key}_suppressFocused`);
-        const suppressClicked = document.getElementById(`notif_${notifType.key}_suppressClicked`);
-        const throttle = document.getElementById(`notif_${notifType.key}_throttle`);
-        const ttsTypeEnabled = document.getElementById(`notif_${notifType.key}_tts`);
-        const soundTypeEnabled = document.getElementById(`notif_${notifType.key}_soundEnabled`);
-        const soundPath = document.getElementById(`notif_${notifType.key}_soundPath`);
-        const soundVolume = document.getElementById(`notif_${notifType.key}_soundVolume`);
-
-        if (!enabled) return;
-
-        if (!typeConfigs[notifType.key]) {
-            typeConfigs[notifType.key] = {};
-        }
-
-        const config = typeConfigs[notifType.key];
-
-        config.enabled = enabled.checked;
-
-        // Use explicit duration value (in seconds) or default to 5s, convert to ms for backend
-        const durationValue = duration && duration.value ? parseFloat(duration.value) * 1000 : 5000;
-        config.duration_ms = Math.round(durationValue);
-
-        config.suppress_when_focused = suppressFocused ? suppressFocused.checked : false;
-        config.suppress_when_clicked = suppressClicked ? suppressClicked.checked : false;
-
-        const throttleValue = throttle && throttle.value ? parseFloat(throttle.value) * 1000 : 0;
-        config.throttle_ms = Math.round(throttleValue);
-
-        config.tts_enabled = ttsTypeEnabled ? ttsTypeEnabled.checked : false;
-
-        config.sound_enabled = soundTypeEnabled ? soundTypeEnabled.checked : false;
-        config.sound_path = soundPath && soundPath.dataset.fullPath ? soundPath.dataset.fullPath : null;
-        config.sound_volume = soundVolume ? parseInt(soundVolume.value, 10) : 100;
-
-        const showBorder = document.getElementById(`notif_${notifType.key}_showBorder`);
-        config.show_border = showBorder ? showBorder.checked : false;
-
-        const flashBorder = document.getElementById(`notif_${notifType.key}_flashBorder`);
-        config.flash_border = flashBorder ? flashBorder.checked : false;
-
-        // null = use Alert state color; the override checkbox opts in.
-        const borderColorEnabled = document.getElementById(`notif_${notifType.key}_borderColorEnabled`);
-        const borderColorInput = document.getElementById(`notif_${notifType.key}_borderColor`);
-        config.border_color = (borderColorEnabled && borderColorEnabled.checked && borderColorInput && borderColorInput.value)
-            ? htmlColorToZig(borderColorInput.value)
-            : null;
-
-        // Save per-type notification text color override (null = use default text color).
-        const textColorEnabled = document.getElementById(`notif_${notifType.key}_textColorEnabled`);
-        const textColorInput = document.getElementById(`notif_${notifType.key}_textColor`);
-        config.text_color = (textColorEnabled && textColorEnabled.checked && textColorInput && textColorInput.value)
-            ? htmlColorToZig(textColorInput.value)
-            : null;
+        const fromForm = readNotificationTypeConfig(notifType.key);
+        if (!fromForm) return;
+        typeConfigs[notifType.key] = Object.assign(typeConfigs[notifType.key] || {}, fromForm);
     });
+}
+
+async function testNotification(typeKey) {
+    if (typeof webui === 'undefined' || !webuiReady) {
+        logWarn('WebUI not available for testing notification');
+        return;
+    }
+    const config = readNotificationTypeConfig(typeKey);
+    if (!config) return;
+    try {
+        await sendThumbnailPreview();
+        const { success } = JSON.parse(await webui.call('testNotification', JSON.stringify({
+            type: typeKey,
+            text: t('notification.' + typeKey + '.label'),
+            config,
+        })));
+        if (!success) showStatus(t('status.testNotificationMainAppNotRunning'), 'error');
+    } catch (error) {
+        logError('Failed to test notification:', error);
+    }
 }
 
 let searchState = {

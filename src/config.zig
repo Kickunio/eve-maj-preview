@@ -38,6 +38,8 @@ pub fn clampProfileName(name: []const u8) []const u8 {
 const DEFAULT_FONT_NAME = "Segoe UI";
 const MAX_CONFIG_FILE_SIZE: u64 = 300 * 1024;
 
+const AUTO_COLORS_FILE = "colors.json";
+
 /// Frees a font-name field if fromWire duped it onto the heap; a no-op if it's still pointing at the DEFAULT_FONT_NAME literal.
 fn freeFontNameIfOwned(allocator: std.mem.Allocator, font_name: []const u8) void {
     if (font_name.ptr != DEFAULT_FONT_NAME.ptr) allocator.free(font_name);
@@ -365,6 +367,8 @@ pub const GlobalSettings = struct {
     advancedMode: bool,
     language: []const u8,
     oreTable: std.ArrayList(OrePriceEntry),
+    dialogX: ?i32,
+    dialogY: ?i32,
     needs_free: bool,
 
     pub fn init(allocator: std.mem.Allocator) GlobalSettings {
@@ -392,6 +396,8 @@ pub const GlobalSettings = struct {
             .advancedMode = false,
             .language = "en",
             .oreTable = std.ArrayList(OrePriceEntry).empty,
+            .dialogX = null,
+            .dialogY = null,
             .needs_free = false,
         };
     }
@@ -550,6 +556,12 @@ pub const GlobalSettings = struct {
         }
     }
 
+    pub fn saveDialogPosition(self: *GlobalSettings, x: i32, y: i32) !void {
+        self.dialogX = x;
+        self.dialogY = y;
+        try self.save();
+    }
+
     pub fn updateCharacterId(self: *GlobalSettings, character_name: []const u8, character_id: []const u8) !void {
         {
             try self.characterIdMapMutex.lock(g_io);
@@ -645,6 +657,8 @@ pub const GlobalSettings = struct {
         advancedMode: bool = false,
         language: []const u8 = "en",
         oreTable: []const OrePriceEntry.Wire = &.{},
+        dialogX: ?i32 = null,
+        dialogY: ?i32 = null,
     };
 
     pub fn toWire(self: *GlobalSettings, allocator: std.mem.Allocator) !Wire {
@@ -695,6 +709,8 @@ pub const GlobalSettings = struct {
             .advancedMode = self.advancedMode,
             .language = self.language,
             .oreTable = ore,
+            .dialogX = self.dialogX,
+            .dialogY = self.dialogY,
         };
     }
 
@@ -720,6 +736,8 @@ pub const GlobalSettings = struct {
         settings.autoRegisterProtocol = w.autoRegisterProtocol;
         settings.alwaysOnTop = w.alwaysOnTop;
         settings.advancedMode = w.advancedMode;
+        settings.dialogX = w.dialogX;
+        settings.dialogY = w.dialogY;
 
         for (w.profileSwitchHotkeys) |item_wire| {
             try settings.profileSwitchHotkeys.append(allocator, try ProfileSwitchHotkey.fromWire(item_wire, allocator));
@@ -915,7 +933,80 @@ pub const SystemColor = struct {
     pub fn fromWire(w: Wire, allocator: std.mem.Allocator) !SystemColor {
         return .{ .name = try allocator.dupe(u8, w.systemName), .color = w.color.value };
     }
+
+    /// `name` is a comma-separated list of exact names and `*`/`?`/`#` patterns; `wildcards` selects which kind of token is tried.
+    pub fn matches(self: SystemColor, system_name: []const u8, wildcards: bool) bool {
+        var tokens = std.mem.tokenizeScalar(u8, self.name, ',');
+        while (tokens.next()) |raw| {
+            const token = std.mem.trim(u8, raw, " \t");
+            if (token.len == 0) continue;
+            const is_pattern = std.mem.indexOfAny(u8, token, "*?#") != null;
+            if (is_pattern != wildcards) continue;
+            const hit = if (is_pattern) globMatch(token, system_name) else std.ascii.eqlIgnoreCase(token, system_name);
+            if (hit) return true;
+        }
+        return false;
+    }
 };
+
+const AutoColorsFile = struct {
+    systemColors: []const Entry = &.{},
+    characterColors: []const Entry = &.{},
+
+    const Entry = struct {
+        name: []const u8,
+        color: Argb,
+    };
+};
+
+fn loadAutoEntries(allocator: std.mem.Allocator, store: *color.AutoColors, entries: []const AutoColorsFile.Entry) void {
+    for (entries) |entry| {
+        store.put(allocator, entry.name, entry.color.value) catch |err| {
+            slog.warn("Failed to load auto color '{s}': {}", .{ entry.name, err });
+            return;
+        };
+    }
+}
+
+fn autoEntriesToWire(allocator: std.mem.Allocator, store: *const color.AutoColors) ![]const AutoColorsFile.Entry {
+    const wires = try allocator.alloc(AutoColorsFile.Entry, store.entries.items.len);
+    for (store.entries.items, 0..) |entry, i| {
+        wires[i] = .{ .name = entry.name, .color = .{ .value = entry.color } };
+    }
+    return wires;
+}
+
+/// Case-insensitive glob: `*` any run, `?` any character, `#` any digit.
+fn globMatch(pattern: []const u8, text: []const u8) bool {
+    var p: usize = 0;
+    var t: usize = 0;
+    var star_p: ?usize = null;
+    var star_t: usize = 0;
+    while (t < text.len) {
+        if (p < pattern.len and pattern[p] == '*') {
+            star_p = p;
+            star_t = t;
+            p += 1;
+        } else if (p < pattern.len and globCharMatches(pattern[p], text[t])) {
+            p += 1;
+            t += 1;
+        } else if (star_p) |sp| {
+            p = sp + 1;
+            star_t += 1;
+            t = star_t;
+        } else return false;
+    }
+    while (p < pattern.len and pattern[p] == '*') p += 1;
+    return p == pattern.len;
+}
+
+fn globCharMatches(pattern_char: u8, text_char: u8) bool {
+    return switch (pattern_char) {
+        '?' => true,
+        '#' => std.ascii.isDigit(text_char),
+        else => std.ascii.toLower(pattern_char) == std.ascii.toLower(text_char),
+    };
+}
 
 pub const HotkeyGroup = struct {
     allocator: std.mem.Allocator,
@@ -1690,6 +1781,59 @@ pub const NotificationTypeConfig = struct {
     pub fn deinit(self: *NotificationTypeConfig, allocator: std.mem.Allocator) void {
         if (self.sound_path) |p| allocator.free(p);
     }
+
+    /// Merges only the fields present in `obj`; `sound_path` is duped with `allocator`, so a default-initialised config must be deinit'd.
+    pub fn applyJson(self: *NotificationTypeConfig, allocator: std.mem.Allocator, obj: std.json.ObjectMap) !void {
+        if (obj.get("enabled")) |v| {
+            if (v == .bool) self.enabled = v.bool;
+        }
+        if (obj.get("duration_ms")) |v| {
+            if (v == .integer) self.duration_ms = std.math.cast(u32, v.integer) orelse self.duration_ms;
+        }
+        if (obj.get("suppress_when_focused")) |v| {
+            if (v == .bool) self.suppress_when_focused = v.bool;
+        }
+        if (obj.get("suppress_when_clicked")) |v| {
+            if (v == .bool) self.suppress_when_clicked = v.bool;
+        }
+        if (obj.get("throttle_ms")) |v| {
+            if (v == .integer) self.throttle_ms = std.math.cast(u32, v.integer) orelse self.throttle_ms;
+        }
+        if (obj.get("tts_enabled")) |v| {
+            if (v == .bool) self.tts_enabled = v.bool;
+        }
+        if (obj.get("sound_enabled")) |v| {
+            if (v == .bool) self.sound_enabled = v.bool;
+        }
+        if (obj.get("sound_volume")) |v| {
+            if (v == .integer) {
+                if (std.math.cast(u8, v.integer)) |val| self.sound_volume = val;
+            }
+        }
+        if (obj.get("sound_path")) |v| {
+            try Config.updateOwnedOptionalString(allocator, &self.sound_path, v);
+        }
+        if (obj.get("show_border")) |v| {
+            if (v == .bool) self.show_border = v.bool;
+        }
+        if (obj.get("flash_border")) |v| {
+            if (v == .bool) self.flash_border = v.bool;
+        }
+        if (obj.get("border_color")) |v| {
+            if (v == .string) {
+                self.border_color = try Config.parseHexColor(v.string);
+            } else if (v == .null) {
+                self.border_color = null;
+            }
+        }
+        if (obj.get("text_color")) |v| {
+            if (v == .string) {
+                self.text_color = try Config.parseHexColor(v.string);
+            } else if (v == .null) {
+                self.text_color = null;
+            }
+        }
+    }
 };
 
 pub const TypeConfigMapWire = struct {
@@ -1901,14 +2045,16 @@ pub const Config = struct {
     characters: std.ArrayList(CharacterConfig),
     systemColors: std.ArrayList(SystemColor),
 
-    // Runtime-only, not persisted to the config file.
-    generatedColorCache: std.StringHashMap(u32),
-    generatedCharacterColorCache: std.StringHashMap(u32),
+    // Persisted to AUTO_COLORS_FILE rather than the profile so saving the profile mid live-preview can't leak unsaved edits.
+    autoSystemColors: color.AutoColors = .{},
+    autoCharacterColors: color.AutoColors = .{},
+    autoColorsLoaded: bool = false,
 
     hotkeyGroups: std.ArrayList(HotkeyGroup),
     requireEveFocus: bool = false,
     resetGroupIndexOnNonGroupFocus: bool = false,
     allowHotkeyAutoRepeat: bool = false,
+    suspendHotkeyNotification: bool = true,
 
     hotkeyMinimizeAll: ?u32 = null,
     hotkeyCloseAll: ?u32 = null,
@@ -1922,7 +2068,7 @@ pub const Config = struct {
     hotkeyPreviousNotified: ?u32 = null,
     hotkeyMoveToSavedPositions: ?u32 = null,
 
-    // profile_name/allocator/generatedColorCache/generatedCharacterColorCache are deliberately absent — either derived from the profile filename or pure runtime state, never persisted.
+    // profile_name/allocator/autoSystemColors/autoCharacterColors are deliberately absent — either derived from the profile filename or pure runtime state, never persisted.
     pub const Wire = struct {
         app: []const u8 = PROFILE_FORMAT_IDENTIFIER,
         formatVersion: u32 = PROFILE_FORMAT_VERSION,
@@ -1956,6 +2102,7 @@ pub const Config = struct {
         requireEveFocus: bool = false,
         resetGroupIndexOnNonGroupFocus: bool = false,
         allowHotkeyAutoRepeat: bool = false,
+        suspendHotkeyNotification: bool = true,
         hotkeyMinimizeAll: ?VkCode = null,
         hotkeyCloseAll: ?VkCode = null,
         hotkeyToggleVisibility: ?VkCode = null,
@@ -2009,6 +2156,7 @@ pub const Config = struct {
                 .requireEveFocus = self.requireEveFocus,
                 .resetGroupIndexOnNonGroupFocus = self.resetGroupIndexOnNonGroupFocus,
                 .allowHotkeyAutoRepeat = self.allowHotkeyAutoRepeat,
+                .suspendHotkeyNotification = self.suspendHotkeyNotification,
                 .hotkeyMinimizeAll = wrapVk(self.hotkeyMinimizeAll),
                 .hotkeyCloseAll = wrapVk(self.hotkeyCloseAll),
                 .hotkeyToggleVisibility = wrapVk(self.hotkeyToggleVisibility),
@@ -2050,6 +2198,7 @@ pub const Config = struct {
         cfg.requireEveFocus = w.hotkeys.requireEveFocus;
         cfg.resetGroupIndexOnNonGroupFocus = w.hotkeys.resetGroupIndexOnNonGroupFocus;
         cfg.allowHotkeyAutoRepeat = w.hotkeys.allowHotkeyAutoRepeat;
+        cfg.suspendHotkeyNotification = w.hotkeys.suspendHotkeyNotification;
         cfg.hotkeyMinimizeAll = unwrapVk(w.hotkeys.hotkeyMinimizeAll);
         cfg.hotkeyCloseAll = unwrapVk(w.hotkeys.hotkeyCloseAll);
         cfg.hotkeyToggleVisibility = unwrapVk(w.hotkeys.hotkeyToggleVisibility);
@@ -2219,6 +2368,7 @@ pub const Config = struct {
         characterNameColor: u32 = 0xFFFFFF,
         characterNameBgColor: u32 = 0xE6000000,
         useUniqueCharacterNameColors: bool = false,
+        useUniqueCharacterBorderColors: bool = false,
         characterNameFontName: []const u8 = DEFAULT_FONT_NAME,
         characterNameFontSize: i32 = 12,
         characterNameFontWeight: types.FontWeight = .Regular,
@@ -2413,6 +2563,7 @@ pub const Config = struct {
             characterNameColor: Argb = .{ .value = (ThumbnailConfig{}).characterNameColor },
             characterNameBgColor: Argb = .{ .value = (ThumbnailConfig{}).characterNameBgColor },
             useUniqueCharacterNameColors: bool = (ThumbnailConfig{}).useUniqueCharacterNameColors,
+            useUniqueCharacterBorderColors: bool = (ThumbnailConfig{}).useUniqueCharacterBorderColors,
             characterNameFontName: []const u8 = DEFAULT_FONT_NAME,
             characterNameFontSize: i32 = (ThumbnailConfig{}).characterNameFontSize,
             characterNameFontWeight: types.FontWeight = (ThumbnailConfig{}).characterNameFontWeight,
@@ -2470,6 +2621,7 @@ pub const Config = struct {
                 .characterNameColor = .{ .value = self.characterNameColor },
                 .characterNameBgColor = .{ .value = self.characterNameBgColor },
                 .useUniqueCharacterNameColors = self.useUniqueCharacterNameColors,
+                .useUniqueCharacterBorderColors = self.useUniqueCharacterBorderColors,
                 .characterNameFontName = self.characterNameFontName,
                 .characterNameFontSize = self.characterNameFontSize,
                 .characterNameFontWeight = self.characterNameFontWeight,
@@ -2528,6 +2680,7 @@ pub const Config = struct {
                 .characterNameColor = w.characterNameColor.value,
                 .characterNameBgColor = w.characterNameBgColor.value,
                 .useUniqueCharacterNameColors = w.useUniqueCharacterNameColors,
+                .useUniqueCharacterBorderColors = w.useUniqueCharacterBorderColors,
                 .characterNameFontName = try allocator.dupe(u8, w.characterNameFontName),
                 .characterNameFontSize = w.characterNameFontSize,
                 .characterNameFontWeight = w.characterNameFontWeight,
@@ -2635,7 +2788,7 @@ pub const Config = struct {
         regionFitOrder: types.RegionFitOrder = .Characters,
         /// Whether a logout moves a thumbnail to the end of the grid, or leaves it in place until another reflow.
         regionFitReorderLoggedOut: bool = true,
-        /// Whether "Start Region Selection" temporarily hides visible thumbnails so they don't obscure the drag-to-select overlay.
+        /// Whether selecting or editing the Thumbnail Space region temporarily hides visible thumbnails so they don't obscure the overlay; the dialog passes it along when it starts the selection.
         hideThumbnailsDuringRegionSelect: bool = true,
         /// Caps RegionFit's cell size at the configured thumbnail size instead of always maximizing to fill the region.
         regionFitLimitToThumbnailSize: bool = false,
@@ -2649,6 +2802,10 @@ pub const Config = struct {
         notLoggedInSpaceHeight: ?i32 = null,
         /// Independent of RegionFit's `spacing`, so each Thumbnail Space can be tuned separately.
         notLoggedInSpaceSpacing: i32 = 0,
+        /// Same cap as `regionFitLimitToThumbnailSize`, for the not-logged-in space's own cells.
+        notLoggedInSpaceLimitToThumbnailSize: bool = false,
+        /// Same as `hideThumbnailsDuringRegionSelect`, for the not-logged-in space's region.
+        notLoggedInSpaceHideThumbnailsDuringRegionSelect: bool = true,
 
         monitorIndex: ?u32 = null,
         useMonitorWorkArea: bool = true,
@@ -2788,6 +2945,7 @@ pub const Config = struct {
         animationStyle: types.AnimationStyle = .NoAnimation,
         clickTrigger: types.ClickTrigger = .MouseDown,
         clickThrough: bool = false,
+        hoverCursor: types.HoverCursor = .Default,
     };
 
     pub const AutoMinimizeConfig = struct {
@@ -2810,6 +2968,25 @@ pub const Config = struct {
 
     pub const AutoMovePositionConfig = struct {
         enabled: bool = false,
+        moveOnStartup: bool = false,
+        verifyIntervalMs: u32 = 2000,
+        verifyCount: u8 = 6,
+
+        pub const VERIFY_INTERVAL_MS_MIN: u32 = 250;
+        pub const VERIFY_INTERVAL_MS_MAX: u32 = 10000;
+        pub const VERIFY_COUNT_MAX: u8 = 30;
+
+        pub fn validate(self: *AutoMovePositionConfig) void {
+            if (self.verifyIntervalMs < VERIFY_INTERVAL_MS_MIN or self.verifyIntervalMs > VERIFY_INTERVAL_MS_MAX) {
+                const clamped = std.math.clamp(self.verifyIntervalMs, VERIFY_INTERVAL_MS_MIN, VERIFY_INTERVAL_MS_MAX);
+                slog.warn("Auto-move verify interval {} ms out of range, clamping to {}", .{ self.verifyIntervalMs, clamped });
+                self.verifyIntervalMs = clamped;
+            }
+            if (self.verifyCount > VERIFY_COUNT_MAX) {
+                slog.warn("Auto-move verify count {} too high, clamping to {}", .{ self.verifyCount, VERIFY_COUNT_MAX });
+                self.verifyCount = VERIFY_COUNT_MAX;
+            }
+        }
     };
 
     pub const ExclusionConfig = struct {
@@ -3042,6 +3219,9 @@ pub const Config = struct {
         if (obj.get("useUniqueCharacterNameColors")) |v| {
             if (v == .bool) thumb.useUniqueCharacterNameColors = v.bool;
         }
+        if (obj.get("useUniqueCharacterBorderColors")) |v| {
+            if (v == .bool) thumb.useUniqueCharacterBorderColors = v.bool;
+        }
         if (obj.get("characterNameFontName")) |v| {
             try updateOwnedFontName(allocator, &thumb.characterNameFontName, v);
         }
@@ -3220,57 +3400,7 @@ pub const Config = struct {
                         if (type_val == .object) {
                             const ntype = @field(types.NotificationType, field.name);
                             var type_config = notif.type_configs.get(ntype);
-
-                            if (type_val.object.get("enabled")) |v| {
-                                if (v == .bool) type_config.enabled = v.bool;
-                            }
-                            if (type_val.object.get("duration_ms")) |v| {
-                                if (v == .integer) type_config.duration_ms = std.math.cast(u32, v.integer) orelse type_config.duration_ms;
-                            }
-                            if (type_val.object.get("suppress_when_focused")) |v| {
-                                if (v == .bool) type_config.suppress_when_focused = v.bool;
-                            }
-                            if (type_val.object.get("suppress_when_clicked")) |v| {
-                                if (v == .bool) type_config.suppress_when_clicked = v.bool;
-                            }
-                            if (type_val.object.get("throttle_ms")) |v| {
-                                if (v == .integer) type_config.throttle_ms = std.math.cast(u32, v.integer) orelse type_config.throttle_ms;
-                            }
-                            if (type_val.object.get("tts_enabled")) |v| {
-                                if (v == .bool) type_config.tts_enabled = v.bool;
-                            }
-                            if (type_val.object.get("sound_enabled")) |v| {
-                                if (v == .bool) type_config.sound_enabled = v.bool;
-                            }
-                            if (type_val.object.get("sound_volume")) |v| {
-                                if (v == .integer) {
-                                    if (std.math.cast(u8, v.integer)) |val| type_config.sound_volume = val;
-                                }
-                            }
-                            if (type_val.object.get("sound_path")) |v| {
-                                try updateOwnedOptionalString(allocator, &type_config.sound_path, v);
-                            }
-                            if (type_val.object.get("show_border")) |v| {
-                                if (v == .bool) type_config.show_border = v.bool;
-                            }
-                            if (type_val.object.get("flash_border")) |v| {
-                                if (v == .bool) type_config.flash_border = v.bool;
-                            }
-                            if (type_val.object.get("border_color")) |v| {
-                                if (v == .string) {
-                                    type_config.border_color = try parseHexColor(v.string);
-                                } else if (v == .null) {
-                                    type_config.border_color = null;
-                                }
-                            }
-                            if (type_val.object.get("text_color")) |v| {
-                                if (v == .string) {
-                                    type_config.text_color = try parseHexColor(v.string);
-                                } else if (v == .null) {
-                                    type_config.text_color = null;
-                                }
-                            }
-
+                            try type_config.applyJson(allocator, type_val.object);
                             notif.type_configs.set(ntype, type_config);
                         }
                     }
@@ -3642,6 +3772,12 @@ pub const Config = struct {
         if (obj.get("notLoggedInSpaceSpacing")) |v| {
             if (v == .integer) display.notLoggedInSpaceSpacing = std.math.cast(i32, v.integer) orelse display.notLoggedInSpaceSpacing;
         }
+        if (obj.get("notLoggedInSpaceLimitToThumbnailSize")) |v| {
+            if (v == .bool) display.notLoggedInSpaceLimitToThumbnailSize = v.bool;
+        }
+        if (obj.get("notLoggedInSpaceHideThumbnailsDuringRegionSelect")) |v| {
+            if (v == .bool) display.notLoggedInSpaceHideThumbnailsDuringRegionSelect = v.bool;
+        }
         if (obj.get("monitorIndex")) |v| {
             if (v == .integer) {
                 if (std.math.cast(u32, v.integer)) |val| display.monitorIndex = val;
@@ -3922,8 +4058,6 @@ pub const Config = struct {
             .windowFilters = default_filters,
             .characters = std.ArrayList(CharacterConfig).empty,
             .systemColors = std.ArrayList(SystemColor).empty,
-            .generatedColorCache = std.StringHashMap(u32).init(allocator),
-            .generatedCharacterColorCache = std.StringHashMap(u32).init(allocator),
             .hotkeyGroups = std.ArrayList(HotkeyGroup).empty,
             .hotkeyMinimizeAll = null,
             .hotkeyCloseAll = null,
@@ -3969,10 +4103,11 @@ pub const Config = struct {
         return &self.characters.items[self.characters.items.len - 1];
     }
 
+    /// Exact names beat patterns regardless of row order; ties within each group go to the first row.
     pub fn findSystemColor(self: *const Config, name: []const u8) ?u32 {
-        for (self.systemColors.items) |*sc| {
-            if (std.mem.eql(u8, sc.name, name)) {
-                return sc.color;
+        inline for (.{ false, true }) |wildcards| {
+            for (self.systemColors.items) |sc| {
+                if (sc.matches(name, wildcards)) return sc.color;
             }
         }
         return null;
@@ -3992,11 +4127,14 @@ pub const Config = struct {
         return null;
     }
 
-    pub fn getCharacterBorderColors(self: *const Config, character_name: []const u8) ?CharacterBorderColors {
-        if (self.findCharacterConst(character_name)) |char| {
-            return char.borderColors;
-        }
-        return null;
+    /// A character's own active border color wins; otherwise Unique Character Border Colors (if enabled) fills it in, leaving any inactive color as configured.
+    pub fn getCharacterBorderColors(self: *Config, character_name: []const u8) ?CharacterBorderColors {
+        const configured: ?CharacterBorderColors = if (self.findCharacterConst(character_name)) |char| char.borderColors else null;
+        if (!self.thumbnail.useUniqueCharacterBorderColors) return configured;
+
+        var colors = configured orelse CharacterBorderColors{};
+        if (colors.activeBorderColor == null) colors.activeBorderColor = self.autoCharacterColorFor(character_name);
+        return colors;
     }
 
     pub fn getCharacterSize(self: *const Config, character_name: []const u8) ?CharacterThumbnailSize {
@@ -4057,62 +4195,81 @@ pub const Config = struct {
         return character_name;
     }
 
-    /// Snapshot of every color already generated in `cache`, so a new color can be checked against the full active set instead of a small recency window; caller owns the returned slice and must free it with `allocator`.
-    fn collectCachedColors(allocator: std.mem.Allocator, cache: *const std.StringHashMap(u32)) ![]const u32 {
-        const colors = try allocator.alloc(u32, cache.count());
-        var it = cache.valueIterator();
-        var i: usize = 0;
-        while (it.next()) |value| : (i += 1) {
-            colors[i] = value.*;
-        }
-        return colors;
-    }
-
     /// Priority: custom color override, then unique generated color, then default.
     pub fn getSystemNameColor(self: *Config, system_name: []const u8) u32 {
         if (self.findSystemColor(system_name)) |custom_color| {
             return custom_color;
         }
 
-        if (self.thumbnail.useUniqueSystemColors) {
-            const allocator = self.generatedColorCache.allocator;
+        if (!self.thumbnail.useUniqueSystemColors) return self.thumbnail.systemNameColor;
 
-            if (self.generatedColorCache.get(system_name)) |cached_color| {
-                return cached_color;
-            }
+        self.loadAutoColors();
 
-            const similarity_threshold: f32 = 0.35;
-            const existing_colors = collectCachedColors(allocator, &self.generatedColorCache) catch |err| blk: {
-                slog.warn("Failed to snapshot existing system colors: {}", .{err});
-                break :blk &[_]u32{};
-            };
-            defer allocator.free(existing_colors);
+        var overrides: [color.AutoColors.max_avoided]u32 = undefined;
+        const override_count = @min(self.systemColors.items.len, overrides.len);
+        for (self.systemColors.items[0..override_count], 0..) |sc, i| overrides[i] = sc.color;
 
-            const generated_color = color.generateUniqueColorWithAvoidance(
-                system_name,
-                existing_colors,
-                similarity_threshold,
-            );
+        return self.autoSystemColors.colorFor(self.allocator, system_name, overrides[0..override_count]);
+    }
 
-            const gop = self.generatedColorCache.getOrPut(system_name) catch |err| {
-                slog.err("Failed to cache color for system '{s}': {}", .{ system_name, err });
-                return generated_color;
-            };
+    /// Writes pending auto colors; deferred to when the last thumbnail closes (and to deinit) so a session with EVE open never touches the disk for it.
+    pub fn flushAutoColors(self: *Config) void {
+        if (!self.autoSystemColors.dirty and !self.autoCharacterColors.dirty) return;
+        self.autoSystemColors.dirty = false;
+        self.autoCharacterColors.dirty = false;
+        self.saveAutoColors();
+    }
 
-            if (!gop.found_existing) {
-                const name_copy = allocator.dupe(u8, system_name) catch |err| {
-                    slog.err("Failed to allocate key for system '{s}': {}", .{ system_name, err });
-                    _ = self.generatedColorCache.remove(system_name);
-                    return generated_color;
-                };
-                gop.key_ptr.* = name_copy;
-                gop.value_ptr.* = generated_color;
-            }
+    fn loadAutoColors(self: *Config) void {
+        if (self.autoColorsLoaded) return;
+        self.autoColorsLoaded = true;
 
-            return gop.value_ptr.*;
-        }
+        const content = std.Io.Dir.cwd().readFileAlloc(g_io, AUTO_COLORS_FILE, self.allocator, .limited(MAX_CONFIG_FILE_SIZE)) catch |err| {
+            if (err != error.FileNotFound) slog.warn("Failed to read '{s}': {}", .{ AUTO_COLORS_FILE, err });
+            return;
+        };
+        defer self.allocator.free(content);
 
-        return self.thumbnail.systemNameColor;
+        const parsed_value = std.json.parseFromSlice(std.json.Value, self.allocator, content, .{}) catch |err| {
+            slog.warn("Failed to parse '{s}': {}", .{ AUTO_COLORS_FILE, err });
+            return;
+        };
+        defer parsed_value.deinit();
+
+        const parsed = std.json.parseFromValue(AutoColorsFile, self.allocator, parsed_value.value, .{ .ignore_unknown_fields = true }) catch |err| {
+            slog.warn("Failed to read auto colors from '{s}': {}", .{ AUTO_COLORS_FILE, err });
+            return;
+        };
+        defer parsed.deinit();
+
+        loadAutoEntries(self.allocator, &self.autoSystemColors, parsed.value.systemColors);
+        loadAutoEntries(self.allocator, &self.autoCharacterColors, parsed.value.characterColors);
+    }
+
+    fn saveAutoColors(self: *const Config) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
+        const file = AutoColorsFile{
+            .systemColors = autoEntriesToWire(arena.allocator(), &self.autoSystemColors) catch |err| {
+                slog.warn("Failed to save system colors: {}", .{err});
+                return;
+            },
+            .characterColors = autoEntriesToWire(arena.allocator(), &self.autoCharacterColors) catch |err| {
+                slog.warn("Failed to save character colors: {}", .{err});
+                return;
+            },
+        };
+
+        const json = std.json.Stringify.valueAlloc(self.allocator, file, .{ .whitespace = .indent_2 }) catch |err| {
+            slog.warn("Failed to serialize auto colors: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(json);
+
+        atomicWriteFile(self.allocator, g_io, AUTO_COLORS_FILE, json) catch |err| {
+            slog.warn("Failed to save '{s}': {}", .{ AUTO_COLORS_FILE, err });
+        };
     }
 
     /// Priority: manual per-character override, then auto-generated unique color (if enabled), else null; unlike getSystemNameColor, there's no dedicated default-color field here, so callers fall back to their own existing default when this returns null.
@@ -4123,41 +4280,31 @@ pub const Config = struct {
 
         if (!self.thumbnail.useUniqueCharacterNameColors) return null;
 
-        const allocator = self.generatedCharacterColorCache.allocator;
+        return self.autoCharacterColorFor(character_name);
+    }
 
-        if (self.generatedCharacterColorCache.get(character_name)) |cached_color| {
-            return cached_color;
+    /// One stored color per character, shared by its name and border; steers clear of every character's own name and active border overrides.
+    fn autoCharacterColorFor(self: *Config, character_name: []const u8) u32 {
+        self.loadAutoColors();
+
+        var overrides: [color.AutoColors.max_avoided]u32 = undefined;
+        var override_count: usize = 0;
+        for (self.characters.items) |char| {
+            if (char.nameColor) |custom_color| {
+                if (override_count == overrides.len) break;
+                overrides[override_count] = custom_color;
+                override_count += 1;
+            }
+            if (char.borderColors) |border| {
+                if (border.activeBorderColor) |custom_color| {
+                    if (override_count == overrides.len) break;
+                    overrides[override_count] = custom_color;
+                    override_count += 1;
+                }
+            }
         }
 
-        const similarity_threshold: f32 = 0.35;
-        const existing_colors = collectCachedColors(allocator, &self.generatedCharacterColorCache) catch |err| blk: {
-            slog.warn("Failed to snapshot existing character colors: {}", .{err});
-            break :blk &[_]u32{};
-        };
-        defer allocator.free(existing_colors);
-
-        const generated_color = color.generateUniqueColorWithAvoidance(
-            character_name,
-            existing_colors,
-            similarity_threshold,
-        );
-
-        const gop = self.generatedCharacterColorCache.getOrPut(character_name) catch |err| {
-            slog.err("Failed to cache color for character '{s}': {}", .{ character_name, err });
-            return generated_color;
-        };
-
-        if (!gop.found_existing) {
-            const name_copy = allocator.dupe(u8, character_name) catch |err| {
-                slog.err("Failed to allocate key for character '{s}': {}", .{ character_name, err });
-                _ = self.generatedCharacterColorCache.remove(character_name);
-                return generated_color;
-            };
-            gop.key_ptr.* = name_copy;
-            gop.value_ptr.* = generated_color;
-        }
-
-        return gop.value_ptr.*;
+        return self.autoCharacterColors.colorFor(self.allocator, character_name, overrides[0..override_count]);
     }
 
     pub fn validate(self: *Config) void {
@@ -4166,6 +4313,7 @@ pub const Config = struct {
         self.display.validate();
         self.snapping.validate();
         self.autoMinimize.validate();
+        self.autoMovePosition.validate();
         self.chatlog.validate();
         self.combat.validate();
         self.mining.validate();
@@ -4226,6 +4374,9 @@ pub const Config = struct {
 
             .@"autoMinimize.delayMs" = Range{ .min = 0, .max = AutoMinimizeConfig.DELAY_MS_MAX },
 
+            .@"autoMovePosition.verifyIntervalMs" = Range{ .min = AutoMovePositionConfig.VERIFY_INTERVAL_MS_MIN, .max = AutoMovePositionConfig.VERIFY_INTERVAL_MS_MAX },
+            .@"autoMovePosition.verifyCount" = Range{ .min = 0, .max = AutoMovePositionConfig.VERIFY_COUNT_MAX },
+
             .@"chatlog.pollIntervalMs" = Range{ .min = ChatlogConfig.POLL_INTERVAL_MS_MIN, .max = ChatlogConfig.POLL_INTERVAL_MS_MAX },
             .@"chatlog.idlePollThreshold" = Range{ .min = ChatlogConfig.IDLE_POLL_THRESHOLD_MIN, .max = ChatlogConfig.IDLE_POLL_THRESHOLD_MAX },
             .@"chatlog.maxPollMultiplier" = Range{ .min = ChatlogConfig.MAX_POLL_MULTIPLIER_MIN, .max = ChatlogConfig.MAX_POLL_MULTIPLIER_MAX },
@@ -4267,6 +4418,8 @@ pub const Config = struct {
     }
 
     pub fn deinit(self: *Config) void {
+        self.flushAutoColors();
+
         const allocator = self.allocator;
         allocator.free(self.profile_name);
 
@@ -4297,17 +4450,8 @@ pub const Config = struct {
         }
         self.systemColors.deinit(allocator);
 
-        var cache_it = self.generatedColorCache.iterator();
-        while (cache_it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-        }
-        self.generatedColorCache.deinit();
-
-        var char_cache_it = self.generatedCharacterColorCache.iterator();
-        while (char_cache_it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-        }
-        self.generatedCharacterColorCache.deinit();
+        self.autoSystemColors.deinit(allocator);
+        self.autoCharacterColors.deinit(allocator);
 
         for (self.hotkeyGroups.items) |*group| {
             group.deinit();
@@ -4367,7 +4511,6 @@ pub const Config = struct {
         const new_spacing = fresh.display.spacing;
         const new_layout_mode = fresh.display.layoutMode;
         const new_region_fit_direction = fresh.display.regionFitDirection;
-        const new_hide_thumbnails_during_region_select = fresh.display.hideThumbnailsDuringRegionSelect;
         const new_region_fit_limit_to_thumbnail_size = fresh.display.regionFitLimitToThumbnailSize;
         const new_new_thumbnail_spacing = fresh.display.newThumbnailSpacing;
         const new_monitor_index = fresh.display.monitorIndex;
@@ -4383,6 +4526,7 @@ pub const Config = struct {
         const new_not_logged_in_space_width = fresh.display.notLoggedInSpaceWidth;
         const new_not_logged_in_space_height = fresh.display.notLoggedInSpaceHeight;
         const new_not_logged_in_space_spacing = fresh.display.notLoggedInSpaceSpacing;
+        const new_not_logged_in_space_limit_to_thumbnail_size = fresh.display.notLoggedInSpaceLimitToThumbnailSize;
 
         // Index-matched, like applyGroupBadgePreviewFromJson.
         for (self.hotkeyGroups.items, 0..) |*group, group_index| {
@@ -4458,7 +4602,6 @@ pub const Config = struct {
         self.display.spacing = new_spacing;
         self.display.layoutMode = new_layout_mode;
         self.display.regionFitDirection = new_region_fit_direction;
-        self.display.hideThumbnailsDuringRegionSelect = new_hide_thumbnails_during_region_select;
         self.display.regionFitLimitToThumbnailSize = new_region_fit_limit_to_thumbnail_size;
         self.display.newThumbnailSpacing = new_new_thumbnail_spacing;
         self.display.monitorIndex = new_monitor_index;
@@ -4474,6 +4617,7 @@ pub const Config = struct {
         self.display.notLoggedInSpaceWidth = new_not_logged_in_space_width;
         self.display.notLoggedInSpaceHeight = new_not_logged_in_space_height;
         self.display.notLoggedInSpaceSpacing = new_not_logged_in_space_spacing;
+        self.display.notLoggedInSpaceLimitToThumbnailSize = new_not_logged_in_space_limit_to_thumbnail_size;
     }
 
     /// Live-preview only: per-group badge flags in the config dialog's group order, matched to the running groups by index.
