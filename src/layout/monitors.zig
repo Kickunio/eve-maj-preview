@@ -77,7 +77,7 @@ pub fn resolveMonitorPlacement(display: *const config.DisplayConfig) ?MonitorPla
 }
 
 /// By 0-based index; null if out of range.
-fn getMonitorPlacement(monitor_index: u32, use_work_area: bool) ?MonitorPlacement {
+fn getMonitorPlacement(monitor_index: u32, should_use_work_area: bool) ?MonitorPlacement {
     var enum_data = MonitorEnumData{
         .target_index = monitor_index,
         .current_index = 0,
@@ -87,10 +87,10 @@ fn getMonitorPlacement(monitor_index: u32, use_work_area: bool) ?MonitorPlacemen
     // Returns FALSE when the callback stops it early on a match, so the result says nothing about errors.
     _ = win32.EnumDisplayMonitors(null, null, monitorEnumProc, win32.ptrToLparam(&enum_data));
 
-    if (enum_data.found_monitor == null) {
+    const monitor = enum_data.found_monitor orelse {
         slog.warn("Failed to find monitor {} ({} available)", .{ monitor_index, enum_data.current_index });
         return null;
-    }
+    };
 
     var monitor_info = win32.MONITORINFO{
         .cbSize = @sizeOf(win32.MONITORINFO),
@@ -99,14 +99,14 @@ fn getMonitorPlacement(monitor_index: u32, use_work_area: bool) ?MonitorPlacemen
         .dwFlags = 0,
     };
 
-    if (!win32.toBool(win32.GetMonitorInfoA(enum_data.found_monitor.?, &monitor_info))) {
-        slog.err("Failed to get monitor info for monitor index {}", .{monitor_index});
+    if (!win32.toBool(win32.GetMonitorInfoA(monitor, &monitor_info))) {
+        slog.warn("Failed to get monitor info for monitor index {}", .{monitor_index});
         return null;
     }
 
     return .{
-        .bounds = if (use_work_area) monitor_info.rcWork else monitor_info.rcMonitor,
-        .monitor = enum_data.found_monitor.?,
+        .bounds = if (should_use_work_area) monitor_info.rcWork else monitor_info.rcMonitor,
+        .monitor = monitor,
     };
 }
 
@@ -118,17 +118,17 @@ fn monitorBounds(nearest: ?win32.HMONITOR) MonitorBounds {
         .bottom = win32.GetSystemMetrics(win32.SM_CYSCREEN),
     };
     var monitor: ?win32.HMONITOR = null;
-    if (nearest) |m| {
-        if (win32.monitorRect(m)) |rect| {
+    if (nearest) |candidate| {
+        if (win32.monitorRect(candidate)) |rect| {
             bounds = rect;
-            monitor = m;
+            monitor = candidate;
         }
     }
     return .{ .bounds = bounds, .monitor = monitor };
 }
 
-fn rectEnumProc(_: win32.HMONITOR, _: ?win32.HDC, rect: ?*win32.RECT, lparam: win32.LPARAM) callconv(.c) win32.BOOL {
-    const list: *RectList = win32.lparamToPtr(RectList, lparam);
+fn rectEnumProc(_: win32.HMONITOR, _: ?win32.HDC, rect: ?*win32.RECT, lParam: win32.LPARAM) callconv(.c) win32.BOOL {
+    const list: *RectList = win32.lparamToPtr(RectList, lParam);
     const bounds = rect orelse return win32.TRUE;
     if (list.count == list.buffer.len) return win32.TRUE;
     list.buffer[list.count] = bounds.*;
@@ -136,8 +136,8 @@ fn rectEnumProc(_: win32.HMONITOR, _: ?win32.HDC, rect: ?*win32.RECT, lparam: wi
     return win32.TRUE;
 }
 
-fn monitorEnumProc(monitor: win32.HMONITOR, _: ?win32.HDC, _: ?*win32.RECT, lparam: win32.LPARAM) callconv(.c) win32.BOOL {
-    const data: *MonitorEnumData = win32.lparamToPtr(MonitorEnumData, lparam);
+fn monitorEnumProc(monitor: win32.HMONITOR, _: ?win32.HDC, _: ?*win32.RECT, lParam: win32.LPARAM) callconv(.c) win32.BOOL {
+    const data: *MonitorEnumData = win32.lparamToPtr(MonitorEnumData, lParam);
     if (data.current_index == data.target_index) {
         data.found_monitor = monitor;
         return win32.FALSE;

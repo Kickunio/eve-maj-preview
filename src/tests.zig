@@ -16,7 +16,7 @@ test {
     _ = @import("dialog/tools/region_math.zig");
     _ = @import("hotkeys/bindings.zig");
     _ = @import("hotkeys/exclusions.zig");
-    _ = @import("layout/placement.zig");
+    _ = @import("layout/region_grid.zig");
     _ = @import("layout/spaces.zig");
     _ = @import("config/spaces.zig");
     _ = @import("layout/zoom.zig");

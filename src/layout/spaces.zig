@@ -16,9 +16,9 @@ pub const SpaceCounts = [MAX_SPACES]usize;
 
 /// Each thumbnail's space and cell for one layout pass.
 pub const Assignment = struct {
-    /// Per name: index into thumbnailSpaces, or null when it's placed by hand or its thumbnail is hidden.
+    /// Per name: index into thumbnailSpaces, or null when it's placed by hand or its thumbnail is hidden. Owned; freed in deinit.
     space_of: []?usize,
-    /// Per name: its cell within its space; unused when placed by hand.
+    /// Per name: its cell within its space; unused when placed by hand. Owned; freed in deinit.
     rank: []usize,
     counts: SpaceCounts = @splat(0),
 
@@ -35,19 +35,19 @@ const RankContext = struct {
     order_map: *const std.StringHashMap(usize),
 
     /// The space's own characters, then unassigned ones it took, then login-screen clients it took.
-    fn tier(context: RankContext, name: []const u8) u2 {
-        const space = context.space;
+    fn tier(self: RankContext, name: []const u8) u2 {
+        const space = self.space;
         if (scout.isGenericCharacterName(name)) return if (space.holdsLoginScreen) 0 else 2;
-        return if (space.holdsUnassigned or holdsGroupOf(context.config, space, name)) 0 else 1;
+        return if (space.holdsUnassigned or holdsGroupOf(self.config, space, name)) 0 else 1;
     }
 
-    fn lessThan(context: RankContext, a_index: usize, b_index: usize) bool {
-        const a_name = context.names[a_index];
-        const b_name = context.names[b_index];
-        const a_tier = context.tier(a_name);
-        const b_tier = context.tier(b_name);
+    fn lessThan(self: RankContext, a_index: usize, b_index: usize) bool {
+        const a_name = self.names[a_index];
+        const b_name = self.names[b_index];
+        const a_tier = self.tier(a_name);
+        const b_tier = self.tier(b_name);
         if (a_tier != b_tier) return a_tier < b_tier;
-        return config_mod.orderMapLessThan(context.order_map, a_name, b_name, a_index, b_index);
+        return config_mod.orderMapLessThan(self.order_map, a_name, b_name, a_index, b_index);
     }
 };
 
@@ -125,26 +125,26 @@ pub fn assign(allocator: std.mem.Allocator, config: *const Config, names: []cons
     @memset(rank, 0);
 
     var assignment: Assignment = .{ .space_of = space_of, .rank = rank };
-    for (names, space_of) |name, *of| {
-        of.* = spaceFor(config, name);
-        if (of.*) |space_index| assignment.counts[space_index] += 1;
+    for (names, space_of) |name, *assigned_space| {
+        assigned_space.* = spaceFor(config, name);
+        if (assigned_space.*) |space_index| assignment.counts[space_index] += 1;
     }
 
     const members = try allocator.alloc(usize, names.len);
     defer allocator.free(members);
     for (listed(config), 0..) |*space, space_index| {
         if (assignment.counts[space_index] == 0) continue;
-        var count: usize = 0;
-        for (space_of, 0..) |of, i| {
-            if ((of orelse continue) != space_index) continue;
-            members[count] = i;
-            count += 1;
+        var member_count: usize = 0;
+        for (space_of, 0..) |assigned_space, i| {
+            if ((assigned_space orelse continue) != space_index) continue;
+            members[member_count] = i;
+            member_count += 1;
         }
         var order_map = try orderMap(allocator, config, space);
         defer order_map.deinit();
         const context: RankContext = .{ .config = config, .space = space, .names = names, .order_map = &order_map };
-        std.sort.pdq(usize, members[0..count], context, RankContext.lessThan);
-        for (members[0..count], 0..) |name_index, cell| rank[name_index] = cell;
+        std.sort.pdq(usize, members[0..member_count], context, RankContext.lessThan);
+        for (members[0..member_count], 0..) |name_index, cell| rank[name_index] = cell;
     }
     return assignment;
 }
@@ -170,12 +170,12 @@ fn orderMap(allocator: std.mem.Allocator, config: *const Config, space: *const T
     switch (space.order) {
         .Characters => return config_mod.buildCharacterOrderMap(config.characters.items, allocator),
         .HotkeyGroups => {
-            var map = std.StringHashMap(usize).init(allocator);
+            var map: std.StringHashMap(usize) = .init(allocator);
             errdefer map.deinit();
             var next: usize = 0;
-            for ([_]bool{ true, false }) |own_groups| {
+            for ([_]bool{ true, false }) |wants_own_groups| {
                 for (config.hotkeyGroups.items) |group| {
-                    if ((space.groupIndex(group.name) != null) != own_groups) continue;
+                    if ((space.groupIndex(group.name) != null) != wants_own_groups) continue;
                     for (group.characters.items) |name| {
                         const entry = try map.getOrPut(name);
                         if (entry.found_existing) continue;
