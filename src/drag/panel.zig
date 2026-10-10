@@ -2,12 +2,11 @@
 const win32 = @import("../platform/win32.zig");
 const snapping = @import("snapping.zig");
 
-// Anchors a drag to the cursor position at WM_ENTERSIZEMOVE, since WM_MOVING's rect reflects prior snap overrides; a single shared pair is safe since only one window can be mid-drag at a time.
+// Drag anchor from WM_ENTERSIZEMOVE, since WM_MOVING's rect already holds earlier snaps; only one window drags at a time.
 var g_panel_drag_anchor_cursor: win32.POINT = .{ .x = 0, .y = 0 };
 var g_panel_drag_anchor_rect: win32.RECT = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 };
 
-/// The messages every panel handles alike: its header (the top `header_height` px) drags it with snapping, and being layered it never erases a background.
-/// Null for any other message; the panel still calls beginPanelDrag itself on WM_ENTERSIZEMOVE.
+/// Handles a panel's header drag, snapping and background erase; null for any other message, and WM_ENTERSIZEMOVE must still call beginPanelDrag.
 pub fn handleMessage(hwnd: win32.HWND, msg: win32.UINT, lParam: win32.LPARAM, header_height: i32) ?win32.LRESULT {
     switch (msg) {
         win32.WM_NCHITTEST => {
@@ -19,7 +18,7 @@ pub fn handleMessage(hwnd: win32.HWND, msg: win32.UINT, lParam: win32.LPARAM, he
             updatePanelDragRect(hwnd, win32.lparamToPtr(win32.RECT, lParam));
             return win32.TRUE;
         },
-        win32.WM_ERASEBKGND => return 1,
+        win32.WM_ERASEBKGND => return win32.TRUE,
         else => return null,
     }
 }
@@ -36,7 +35,7 @@ fn updatePanelDragRect(hwnd: win32.HWND, rect: *win32.RECT) void {
     const height = rect.bottom - rect.top;
 
     var cursor: win32.POINT = undefined;
-    _ = win32.GetCursorPos(&cursor);
+    if (!win32.toBool(win32.GetCursorPos(&cursor))) return;
     const intended_x = g_panel_drag_anchor_rect.left + (cursor.x - g_panel_drag_anchor_cursor.x);
     const intended_y = g_panel_drag_anchor_rect.top + (cursor.y - g_panel_drag_anchor_cursor.y);
 

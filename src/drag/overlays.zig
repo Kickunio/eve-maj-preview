@@ -13,6 +13,7 @@ const Painter = painter_mod.Painter;
 const slog = log.scoped("drag_overlays");
 
 const WINDOW_CLASS_NAME = "EVE_GHOST_OVERLAY_CLASS";
+const OUTLINE_THICKNESS = 2;
 
 /// One saved-position outline for the drag-time ghost overlay; `names` is the comma-joined list of every character sharing that exact rect, owned by whoever holds the group slice.
 pub const GhostGroup = struct {
@@ -106,7 +107,10 @@ pub const GhostOverlay = struct {
         const hwnd = self.hwnd.?;
 
         if (gdi_overlay.OverlayBitmap.needsResize(self.bitmap, width, height)) {
-            const init_dc = win32.GetDC(null) orelse return;
+            const init_dc = win32.GetDC(null) orelse {
+                slog.err("Failed to get the screen DC for the ghost overlay", .{});
+                return;
+            };
             defer _ = win32.ReleaseDC(null, init_dc);
             gdi_overlay.OverlayBitmap.recreate(&self.bitmap, init_dc, width, height) catch |err| {
                 slog.err("Failed to allocate ghost overlay bitmap: {}", .{err});
@@ -123,7 +127,7 @@ pub const GhostOverlay = struct {
         };
         const old_font = win32.SelectObject(overlay.mem_dc, font);
         defer {
-            if (old_font) |of| _ = win32.SelectObject(overlay.mem_dc, of);
+            if (old_font) |previous_font| _ = win32.SelectObject(overlay.mem_dc, previous_font);
         }
 
         // Same hue as the focused/active thumbnail border, at reduced alpha so it still reads as a ghost rather than a real thumbnail.
@@ -133,10 +137,10 @@ pub const GhostOverlay = struct {
         for (groups) |group| {
             const local_x = group.rect.left - bounds.left;
             const local_y = group.rect.top - bounds.top;
-            const rect_w: usize = @intCast(group.rect.right - group.rect.left);
-            const rect_h: usize = @intCast(group.rect.bottom - group.rect.top);
+            const rect_width: usize = @intCast(group.rect.right - group.rect.left);
+            const rect_height: usize = @intCast(group.rect.bottom - group.rect.top);
 
-            gdi_overlay.drawRectOutline(overlay.pixels, overlay.width, overlay.height, local_x, local_y, rect_w, rect_h, 2, outline_color);
+            gdi_overlay.drawRectOutline(overlay.pixels, overlay.width, overlay.height, local_x, local_y, rect_width, rect_height, OUTLINE_THICKNESS, outline_color);
 
             const dims = draw.measureText(overlay.mem_dc, group.names);
             draw.renderText(overlay.mem_dc, group.names, local_x, local_y, text_color);
@@ -203,7 +207,9 @@ pub fn collectGhostGroups(painter: *const Painter, exclude_character: []const u8
             try names.appendSlice(allocator, other.name);
         }
 
-        try groups.append(allocator, .{ .rect = entry.rect, .names = try names.toOwnedSlice(allocator) });
+        const joined = try names.toOwnedSlice(allocator);
+        errdefer allocator.free(joined);
+        try groups.append(allocator, .{ .rect = entry.rect, .names = joined });
     }
 
     return groups.toOwnedSlice(allocator);
@@ -220,7 +226,7 @@ fn showHint(painter: *Painter, hwnd: win32.HWND, line1: []const u8, line2: []con
         slog.err("Failed to get font for drag hint: {}", .{err});
         return;
     };
-    painter.hint_box.show(painter.instance, font, painter.config.thumbnail.characterNameColor | 0xFF000000, line1, line2, nearest.bounds);
+    painter.hint_box.show(painter.instance, font, color.withAlpha(painter.config.thumbnail.characterNameColor, 0xFF), line1, line2, nearest.bounds);
 }
 
 fn registerWindowClass(instance: win32.HINSTANCE) !void {
