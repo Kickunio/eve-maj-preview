@@ -12,6 +12,10 @@ const GENERIC_CHARACTER_NAME = "EVE";
 /// An EVE client's window class; windows of any other class come from user-added window filters.
 const EVE_WINDOW_CLASS = "trinityWindow";
 
+/// Long enough for "EVE - " plus any character name.
+const MAX_TITLE_LENGTH = 64;
+const MAX_CLASS_NAME_LENGTH = 64;
+
 pub const EveWindow = struct {
     hwnd: win32.HWND,
     /// Owned by Scout; a copy of an EveWindow borrows it until Scout drops the window.
@@ -41,6 +45,7 @@ pub const ClosedWindow = struct {
 };
 
 pub const UpdateResult = struct {
+    /// Borrows Scout.windows; valid until the next update.
     windows: []const EveWindow,
     closed_windows: std.ArrayList(ClosedWindow),
     name_changes: std.ArrayList(NameChange),
@@ -53,6 +58,7 @@ pub const UpdateResult = struct {
 
 pub const Scout = struct {
     allocator: std.mem.Allocator,
+    /// Borrows the live config.
     config: *const config_mod.Config,
     windows: std.ArrayList(EveWindow),
     /// Filled by the WinEvent hooks between ticks and handed over by update().
@@ -62,7 +68,7 @@ pub const Scout = struct {
     /// Title-change and destroy hooks per tracked process, so other apps' events never wake us.
     process_hooks: std.AutoHashMap(win32.DWORD, ProcessHooks),
     /// Set when a window stops being tracked; update() then unhooks processes left with none, outside any hook callback.
-    process_hooks_stale: bool = false,
+    has_stale_process_hooks: bool = false,
 
     const ProcessHooks = struct {
         name_change: ?win32.HANDLE,
@@ -104,8 +110,8 @@ pub const Scout = struct {
 
     /// Unhooks every process no tracked window belongs to any more.
     fn unwatchUnusedProcesses(self: *Scout) void {
-        if (!self.process_hooks_stale) return;
-        self.process_hooks_stale = false;
+        if (!self.has_stale_process_hooks) return;
+        self.has_stale_process_hooks = false;
 
         var it = self.process_hooks.iterator();
         while (it.next()) |entry| {
@@ -148,10 +154,10 @@ pub const Scout = struct {
 
     fn removeWindowAt(self: *Scout, index: usize) void {
         self.freeWindow(self.windows.orderedRemove(index));
-        self.process_hooks_stale = true;
+        self.has_stale_process_hooks = true;
     }
 
-    /// Hands `window` to the next update's closed_windows, so the painter and chatlog let it go like any closed client; false if it couldn't be.
+    /// Hands `window` to the next update's closed_windows, so the painter and chatlog let it go like any closed client; false (already logged) if it couldn't be.
     fn reportClosed(self: *Scout, window: EveWindow) bool {
         const name = self.allocator.dupe(u8, window.character_name) catch |err| {
             slog.err("Failed to allocate closed character name '{s}': {}", .{ window.character_name, err });
@@ -205,7 +211,7 @@ pub const Scout = struct {
         // A filter's windows are named after the filter, not their title.
         if (!eve_window.is_eve_client) return;
 
-        var title_buf: [64]u8 = undefined;
+        var title_buf: [MAX_TITLE_LENGTH]u8 = undefined;
         const current_title = win32.getWindowTitleBuf(eve_window.hwnd, &title_buf) catch |err| switch (err) {
             error.MissingWindowTitle => return,
             else => {
@@ -266,7 +272,7 @@ pub const Scout = struct {
         }
     }
 
-    /// Catches title changes whose event came before the window was tracked; only on force_scan ticks, as each read is a cross-process call.
+    /// Catches title changes whose event came before the window was tracked; only on scan ticks, as each read is a cross-process call.
     fn refreshTrackedWindowTitles(self: *Scout) void {
         // Iterating by copy is safe: updateWindowTitle may rename entries but never adds or removes them.
         for (self.windows.items) |eve_window| {
@@ -275,15 +281,15 @@ pub const Scout = struct {
     }
 
     /// Once per tick; caller deinits the result.
-    pub fn update(self: *Scout, force_scan: bool) UpdateResult {
-        if (force_scan) self.dropClosedWindows();
+    pub fn update(self: *Scout, should_scan: bool) UpdateResult {
+        if (should_scan) self.dropClosedWindows();
         const closed = self.pending_closed;
         self.pending_closed = .empty;
         const name_changes = self.pending_name_changes;
         self.pending_name_changes = .empty;
 
         // The only place new windows are found; a creation hook would wake us for every window on the desktop.
-        if (force_scan) {
+        if (should_scan) {
             self.scanForEveWindows() catch |err| {
                 slog.warn("Failed to scan for windows, retrying on the next scan: {}", .{err});
             };
@@ -291,18 +297,11 @@ pub const Scout = struct {
         }
         self.unwatchUnusedProcesses();
 
-        return UpdateResult{
+        return .{
             .windows = self.getWindows(),
             .closed_windows = closed,
             .name_changes = name_changes,
         };
-    }
-
-    /// "EVE - CharacterName" gives "CharacterName"; the whole title when nothing follows a " - ".
-    fn extractCharacterName(title: []const u8) []const u8 {
-        const dash_index = std.mem.find(u8, title, " - ") orelse return title;
-        const name = title[dash_index + " - ".len ..];
-        return if (name.len == 0) title else name;
     }
 
     /// `started_at` is UTC Unix seconds; null if it's outside the client's lifetime.
@@ -359,13 +358,13 @@ pub const Scout = struct {
     }
 
     fn currentFilter(self: *const Scout, hwnd: win32.HWND, process_id: win32.DWORD) ?*const config_mod.WindowFilterConfig {
-        var class_name: [64:0]u8 = undefined;
-        const class_slice = win32.getClassNameBuf(hwnd, &class_name) orelse return null;
+        var class_name_buf: [MAX_CLASS_NAME_LENGTH:0]u8 = undefined;
+        const class_name = win32.getClassNameBuf(hwnd, &class_name_buf) orelse return null;
 
-        var exe_path: [260:0]u8 = undefined;
-        const path_slice = win32.queryProcessExePath(process_id, &exe_path) orelse return null;
+        var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+        const exe_path = win32.queryProcessExePath(process_id, &exe_path_buf) orelse return null;
 
-        return self.findMatchingFilter(class_slice, path_slice);
+        return self.findMatchingFilter(class_name, exe_path);
     }
 
     /// Drops windows no filter matches any more, which scanning skips as already tracked, and renames non-EVE windows after a renamed filter; call after a reload, before recreating thumbnails.
@@ -391,12 +390,19 @@ pub fn isGenericCharacterName(name: []const u8) bool {
     return std.mem.eql(u8, name, GENERIC_CHARACTER_NAME);
 }
 
+/// "EVE - CharacterName" gives "CharacterName"; the whole title when nothing follows a " - ".
+fn extractCharacterName(title: []const u8) []const u8 {
+    const dash_index = std.mem.find(u8, title, " - ") orelse return title;
+    const name = title[dash_index + " - ".len ..];
+    return if (name.len == 0) title else name;
+}
+
 fn loginTime(is_eve_client: bool, character_name: []const u8) win32.Ticks {
     return if (is_eve_client and !isGenericCharacterName(character_name)) win32.Ticks.now() else .{};
 }
 
 fn freeClosedWindows(allocator: std.mem.Allocator, list: *std.ArrayList(ClosedWindow)) void {
-    for (list.items) |cw| allocator.free(cw.character_name);
+    for (list.items) |closed_window| allocator.free(closed_window.character_name);
     list.deinit(allocator);
 }
 
@@ -411,26 +417,24 @@ fn freeNameChanges(allocator: std.mem.Allocator, list: *std.ArrayList(NameChange
 fn enumWindowsCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win32.BOOL {
     const scout: *Scout = win32.lparamToPtr(Scout, lParam);
 
-    if (!win32.isWindowVisible(hwnd)) {
-        return win32.TRUE;
-    }
+    if (!win32.isWindowVisible(hwnd)) return win32.TRUE;
 
     // Already tracked: skip the class-name lookup and filter-match loop below entirely.
     if (scout.indexOf(hwnd) != null) return win32.TRUE;
 
     // Class first, since it's much cheaper than opening the process for its executable path.
-    var class_name: [64:0]u8 = undefined;
-    const class_slice = win32.getClassNameBuf(hwnd, &class_name) orelse return win32.TRUE;
-    if (scout.findMatchingFilter(class_slice, null) == null) return win32.TRUE;
+    var class_name_buf: [MAX_CLASS_NAME_LENGTH:0]u8 = undefined;
+    const class_name = win32.getClassNameBuf(hwnd, &class_name_buf) orelse return win32.TRUE;
+    if (scout.findMatchingFilter(class_name, null) == null) return win32.TRUE;
 
     var process_id: win32.DWORD = 0;
     _ = win32.GetWindowThreadProcessId(hwnd, &process_id);
 
-    var exe_path: [260:0]u8 = undefined;
-    const path_slice = win32.queryProcessExePath(process_id, &exe_path) orelse return win32.TRUE;
-    const matching_filter = scout.findMatchingFilter(class_slice, path_slice) orelse return win32.TRUE;
+    var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+    const exe_path = win32.queryProcessExePath(process_id, &exe_path_buf) orelse return win32.TRUE;
+    const matching_filter = scout.findMatchingFilter(class_name, exe_path) orelse return win32.TRUE;
 
-    var title_buf: [64]u8 = undefined;
+    var title_buf: [MAX_TITLE_LENGTH]u8 = undefined;
     const title = win32.getWindowTitleBuf(hwnd, &title_buf) catch |err| switch (err) {
         error.MissingWindowTitle => return win32.TRUE,
         else => {
@@ -440,8 +444,8 @@ fn enumWindowsCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win3
     };
 
     // Non-EVE titles aren't a stable per-window identity, so fall back to the filter's own name.
-    const is_eve_client = std.mem.eql(u8, class_slice, EVE_WINDOW_CLASS);
-    const character_name_slice = if (is_eve_client) Scout.extractCharacterName(title) else matching_filter.name;
+    const is_eve_client = std.mem.eql(u8, class_name, EVE_WINDOW_CLASS);
+    const character_name_slice = if (is_eve_client) extractCharacterName(title) else matching_filter.name;
     const character_name = scout.allocator.dupe(u8, character_name_slice) catch |err| {
         slog.err("Failed to allocate character name '{s}' for hwnd {*}: {}", .{ character_name_slice, hwnd, err });
         return win32.TRUE;
@@ -470,21 +474,30 @@ fn nameChangeCallback(_: win32.HANDLE, _: win32.DWORD, hwnd: win32.HWND, id_obje
     // The main window only, not child controls.
     if (id_object != 0) return;
 
-    const scout_ptr = g_scout_ptr orelse return;
-    scout_ptr.updateWindowTitle(hwnd);
+    const scout = g_scout_ptr orelse return;
+    scout.updateWindowTitle(hwnd);
 }
 
 fn windowDestroyCallback(_: win32.HANDLE, _: win32.DWORD, hwnd: win32.HWND, id_object: win32.LONG, _: win32.LONG, _: win32.DWORD, _: win32.DWORD) callconv(.c) void {
     // The main window only, not child controls.
     if (id_object != 0) return;
 
-    const scout_ptr = g_scout_ptr orelse return;
+    const scout = g_scout_ptr orelse return;
 
     // By hwnd alone, since a partially-destroyed window can fail GetClassNameA.
-    const index = scout_ptr.indexOf(hwnd) orelse return;
-    const eve_window = scout_ptr.windows.items[index];
-    if (!scout_ptr.reportClosed(eve_window)) return;
+    const index = scout.indexOf(hwnd) orelse return;
+    const eve_window = scout.windows.items[index];
+    if (!scout.reportClosed(eve_window)) return;
 
     slog.debug("Window destroyed: '{s}' (hwnd {*})", .{ eve_window.character_name, hwnd });
-    scout_ptr.removeWindowAt(index);
+    scout.removeWindowAt(index);
+}
+
+const testing = std.testing;
+
+test "extractCharacterName takes what follows ' - ', else the whole title" {
+    try testing.expectEqualStrings("Some Pilot", extractCharacterName("EVE - Some Pilot"));
+    try testing.expectEqualStrings("A - B", extractCharacterName("EVE - A - B"));
+    try testing.expectEqualStrings("EVE", extractCharacterName("EVE"));
+    try testing.expectEqualStrings("EVE - ", extractCharacterName("EVE - "));
 }

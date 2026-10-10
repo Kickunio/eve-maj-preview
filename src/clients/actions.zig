@@ -69,6 +69,8 @@ pub fn moveClientToPosition(config: *const config_mod.Config, hwnd: win32.HWND, 
         if (is_minimized and placement.flags & win32.WPF_RESTORETOMAXIMIZED != 0) {
             animation.showClient(config, hwnd, win32.SW_RESTORE);
         }
+    } else {
+        slog.warn("Failed to get the placement of window {*}, moving it as is", .{hwnd});
     }
 
     const clamped = clampOntoScreen(position);
@@ -123,7 +125,10 @@ pub fn closeAllClients(eve_windows: []const scout.EveWindow, config: *const conf
             continue;
         }
 
-        _ = win32.PostMessageA(eve_window.hwnd, win32.WM_CLOSE, 0, 0);
+        if (!win32.toBool(win32.PostMessageA(eve_window.hwnd, win32.WM_CLOSE, 0, 0))) {
+            slog.warn("Failed to send close to '{s}'", .{eve_window.character_name});
+            continue;
+        }
         closed_count += 1;
         slog.debug("Closing: {s}", .{eve_window.character_name});
     }

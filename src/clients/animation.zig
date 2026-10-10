@@ -5,13 +5,13 @@ const log = @import("../log.zig");
 
 const slog = log.scoped("animation");
 
-/// Runs ShowWindowAsync(hwnd, cmd); with No Animation, turns the Windows setting off around the call and puts the user's value back.
-pub fn showClient(config: *const config_mod.Config, hwnd: win32.HWND, cmd: c_int) void {
+/// Runs ShowWindowAsync(hwnd, show_command); with No Animation, turns the Windows setting off around the call and puts the user's value back.
+pub fn showClient(config: *const config_mod.Config, hwnd: win32.HWND, show_command: c_int) void {
     switch (config.interaction.animationStyle) {
-        .OriginalAnimation => _ = win32.ShowWindowAsync(hwnd, cmd),
+        .OriginalAnimation => _ = win32.ShowWindowAsync(hwnd, show_command),
         .NoAnimation => {
             const restore_to = turnOffAnimation();
-            _ = win32.ShowWindowAsync(hwnd, cmd);
+            _ = win32.ShowWindowAsync(hwnd, show_command);
             if (restore_to) |user_setting| restoreAnimation(user_setting);
         },
     }
@@ -36,12 +36,12 @@ fn restoreAnimation(user_setting: i32) void {
 }
 
 fn getMinimizeAnimation() ?i32 {
-    var anim_info = win32.ANIMATIONINFO{ .cbSize = @sizeOf(win32.ANIMATIONINFO), .iMinAnimate = 0 };
-    if (!win32.toBool(win32.SystemParametersInfoA(win32.SPI_GETANIMATION, @sizeOf(win32.ANIMATIONINFO), &anim_info, 0))) return null;
-    return anim_info.iMinAnimate;
+    var animation_info = win32.ANIMATIONINFO{ .cbSize = @sizeOf(win32.ANIMATIONINFO), .iMinAnimate = 0 };
+    if (!win32.toBool(win32.SystemParametersInfoA(win32.SPI_GETANIMATION, @sizeOf(win32.ANIMATIONINFO), &animation_info, 0))) return null;
+    return animation_info.iMinAnimate;
 }
 
 fn setMinimizeAnimation(value: i32) bool {
-    var anim_info = win32.ANIMATIONINFO{ .cbSize = @sizeOf(win32.ANIMATIONINFO), .iMinAnimate = value };
-    return win32.toBool(win32.SystemParametersInfoA(win32.SPI_SETANIMATION, @sizeOf(win32.ANIMATIONINFO), &anim_info, 0));
+    var animation_info = win32.ANIMATIONINFO{ .cbSize = @sizeOf(win32.ANIMATIONINFO), .iMinAnimate = value };
+    return win32.toBool(win32.SystemParametersInfoA(win32.SPI_SETANIMATION, @sizeOf(win32.ANIMATIONINFO), &animation_info, 0));
 }

@@ -25,10 +25,10 @@ pub const AutoMinimizer = struct {
     /// From the hotkey or tray, never saved; dropped once the setting it overrode changes.
     enabled_override: ?Override = null,
 
-    const Override = struct { is_enabled: bool, overridden_setting: bool };
+    const Override = struct { is_enabled: bool, was_setting_enabled: bool };
 
     pub fn init(allocator: std.mem.Allocator) AutoMinimizer {
-        return .{ .last_focused_by_monitor = std.AutoHashMap(win32.HMONITOR, win32.HWND).init(allocator) };
+        return .{ .last_focused_by_monitor = .init(allocator) };
     }
 
     pub fn deinit(self: *AutoMinimizer) void {
@@ -46,12 +46,12 @@ pub const AutoMinimizer = struct {
     pub fn isEnabled(self: *const AutoMinimizer, painter: *const Painter) bool {
         const setting = painter.config.autoMinimize.enabled;
         const override = self.enabled_override orelse return setting;
-        return if (override.overridden_setting == setting) override.is_enabled else setting;
+        return if (override.was_setting_enabled == setting) override.is_enabled else setting;
     }
 
     fn dropStaleOverride(self: *AutoMinimizer, painter: *const Painter) void {
         const override = self.enabled_override orelse return;
-        if (override.overridden_setting != painter.config.autoMinimize.enabled) self.enabled_override = null;
+        if (override.was_setting_enabled != painter.config.autoMinimize.enabled) self.enabled_override = null;
     }
 
     /// Ignores windows that aren't EVE clients, so focusing a window filter's app counts as EVE losing focus.
@@ -139,7 +139,7 @@ pub fn minimizeNewClient(config: *const Config, source_hwnd: win32.HWND) void {
 /// Temporary, not saved to the profile (hotkey and tray action).
 pub fn toggle(painter: *Painter) void {
     const is_enabled = !painter.auto_minimize.isEnabled(painter);
-    painter.auto_minimize.enabled_override = .{ .is_enabled = is_enabled, .overridden_setting = painter.config.autoMinimize.enabled };
+    painter.auto_minimize.enabled_override = .{ .is_enabled = is_enabled, .was_setting_enabled = painter.config.autoMinimize.enabled };
     slog.info("Auto-minimize toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
     painter.notifyAll(.{ .notification_type = .AutoMinimizeToggle, .state = if (is_enabled) .on else .off });
 }

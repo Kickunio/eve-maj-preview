@@ -11,8 +11,8 @@ const PendingAutoMove = struct {
     hwnd: win32.HWND,
     target: config_mod.Position,
     last_move: win32.Ticks,
-    checks_left: u8,
-    last_seen: ?win32.POINT = null,
+    remaining_check_count: u8,
+    last_seen_position: ?win32.POINT = null,
 };
 
 pub const AutoMoveVerifier = struct {
@@ -42,7 +42,7 @@ pub const AutoMoveVerifier = struct {
             .hwnd = hwnd,
             .target = actions.clampOntoScreen(position),
             .last_move = win32.Ticks.now(),
-            .checks_left = config.autoMovePosition.verifyCount,
+            .remaining_check_count = config.autoMovePosition.verifyCount,
         };
         for (self.pending.items) |*existing| {
             if (existing.hwnd == hwnd) {
@@ -88,16 +88,16 @@ pub const AutoMoveVerifier = struct {
                 continue;
             }
 
-            entry.checks_left -= 1;
-            const settled = entry.last_seen != null and entry.last_seen.?.x == rect.left and entry.last_seen.?.y == rect.top;
-            if (settled or entry.checks_left == 0) {
+            entry.remaining_check_count -= 1;
+            const has_settled = if (entry.last_seen_position) |seen| seen.x == rect.left and seen.y == rect.top else false;
+            if (has_settled or entry.remaining_check_count == 0) {
                 slog.info("Client drifted to ({}, {}) after auto-move, re-applying ({}, {})", .{ rect.left, rect.top, entry.target.x, entry.target.y });
                 actions.moveClientToPosition(config, entry.hwnd, entry.target);
                 _ = self.pending.swapRemove(i);
                 continue;
             }
 
-            entry.last_seen = .{ .x = rect.left, .y = rect.top };
+            entry.last_seen_position = .{ .x = rect.left, .y = rect.top };
             i += 1;
         }
     }
