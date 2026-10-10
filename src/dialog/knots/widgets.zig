@@ -2,7 +2,6 @@
 const std = @import("std");
 const ui = @import("ui");
 const style = @import("style.zig");
-
 const glyphs = @import("glyphs.zig");
 const search = @import("search.zig");
 
@@ -136,7 +135,7 @@ pub const FieldGroup = struct {
 
     pub fn close(self: FieldGroup, context: *ui.Frame) !void {
         g_is_aligned = self.was_aligned;
-        g_in_field_group = self.was_in_field_group;
+        g_is_in_field_group = self.was_in_field_group;
         try self.column.close(context);
         try self.row.close(context);
     }
@@ -225,9 +224,9 @@ pub const ReorderList = struct {
         return lifted.from;
     }
 
-    /// `row_style` raised and under the cursor, over the rows container keyed `container`.
+    /// `row_style` raised and under the cursor, over the rows container keyed `container`; unchanged when no row is lifted.
     pub fn liftedStyle(self: ReorderList, context: *ui.Frame, container: ui.Key, row_style: *const ui.Style) !*const ui.Style {
-        const lifted = self.lifted.?;
+        const lifted = self.lifted orelse return row_style;
         const box = measuredBox(context.ui(), container);
         const lifted_style = try context.arena().create(ui.Style);
         lifted_style.* = row_style.with(style.lifted_row);
@@ -249,7 +248,7 @@ var g_is_aligned: bool = false;
 /// Set by useDetailRows: the label column of unaligned rows.
 var g_label_style: *const ui.Style = &style.label;
 /// Set by openFieldGroup: its rows go undivided, with softer labels.
-var g_in_field_group: bool = false;
+var g_is_in_field_group: bool = false;
 /// Aligned rows drawn so far in the open section; every one after the first gets a divider above it.
 var g_section_row_count: usize = 0;
 var g_hinted: SectionList = .{};
@@ -261,7 +260,7 @@ var g_open_section: ?u64 = null;
 var g_confirm_key: ?u64 = null;
 /// The row being dragged to a new place in its list.
 /// `grab_y` is how far below the row's top it was picked up, and `row_height` its height then, for drawing it lifted.
-var g_reorder: ?struct { list: u64, from: usize, start_y: f64, grab_y: f32, row_height: f32, insert: usize, moved: bool = false } = null;
+var g_reorder: ?struct { list: u64, from: usize, start_y: f64, grab_y: f32, row_height: f32, insert: usize, has_moved: bool = false } = null;
 var g_confirm_until_ms: i64 = 0;
 
 pub fn beginFrame() void {
@@ -398,23 +397,6 @@ pub fn rowSelect(context: *ui.Frame, labels: []const []const u8) !*const ui.Styl
     return selectStyle(context, labels, SELECT_MIN_WIDTH);
 }
 
-fn selectStyle(context: *ui.Frame, labels: []const []const u8, min_width: f32) !*const ui.Style {
-    const ui_state = context.ui();
-    const font_size = (style.select.font_size orelse .sm).resolve(&ui_state.theme);
-    const face = try ui_state.font.getFace(style.select.font);
-    const scale = ui_state.content_scale;
-    var widest: f32 = 0;
-    for (labels) |label| widest = @max(widest, (try face.measure(label, font_size * scale)).width / scale);
-    const padding = comptime style.select.padding.?;
-    // SelectInput's own arrow sizing.
-    const arrow = @max(10, font_size * 0.55);
-    const border = 2;
-    const width = padding.left() + widest + SELECT_ARROW_GAP + arrow + padding.right() + border;
-    const fitted = try context.arena().create(ui.Style);
-    fitted.* = style.select.with(.{ .width = .fixed(std.math.clamp(@ceil(width), min_width, SELECT_MAX_WIDTH)), .overflow = .hidden });
-    return fitted;
-}
-
 /// A label beside a column of aligned rows without dividers, e.g. a set of switches; the caller closes it.
 pub fn openFieldGroup(context: *ui.Frame, key: ui.Key, label: []const u8) !FieldGroup {
     const row = Rect{ .key = key, .style = &style.field_group };
@@ -423,9 +405,9 @@ pub fn openFieldGroup(context: *ui.Frame, key: ui.Key, label: []const u8) !Field
     try boxedText(context, key.indexed(1), label, &style.field_group_label, &style.field_group_label_text);
     const column = Rect{ .key = key.indexed(2), .style = &style.field_group_column };
     _ = try column.open(context);
-    const group: FieldGroup = .{ .row = row, .column = column, .was_aligned = g_is_aligned, .was_in_field_group = g_in_field_group };
+    const group: FieldGroup = .{ .row = row, .column = column, .was_aligned = g_is_aligned, .was_in_field_group = g_is_in_field_group };
     g_is_aligned = true;
-    g_in_field_group = true;
+    g_is_in_field_group = true;
     return group;
 }
 
@@ -497,7 +479,7 @@ pub fn isAligned() bool {
 
 /// The width laid over a hotkey box in these rows, like slider's track; null keeps it growing.
 pub fn hotkeyWidth() ?*const ui.Style {
-    if (g_in_field_group) return &style.hotkey_width_grouped;
+    if (g_is_in_field_group) return &style.hotkey_width_grouped;
     if (g_is_aligned) return &style.hotkey_width_aligned;
     return null;
 }
@@ -548,7 +530,6 @@ pub fn segmented(context: *ui.Frame, key: ui.Key, options: []const []const u8, s
     return clicked;
 }
 
-/// A colour row that can be left unset to inherit `fallback`, shown struck through; the popup's Reset unsets it.
 /// The swatch, its popup and the popup's Reset button, as every colour setting draws them.
 pub fn colorParts(is_aligned: bool) ColorPicker.Parts {
     return .{
@@ -559,6 +540,7 @@ pub fn colorParts(is_aligned: bool) ColorPicker.Parts {
     };
 }
 
+/// A colour row that can be left unset to inherit `fallback`, shown struck through; the popup's Reset unsets it.
 pub fn optionalColor(context: *ui.Frame, key: ui.Key, label: []const u8, current: ?u32, fallback: u32) !?ColorChange {
     const row = try openBinding(context, key, label);
     var change: ?ColorChange = null;
@@ -596,13 +578,6 @@ pub fn reorderRowByHandle(context: *ui.Frame, base: ui.Key, index: usize, handle
     }
 }
 
-fn reorderLifted(context: *ui.Frame, base: ui.Key) ?Lifted {
-    const drag = g_reorder orelse return null;
-    if (drag.list != base.hash() or !drag.moved) return null;
-    const mouse_y: f32 = @floatCast(context.ui().input.mouse_pos[1]);
-    return .{ .from = drag.from, .slot = if (drag.insert > drag.from) drag.insert - 1 else drag.insert, .top = mouse_y - drag.grab_y, .row_height = drag.row_height };
-}
-
 /// Call once the rows are drawn: follows the drag, and returns the move once it's dropped somewhere new.
 pub fn reorderFinish(context: *ui.Frame, base: ui.Key, count: usize) ?Move {
     const drag = &(g_reorder orelse return null);
@@ -610,8 +585,8 @@ pub fn reorderFinish(context: *ui.Frame, base: ui.Key, count: usize) ?Move {
     const ui_state = context.ui();
     const mouse_y = ui_state.input.mouse_pos[1];
     if (ui_state.input.mouseButton(.left).down) {
-        if (@abs(mouse_y - drag.start_y) > REORDER_THRESHOLD) drag.moved = true;
-        if (drag.moved) {
+        if (@abs(mouse_y - drag.start_y) > REORDER_THRESHOLD) drag.has_moved = true;
+        if (drag.has_moved) {
             ui_state.requestCursor(.move);
             // Counted without the dragged row, which may be drawn under the cursor; rows moving to open a gap move away from it, so this settles.
             var slot: usize = 0;
@@ -628,7 +603,7 @@ pub fn reorderFinish(context: *ui.Frame, base: ui.Key, count: usize) ?Move {
     const finished = drag.*;
     g_reorder = null;
     context.requestRedraw();
-    if (!finished.moved or finished.insert == finished.from or finished.insert == finished.from + 1) return null;
+    if (!finished.has_moved or finished.insert == finished.from or finished.insert == finished.from + 1) return null;
     return .{ .from = finished.from, .before = finished.insert };
 }
 
@@ -645,15 +620,6 @@ pub fn openFillGroup(context: *ui.Frame, key: ui.Key, is_enabled: bool) !Group {
 /// Like openGroup, for controls side by side inside one row.
 pub fn openInlineGroup(context: *ui.Frame, key: ui.Key, is_enabled: bool) !Group {
     return openAnyGroup(context, key, &style.group_inline, is_enabled);
-}
-
-fn openAnyGroup(context: *ui.Frame, key: ui.Key, group_style: *const ui.Style, is_enabled: bool) !Group {
-    const ui_state = context.ui();
-    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, key.hash());
-    const rect = Rect{ .key = key, .style = group_style };
-    _ = try rect.open(context);
-    if (!is_enabled) ui_state.inert_depth += 1;
-    return .{ .key = key, .rect = rect, .is_enabled = is_enabled };
 }
 
 /// The first click arms it and shows `confirm_label`; a second within two seconds returns true.
@@ -696,19 +662,19 @@ pub fn dragHandle(context: *ui.Frame, key: ui.Key, label: []const u8) !void {
 }
 
 /// A button whose label starts with a drawn glyph, for symbols Geist lacks.
-pub fn glyphButton(context: *ui.Frame, key: ui.Key, glyph: glyphs.Glyph, label: []const u8, button_style: *const ui.Style, disabled: bool) !bool {
-    const button = Button{ .key = key, .disabled = disabled, .style = if (disabled) &style.disabled_button else button_style };
+pub fn glyphButton(context: *ui.Frame, key: ui.Key, glyph: glyphs.Glyph, label: []const u8, button_style: *const ui.Style, is_disabled: bool) !bool {
+    const button = Button{ .key = key, .disabled = is_disabled, .style = if (is_disabled) &style.disabled_button else button_style };
     const response = try button.openResponse(context);
-    const color = if (disabled) style.MUTED else style.TEXT;
+    const color = if (is_disabled) style.MUTED else style.TEXT;
     const glyph_key = key.indexed(1);
     try context.e(Canvas{
         .key = glyph_key,
         .commands = try glyphs.commands(context.arena(), glyph, glyphs.TAB_SIZE, try glyphs.snapOffset(context, glyph_key), color.value),
         .style = &style.tab_glyph,
     });
-    if (label.len > 0) try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = label, .style = if (disabled) &style.muted_text else &style.button_text });
+    if (label.len > 0) try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = label, .style = if (is_disabled) &style.muted_text else &style.button_text });
     try button.close(context);
-    return response.clicked and !disabled;
+    return response.clicked and !is_disabled;
 }
 
 /// A field hint ending in a link, e.g. "Learn more"; returns whether the link was clicked.
@@ -763,7 +729,7 @@ pub fn subheading(context: *ui.Frame, key: ui.Key, content: []const u8) !void {
 
 /// Returns whether the user moved it this frame.
 pub fn slider(context: *ui.Frame, key: ui.Key, value: *f32, min: f32, max: f32, steps: f32) !bool {
-    const track_style = if (g_in_field_group) &style.slider_box_grouped else if (g_is_aligned) &style.slider_box_aligned else &style.slider_box;
+    const track_style = if (g_is_in_field_group) &style.slider_box_grouped else if (g_is_aligned) &style.slider_box_aligned else &style.slider_box;
     const track = Rect{ .key = key, .style = track_style };
     _ = try track.open(context);
     const response = try context.interact(SliderInput{
@@ -852,14 +818,47 @@ pub fn argbFromColor(color: Color) u32 {
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
+fn selectStyle(context: *ui.Frame, labels: []const []const u8, min_width: f32) !*const ui.Style {
+    const ui_state = context.ui();
+    const font_size = (style.select.font_size orelse .sm).resolve(&ui_state.theme);
+    const face = try ui_state.font.getFace(style.select.font);
+    const scale = ui_state.content_scale;
+    var widest: f32 = 0;
+    for (labels) |label| widest = @max(widest, (try face.measure(label, font_size * scale)).width / scale);
+    const padding = comptime style.select.padding.?;
+    // SelectInput's own arrow sizing.
+    const arrow = @max(10, font_size * 0.55);
+    const border = 2;
+    const width = padding.left() + widest + SELECT_ARROW_GAP + arrow + padding.right() + border;
+    const fitted = try context.arena().create(ui.Style);
+    fitted.* = style.select.with(.{ .width = .fixed(std.math.clamp(@ceil(width), min_width, SELECT_MAX_WIDTH)), .overflow = .hidden });
+    return fitted;
+}
+
+fn reorderLifted(context: *ui.Frame, base: ui.Key) ?Lifted {
+    const drag = g_reorder orelse return null;
+    if (drag.list != base.hash() or !drag.has_moved) return null;
+    const mouse_y: f32 = @floatCast(context.ui().input.mouse_pos[1]);
+    return .{ .from = drag.from, .slot = if (drag.insert > drag.from) drag.insert - 1 else drag.insert, .top = mouse_y - drag.grab_y, .row_height = drag.row_height };
+}
+
+fn openAnyGroup(context: *ui.Frame, key: ui.Key, group_style: *const ui.Style, is_enabled: bool) !Group {
+    const ui_state = context.ui();
+    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, key.hash());
+    const rect = Rect{ .key = key, .style = group_style };
+    _ = try rect.open(context);
+    if (!is_enabled) ui_state.inert_depth += 1;
+    return .{ .key = key, .rect = rect, .is_enabled = is_enabled };
+}
+
 fn alignedLabelStyle() *const ui.Style {
-    return if (g_in_field_group) &style.label_aligned_grouped else &style.label_aligned;
+    return if (g_is_in_field_group) &style.label_aligned_grouped else &style.label_aligned;
 }
 
 /// Counts the row: the section's first has no divider above it.
 fn nextRowHasDivider() bool {
     defer g_section_row_count += 1;
-    return !g_in_field_group and g_open_section != null and g_section_row_count > 0;
+    return !g_is_in_field_group and g_open_section != null and g_section_row_count > 0;
 }
 
 /// Lit while the cursor is anywhere in last frame's box, controls included, since knots only hovers the innermost element.

@@ -53,9 +53,9 @@ pub fn show(context: *ui.Frame) !void {
     const master_detail = Rect{ .key = .src(@src()), .style = &style.master_detail_fill };
     _ = try master_detail.open(context);
     const profile = session.profile();
-    const count = profile.ptr.characters.items.len;
+    const character_count = profile.ptr.characters.items.len;
     // The list can shrink while the window is open, e.g. on a profile switch.
-    if (g_selected_index >= count) g_selected_index = count -| 1;
+    if (g_selected_index >= character_count) g_selected_index = character_count -| 1;
     try roster(context, profile);
     try detail(context, profile);
     try master_detail.close(context);
@@ -308,7 +308,7 @@ fn populateFromClients(context: *ui.Frame, profile: ProfileRef) void {
         status.show(.failure, "No open EVE clients found", .{});
         return;
     }
-    var added: usize = 0;
+    var added_count: usize = 0;
     for (names) |name| {
         const exists = for (profile.ptr.characters.items) |character| {
             if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, character.name, " "), std.mem.trim(u8, name, " "))) break true;
@@ -316,10 +316,10 @@ fn populateFromClients(context: *ui.Frame, profile: ProfileRef) void {
         if (exists) continue;
         profile.append("characters", .{});
         profile.item("characters", profile.ptr.characters.items.len - 1).set("name", name);
-        added += 1;
+        added_count += 1;
     }
-    if (added > 0) {
-        status.show(.success, "Added {d} character(s) from open EVE clients", .{added});
+    if (added_count > 0) {
+        status.show(.success, "Added {d} character(s) from open EVE clients", .{added_count});
     } else {
         status.show(.info, "All open EVE clients are already in the list", .{});
     }

@@ -48,8 +48,8 @@ pub fn show(context: *ui.Frame) !void {
 
     const prices_section = try widgets.openSection(context, "Ore / Ice / Gas Prices", "\"Fetch Prices\" pulls current Jita buy prices from EVE's market.", &style.section);
     try oreTable(context);
-    const fetching = prices.isFetching();
-    if (try widgets.glyphButton(context, .src(@src()), .refresh, "Fetch Prices", &style.full_width_button, fetching)) {
+    const is_fetching = prices.isFetching();
+    if (try widgets.glyphButton(context, .src(@src()), .refresh, "Fetch Prices", &style.full_width_button, is_fetching)) {
         if (host.fetchPrices()) status.show(.info, "Fetching {d} price(s)", .{prices.NAMES.len});
     }
     try prices_section.close(context);

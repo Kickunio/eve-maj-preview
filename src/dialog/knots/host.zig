@@ -19,7 +19,7 @@ const region = @import("region.zig");
 const hotkey = @import("hotkey.zig");
 const general = @import("tabs/general.zig");
 const backups = @import("tabs/backups.zig");
-const hotkeys_tab = @import("tabs/hotkeys.zig");
+const hotkeys = @import("tabs/hotkeys.zig");
 const hotkey_groups = @import("tabs/hotkey_groups.zig");
 const event_alerts = @import("tabs/event_alerts.zig");
 const lang = @import("lang.zig");
@@ -74,7 +74,7 @@ var g_knots_proc: isize = 0;
 var g_quit_after_close: bool = false;
 /// Closes without asking about unsaved changes.
 var g_force_close: bool = false;
-var g_present_mode_chosen: bool = false;
+var g_is_present_mode_chosen: bool = false;
 /// Where placeWindowHook puts the window knots creates, while App.init runs.
 var g_spawn_position: ?win32.POINT = null;
 var g_spawn_hook: ?win32.HHOOK = null;
@@ -151,6 +151,70 @@ pub fn onCommand(wParam: win32.WPARAM, lParam: win32.LPARAM) void {
     requestFrame();
 }
 
+/// Applied at once, though the setting itself waits for Save like any other.
+pub fn setAlwaysOnTop(is_enabled: bool) void {
+    const window = g_hwnd orelse return;
+    const insert_after = if (is_enabled) win32.HWND_TOPMOST else win32.HWND_NOTOPMOST;
+    _ = win32.SetWindowPos(window, insert_after, 0, 0, 0, 0, win32.SWP_NOMOVE | win32.SWP_NOSIZE | win32.SWP_NOACTIVATE);
+}
+
+/// The picker owns its own modal loop on another thread; the result arrives as a `picked` command.
+pub fn browseFolder(target: pickers.Target, title: []const u8) void {
+    const timer = main.g_timer_hwnd orelse {
+        slog.err("Failed to open the folder picker: the timer window is missing", .{});
+        return;
+    };
+    pickers.browse(target, 0, title, g_hwnd, timer, @backingInt(Command.picked));
+}
+
+/// A settings file for the Import dialog, read once the picker closes.
+pub fn browseImportFile() void {
+    const timer = main.g_timer_hwnd orelse {
+        slog.err("Failed to open the import file picker: the timer window is missing", .{});
+        return;
+    };
+    pickers.browse(.import_file, 0, "Select Settings File", g_hwnd, timer, @backingInt(Command.picked));
+}
+
+/// The header's name prompt names the restored profile; `backup` is copied.
+pub fn restoreBackup(backup: []const u8, display_name: []const u8) void {
+    header.openRestorePrompt(backup, display_name);
+}
+
+/// `name` as typed; the profile is created between frames, then the import applied to it.
+pub fn importIntoNewProfile(name: []const u8, accent: u32) void {
+    const file_name = config.profileFileName(g_allocator, name) catch |err| {
+        slog.warn("Failed to name the imported profile '{s}': {}", .{ name, err });
+        status.show(.failure, "'{s}' isn't a valid profile name: use letters, digits, spaces, '-' and '_', up to 16 characters", .{name});
+        return;
+    };
+    defer g_allocator.free(file_name);
+    profiles.request(.import_new, file_name, accent);
+}
+
+/// A notification type's custom sound, set once the picker closes.
+pub fn browseSoundFile(type_index: usize) void {
+    const timer = main.g_timer_hwnd orelse {
+        slog.err("Failed to open the sound file picker: the timer window is missing", .{});
+        return;
+    };
+    pickers.browse(.sound_file, type_index, "Select Sound File", g_hwnd, timer, @backingInt(Command.picked));
+}
+
+/// Starts fetching Jita ore prices; returns false if a fetch is already running or couldn't start.
+pub fn fetchPrices() bool {
+    const timer = main.g_timer_hwnd orelse {
+        slog.err("Failed to fetch ore prices: the timer window is missing", .{});
+        return false;
+    };
+    return prices.fetch(timer, @backingInt(Command.prices_fetched));
+}
+
+/// Draws a frame soon, for a change made outside one, e.g. a region selection finishing.
+pub fn redraw() void {
+    requestFrame();
+}
+
 /// Pumps every message on the main thread until the window closes, so the tick, hooks and tray keep running.
 fn run() void {
     switch (g_state) {
@@ -193,8 +257,8 @@ fn run() void {
     defer general.reset();
     backups.init(g_allocator);
     defer backups.reset();
-    hotkeys_tab.init(g_allocator);
-    defer hotkeys_tab.reset();
+    hotkeys.init(g_allocator);
+    defer hotkeys.reset();
     hotkey_groups.init(g_allocator);
     defer hotkey_groups.reset();
     behavior.init(g_allocator);
@@ -236,7 +300,7 @@ fn run() void {
     const window: win32.HWND = @ptrCast(app.main_viewport.window.getWindowHandle().windows.hwnd);
     g_hwnd = window;
     g_state = .open;
-    g_present_mode_chosen = false;
+    g_is_present_mode_chosen = false;
     defer onClosed();
     g_knots_proc = win32.SetWindowLongPtrW(window, win32.GWLP_WNDPROC, @bitCast(@intFromPtr(&windowProc)));
     setIcon(window);
@@ -284,13 +348,13 @@ fn placeWindowHook(code: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) call
 }
 
 fn frame(view: *knots.View, context: *ui.Frame) !void {
-    if (!g_present_mode_chosen) choosePresentMode(view);
+    if (!g_is_present_mode_chosen) choosePresentMode(view);
     try form.frame(view, context);
 }
 
 /// A vsync-paced present blocks the main thread for up to a frame, which would stall the low-level input hooks behind it.
 fn choosePresentMode(view: *knots.View) void {
-    g_present_mode_chosen = true;
+    g_is_present_mode_chosen = true;
     const modes = view.renderer.supported_present_modes;
     var renderer_config = view.renderer.config;
     renderer_config.present_mode = if (modes.contains(.mailbox)) .mailbox else if (modes.contains(.immediate)) .immediate else {
@@ -318,66 +382,8 @@ fn windowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: w
     return win32.CallWindowProcW(g_knots_proc, hwnd, msg, wParam, lParam);
 }
 
-/// Applied at once, though the setting itself waits for Save like any other.
-pub fn setAlwaysOnTop(enabled: bool) void {
-    const window = g_hwnd orelse return;
-    const insert_after = if (enabled) win32.HWND_TOPMOST else win32.HWND_NOTOPMOST;
-    _ = win32.SetWindowPos(window, insert_after, 0, 0, 0, 0, win32.SWP_NOMOVE | win32.SWP_NOSIZE | win32.SWP_NOACTIVATE);
-}
-
 fn scheduleProfileAction() void {
     postCommand(.profile_action);
-}
-
-/// The picker owns its own modal loop on another thread; the result arrives as a `picked` command.
-pub fn browseFolder(target: pickers.Target, title: []const u8) void {
-    const timer = main.g_timer_hwnd orelse {
-        slog.err("Failed to open the folder picker: the timer window is missing", .{});
-        return;
-    };
-    pickers.browse(target, 0, title, g_hwnd, timer, @backingInt(Command.picked));
-}
-
-/// A settings file for the Import dialog, read once the picker closes.
-pub fn browseImportFile() void {
-    const timer = main.g_timer_hwnd orelse {
-        slog.err("Failed to open the import file picker: the timer window is missing", .{});
-        return;
-    };
-    pickers.browse(.import_file, 0, "Select Settings File", g_hwnd, timer, @backingInt(Command.picked));
-}
-
-/// The header's name prompt names the restored profile; `backup` is copied.
-pub fn restoreBackup(backup: []const u8, display_name: []const u8) void {
-    header.openRestorePrompt(backup, display_name);
-}
-
-/// `name` as typed; the profile is created between frames, then the import applied to it.
-pub fn importIntoNewProfile(name: []const u8, accent: u32) void {
-    const file_name = config.profileFileName(g_allocator, name) catch {
-        status.show(.failure, "'{s}' isn't a valid profile name: use letters, digits, spaces, '-' and '_', up to 16 characters", .{name});
-        return;
-    };
-    defer g_allocator.free(file_name);
-    profiles.request(.import_new, file_name, accent);
-}
-
-/// A notification type's custom sound, set once the picker closes.
-pub fn browseSoundFile(type_index: usize) void {
-    const timer = main.g_timer_hwnd orelse {
-        slog.err("Failed to open the sound file picker: the timer window is missing", .{});
-        return;
-    };
-    pickers.browse(.sound_file, type_index, "Select Sound File", g_hwnd, timer, @backingInt(Command.picked));
-}
-
-/// Starts fetching Jita ore prices; returns false if a fetch is already running or couldn't start.
-pub fn fetchPrices() bool {
-    const timer = main.g_timer_hwnd orelse {
-        slog.err("Failed to fetch ore prices: the timer window is missing", .{});
-        return false;
-    };
-    return prices.fetch(timer, @backingInt(Command.prices_fetched));
 }
 
 /// Fetched prices fill in the table, kept until Save.
@@ -455,11 +461,6 @@ fn onClosed() void {
     }
 }
 
-/// Draws a frame soon, for a change made outside one, e.g. a region selection finishing.
-pub fn redraw() void {
-    requestFrame();
-}
-
 fn requestFrame() void {
     const window = g_hwnd orelse return;
     _ = win32.InvalidateRect(window, null, win32.FALSE);
@@ -472,7 +473,10 @@ fn focus() void {
 }
 
 fn setIcon(window: win32.HWND) void {
-    const instance = win32.GetModuleHandleA(null) orelse return;
+    const instance = win32.GetModuleHandleA(null) orelse {
+        slog.warn("Failed to load the app icon for the configuration window: error {d}", .{win32.GetLastError()});
+        return;
+    };
     const icon = win32.LoadIconA(instance, @ptrFromInt(APP_ICON_ID)) orelse {
         slog.warn("Failed to load the app icon for the configuration window", .{});
         return;
@@ -504,7 +508,10 @@ fn colorRef(color: ui.Color) win32.DWORD {
 
 fn savePosition(window: win32.HWND) void {
     var rect: win32.RECT = undefined;
-    if (!win32.toBool(win32.GetWindowRect(window, &rect))) return;
+    if (!win32.toBool(win32.GetWindowRect(window, &rect))) {
+        slog.warn("Failed to read the configuration window's position: error {d}", .{win32.GetLastError()});
+        return;
+    }
     main.g_global_settings.saveDialogPosition(rect.left, rect.top) catch |err| {
         slog.warn("Failed to save the configuration window's position: {}", .{err});
     };

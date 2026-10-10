@@ -159,12 +159,12 @@ const Tab = enum {
 
 /// Which tabs the sidebar offers this frame.
 const Offered = struct {
-    advanced: bool,
-    thumbnails: bool,
+    is_advanced_mode: bool,
+    shows_thumbnails: bool,
 
     fn has(offered: Offered, tab: Tab) bool {
-        if (!offered.advanced and tab.isAdvanced()) return false;
-        if (!offered.thumbnails and tab.needsThumbnails()) return false;
+        if (!offered.is_advanced_mode and tab.isAdvanced()) return false;
+        if (!offered.shows_thumbnails and tab.needsThumbnails()) return false;
         return true;
     }
 };
@@ -184,8 +184,8 @@ pub fn frame(_: *knots.View, context: *ui.Frame) !void {
     try hotkey.beginFrame(context.arena());
     applyAccent(context);
     const offered = Offered{
-        .advanced = session.global().get("advancedMode"),
-        .thumbnails = session.showsThumbnails(),
+        .is_advanced_mode = session.global().get("advancedMode"),
+        .shows_thumbnails = session.showsThumbnails(),
     };
     // Turning Advanced Mode off or leaving thumbnail mode can hide the open tab.
     if (!offered.has(g_tab)) selectTab(context, if (g_tab.needsThumbnails()) .appearance else .about);
@@ -366,9 +366,9 @@ fn searchBox(context: *ui.Frame) !void {
     }
     try box.close(context);
     if (search.isActive() and !search.needsIndex()) {
-        const count = search.matchCount();
-        const text = if (count == 0) "No matches" else try std.fmt.allocPrint(context.arena(), "{d} {s}", .{ count, if (count == 1) "section" else "sections" });
-        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = text, .style = if (count == 0) &style.search_count_none else &style.search_count_some });
+        const match_count = search.matchCount();
+        const text = if (match_count == 0) "No matches" else try std.fmt.allocPrint(context.arena(), "{d} {s}", .{ match_count, if (match_count == 1) "section" else "sections" });
+        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = text, .style = if (match_count == 0) &style.search_count_none else &style.search_count_some });
     }
 }
 

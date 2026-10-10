@@ -211,13 +211,13 @@ fn carryRename(profile: ProfileRef, old_name: []const u8, new_name: []const u8) 
     for (0..profile.ptr.hotkeyGroups.items.len) |group_index| {
         const group = profile.item("hotkeyGroups", group_index);
         const members = group.ptr.characters.items;
-        const old_at = for (members, 0..) |member, at| {
+        const old_index = for (members, 0..) |member, at| {
             if (std.mem.eql(u8, member, old_name)) break at;
         } else continue;
         const already_member = for (members) |member| {
             if (std.mem.eql(u8, member, new_name)) break true;
         } else false;
-        if (already_member) group.remove("characters", old_at) else group.setStringAt("characters", old_at, new_name);
+        if (already_member) group.remove("characters", old_index) else group.setStringAt("characters", old_index, new_name);
     }
 }
 
