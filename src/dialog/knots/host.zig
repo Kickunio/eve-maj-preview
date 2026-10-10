@@ -36,7 +36,7 @@ const log = @import("../../log.zig");
 const GlobalConfig = config.GlobalConfig;
 const slog = log.scoped("dialog_knots");
 
-const WINDOW_TITLE = "EVE-Maj Preview Configuration (knots)";
+const WINDOW_TITLE = "EVE-Maj Preview Configuration";
 /// In logical pixels; knots has no zoom yet.
 const DESIGN_WIDTH = 820;
 const DESIGN_HEIGHT = 900;
