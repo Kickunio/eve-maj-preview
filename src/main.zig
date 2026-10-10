@@ -394,7 +394,9 @@ fn setCwdToExeDir() void {
         return;
     };
 
-    _ = win32.SetCurrentDirectoryA(exe_dir_z);
+    if (!win32.toBool(win32.SetCurrentDirectoryA(exe_dir_z))) {
+        slog.warn("Failed to set the working directory to '{s}': error {d}", .{ exe_dir, win32.GetLastError() });
+    }
 }
 
 fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
@@ -763,6 +765,9 @@ fn restartSubsystems(timer_hwnd: win32.HWND, replacement: ?config.ProfileStore, 
     slog.debug("Reinitialized hotkey manager", .{});
 
     const new_interval = tickIntervalFor(eve_windows.len);
-    _ = setTickInterval(timer_hwnd, new_interval);
+    if (!setTickInterval(timer_hwnd, new_interval)) {
+        slog.warn("Failed to update the timer interval to {} ms, keeping {} ms", .{ new_interval, g_tick_interval_ms });
+        return;
+    }
     slog.debug("Updated timer interval to {} ms", .{new_interval});
 }
