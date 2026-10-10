@@ -14,10 +14,10 @@ const Fields = overlay_text.Fields;
 /// The settings struct a chip's fields live in.
 pub const Section = enum { thumbnail, notifications, combat, mining, bounty, resources };
 
-/// One row of a chip's popover; number, choice and text rows show only in Advanced Mode, like the tabs they came from.
+/// One row of a chip's popover; number, choice and text rows show only in Advanced Mode, like the tabs they came from, and a `hint` always shows since a popover has no ? button.
 pub const PopoverField = union(enum) {
     /// A setting of the chip's section; `disables_color` greys out the text colour while it's on.
-    toggle: struct { field: []const u8, label: []const u8, disables_color: bool = false },
+    toggle: struct { field: []const u8, label: []const u8, disables_color: bool = false, hint: ?[]const u8 = null },
     number: struct { field: []const u8, label: []const u8, unit: []const u8, ms_as_seconds: bool = false, hint: ?[]const u8 = null },
     choice: struct { field: []const u8, label: []const u8 },
     text: struct { field: []const u8, label: []const u8, placeholder: []const u8, hint: ?[]const u8 = null },
@@ -200,9 +200,9 @@ pub const CHIPS = [_]Chip{
         .needs_show_text = true,
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "enabled", .label = "Show Resource Usage" } },
-            .{ .toggle = .{ .field = "show_cpu", .label = "Show CPU %" } },
+            .{ .toggle = .{ .field = "show_cpu", .label = "Show CPU %", .hint = "That EVE client process's own usage, not total system CPU." } },
             .{ .toggle = .{ .field = "show_ram", .label = "Show RAM" } },
-            .{ .toggle = .{ .field = "show_vram", .label = "Show VRAM" } },
+            .{ .toggle = .{ .field = "show_vram", .label = "Show VRAM", .hint = "Only counts video memory that EVE client's own process has allocated, not the GPU's total usage." } },
             UPDATE_INTERVAL,
             .color,
         } ++ STYLE_ROWS),
@@ -305,6 +305,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
         switch (row) {
             .toggle => |toggle| {
                 try bind.toggle(context, ref, toggle.field, toggle.label);
+                if (toggle.hint) |hint| try widgets.paragraph(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ toggle.field), hint);
                 if (toggle.disables_color and ref.get(toggle.field)) color_disabled = true;
                 if (comptime isGate(chip, toggle.field)) {
                     gates[gate_count] = try widgets.openGroup(context, .str("knots.chip.gate:" ++ chip.label ++ ":" ++ toggle.field), ref.get(toggle.field));
@@ -313,12 +314,12 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
             },
             .number => |number| if (is_advanced) {
                 try bind.number(context, ref, number.field, number.label, .{ .unit = number.unit, .ms_as_seconds = number.ms_as_seconds });
-                if (number.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ number.field), hint);
+                if (number.hint) |hint| try widgets.paragraph(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ number.field), hint);
             },
             .choice => |choice| if (is_advanced) try bind.choice(context, ref, choice.field, choice.label),
             .text => |text| if (is_advanced) {
                 try bind.text(context, ref, text.field, text.label, text.placeholder);
-                if (text.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ text.field), hint);
+                if (text.hint) |hint| try widgets.paragraph(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ text.field), hint);
             },
             .color => {
                 const color = try widgets.openGroup(context, .str("knots.chip.color:" ++ chip.label), !color_disabled);
