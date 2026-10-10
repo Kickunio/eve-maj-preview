@@ -47,7 +47,7 @@ const Category = enum {
 
     fn label(category: Category) []const u8 {
         return switch (category) {
-            .app => "EMP",
+            .app => "APP",
             .clients => "CLIENTS",
             .display => "DISPLAY",
             .input => "INPUT",

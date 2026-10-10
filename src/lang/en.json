@@ -596,7 +596,7 @@
   "notification.MiningStopped.label": "Mining Stopped",
   "notification.MiningStopped.shortLabel": "Mining Stopped",
   "notification.ObservatoryDecloak.label": "Observatory Decloak",
-  "notification.ObservatoryDecloak.shortLabel": "Obs. Decloak",
+  "notification.ObservatoryDecloak.shortLabel": "Obs Decloak",
   "notification.ProfileSwitch.label": "Profile Switch",
   "notification.ProfileSwitch.shortLabel": "Profile Switch",
   "notification.SavedPositionMove.label": "Moved to Saved Position",
