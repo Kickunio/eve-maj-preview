@@ -10,12 +10,12 @@ const ThumbnailWindow = painter_mod.ThumbnailWindow;
 /// Per-thumbnail travel state; Painter records jumps, check() reads it and flags alerts.
 pub const LeftBehindState = struct {
     /// Zero = hasn't jumped this session.
-    last_jump_ms: win32.Ticks = .{},
+    last_jump: win32.Ticks = .{},
     /// Guards the left-behind alert to one per episode; cleared on jump.
     alert_fired: bool = false,
 
     pub fn recordJump(self: *LeftBehindState) void {
-        self.last_jump_ms = win32.Ticks.now();
+        self.last_jump = win32.Ticks.now();
         self.alert_fired = false;
     }
 };
@@ -34,27 +34,26 @@ pub fn check(painter: *Painter, now: win32.Ticks) void {
 
     var group_system: []const u8 = "";
     var group_count: usize = 0;
-    var group_arrival_ms: win32.Ticks = .{};
+    var group_arrival: win32.Ticks = .{};
 
     for (painter.thumbnails.items) |*candidate| {
         if (!isTracked(candidate)) continue;
 
         var same_system_count: usize = 0;
-        var arrival_ms: win32.Ticks = .{};
+        var arrival: win32.Ticks = .{};
         for (painter.thumbnails.items) |*other| {
             if (!isTracked(other)) continue;
             if (!std.mem.eql(u8, other.system_name, candidate.system_name)) continue;
             same_system_count += 1;
-            if (other.travel.last_jump_ms.ms > arrival_ms.ms) arrival_ms = other.travel.last_jump_ms;
+            if (other.travel.last_jump.ms > arrival.ms) arrival = other.travel.last_jump;
         }
 
         if (same_system_count > group_count) {
             group_count = same_system_count;
             group_system = candidate.system_name;
-            group_arrival_ms = arrival_ms;
+            group_arrival = arrival;
         }
     }
-    if (group_count == 0) return;
 
     const required_count: usize = switch (travel.threshold_mode) {
         .percent => @intFromFloat(@ceil(travel.threshold_percent / 100.0 * @as(f32, @floatFromInt(eligible_count)))),
@@ -62,8 +61,8 @@ pub fn check(painter: *Painter, now: win32.Ticks) void {
     };
     if (group_count < required_count) return;
 
-    const window_ms: u64 = @as(u64, travel.window_seconds) * 1000;
-    if (now.elapsedSince(group_arrival_ms) < window_ms) return;
+    const window_ms: u64 = @as(u64, travel.window_seconds) * std.time.ms_per_s;
+    if (now.elapsedSince(group_arrival) < window_ms) return;
 
     for (painter.thumbnails.items) |*thumbnail| {
         if (!isTracked(thumbnail)) continue;
@@ -77,5 +76,5 @@ pub fn check(painter: *Painter, now: win32.Ticks) void {
 
 /// Only characters that have jumped this session and aren't excluded from cycling count toward, or get, the alert.
 fn isTracked(thumbnail: *const ThumbnailWindow) bool {
-    return !thumbnail.travel.last_jump_ms.isZero() and !exclusions.isExcluded(thumbnail.character_name);
+    return !thumbnail.travel.last_jump.isZero() and !exclusions.isExcluded(thumbnail.character_name);
 }
