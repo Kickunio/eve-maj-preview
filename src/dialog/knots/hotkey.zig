@@ -115,12 +115,6 @@ pub fn onWindowMessage(msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPAR
     }
 }
 
-/// A bare Win press, which Windows hands to the Start Menu before the window sees it, so the keyboard hook reports it.
-fn onWinKey(modifiers: u32) void {
-    const recording = &(g_recording orelse return);
-    if (recording.captured == null) capture(vk.VK_LWIN, modifiers);
-}
-
 /// Key caps for each combo, a clear button and, in Advanced Mode, a typing button; `ref` needs session.Ref's get, set and index.
 pub fn field(context: *ui.Frame, ref: anytype, comptime field_name: []const u8) !void {
     // Typed by the setting's struct, so a character's and a group's hotkey at the same index differ.
@@ -200,6 +194,14 @@ pub fn isConflict(keys: KeyList) bool {
     return false;
 }
 
+/// Combos as the app spells them, e.g. "Ctrl+1, 1".
+pub fn writeKeys(writer: *std.Io.Writer, keys: KeyList) !void {
+    for (keys.slice(), 0..) |combo, index| {
+        if (index > 0) try writer.writeAll(", ");
+        try vk.writeVirtualKey(writer, combo);
+    }
+}
+
 /// Every KeyList in `value`, however deeply nested, counted under the HolderKind of the field it sits in.
 fn collect(arena: std.mem.Allocator, holders: *std.AutoArrayHashMapUnmanaged(u32, Holders), value: anytype, kind: HolderKind) !void {
     const T = @TypeOf(value.*);
@@ -252,12 +254,10 @@ fn holdsKeys(comptime T: type) bool {
     };
 }
 
-/// Combos as the app spells them, e.g. "Ctrl+1, 1".
-pub fn writeKeys(writer: *std.Io.Writer, keys: KeyList) !void {
-    for (keys.slice(), 0..) |combo, index| {
-        if (index > 0) try writer.writeAll(", ");
-        try vk.writeVirtualKey(writer, combo);
-    }
+/// A bare Win press, which Windows hands to the Start Menu before the window sees it, so the keyboard hook reports it.
+fn onWinKey(modifiers: u32) void {
+    const recording = &(g_recording orelse return);
+    if (recording.captured == null) capture(vk.VK_LWIN, modifiers);
 }
 
 fn keycaps(context: *ui.Frame, key: ui.Key, keys: KeyList) !void {

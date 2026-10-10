@@ -55,6 +55,21 @@ pub fn show(context: *ui.Frame) !void {
     try prices_section.close(context);
 }
 
+/// Global settings only hold prices that differ from the catalogue's.
+pub fn setOrePrice(name: []const u8, price: f64) void {
+    const global = session.global();
+    for (global.ptr.oreTable.items, 0..) |override, index| {
+        if (std.mem.eql(u8, override.name, name)) return global.item("oreTable", index).set("price", price);
+    }
+    for (config.DEFAULT_ORE_TABLE) |entry| {
+        if (std.mem.eql(u8, entry.name, name) and entry.price == price) return;
+    }
+    global.append("oreTable", .{});
+    const added = global.item("oreTable", global.ptr.oreTable.items.len - 1);
+    added.set("name", name);
+    added.set("price", price);
+}
+
 /// Grouped by category; names are fixed, since mined-ore log lines are matched against them.
 fn oreTable(context: *ui.Frame) !void {
     const table = Rect{ .key = .src(@src()), .style = &style.table };
@@ -92,21 +107,6 @@ fn orePrice(entry: @TypeOf(config.DEFAULT_ORE_TABLE[0])) f64 {
         if (std.mem.eql(u8, override.name, entry.name)) return override.price;
     }
     return entry.price;
-}
-
-/// Global settings only hold prices that differ from the catalogue's.
-pub fn setOrePrice(name: []const u8, price: f64) void {
-    const global = session.global();
-    for (global.ptr.oreTable.items, 0..) |override, index| {
-        if (std.mem.eql(u8, override.name, name)) return global.item("oreTable", index).set("price", price);
-    }
-    for (config.DEFAULT_ORE_TABLE) |entry| {
-        if (std.mem.eql(u8, entry.name, name) and entry.price == price) return;
-    }
-    global.append("oreTable", .{});
-    const added = global.item("oreTable", global.ptr.oreTable.items.len - 1);
-    added.set("name", name);
-    added.set("price", price);
 }
 
 fn chatlogNotice(context: *ui.Frame) !void {

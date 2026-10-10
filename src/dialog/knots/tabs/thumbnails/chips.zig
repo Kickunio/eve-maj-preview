@@ -322,6 +322,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
             },
             .color => {
                 const color = try widgets.openGroup(context, .str("knots.chip.color:" ++ chip.label), !color_disabled);
+                // Comptime: a chip listing .color without a colour field fails to compile.
                 try bind.rgb(context, ref, fields.color.?, "Text Color");
                 try color.close(context);
             },

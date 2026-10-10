@@ -879,8 +879,6 @@ pub const keycap_text: Style = .{ .font_size = .{ .px = 10 }, .foreground = .{ .
 pub const keycap_modifier_text: Style = keycap_text.with(.{ .foreground = .{ .color = MUTED } });
 pub const keycap_plus: Style = .{ .font_size = .{ .px = 9 }, .foreground = .{ .color = MUTED } };
 pub const keycap_separator: Style = .{ .font_size = .sm, .foreground = .{ .color = MUTED } };
-/// A roster row with the drop line above or below it while another is dragged.
-/// Square on the side without the line: a rounded corner there leaks accent pixels.
 /// .detail-value: a read-only value in a detail form, e.g. the file an import reads.
 pub const detail_value: Style = .{ .width = .grow(), .foreground = .{ .color = TEXT_SECONDARY } };
 
