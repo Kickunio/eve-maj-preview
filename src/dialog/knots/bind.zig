@@ -125,8 +125,7 @@ fn styledNumberBox(context: *ui.Frame, ref: anytype, comptime field: []const u8,
         }
         const current: ?N = ref.get(field);
         if (current) |value| {
-            var buf: [32]u8 = undefined;
-            try syncText(state, std.fmt.bufPrint(&buf, "{d}", .{numberTo(N, value) / scale}) catch unreachable);
+            try syncText(state, try std.fmt.allocPrint(context.arena(), "{d}", .{numberTo(N, value) / scale}));
         } else {
             try syncText(state, "");
         }
@@ -225,8 +224,7 @@ pub fn optionalValueBox(context: *ui.Frame, key: ui.Key, value: ?f64, placeholde
             .value => |parsed| parsed,
         };
         if (shown) |figure| {
-            var buf: [32]u8 = undefined;
-            try syncText(state, std.fmt.bufPrint(&buf, "{d}", .{figure}) catch unreachable);
+            try syncText(state, try std.fmt.allocPrint(context.arena(), "{d}", .{figure}));
         } else {
             try syncText(state, "");
         }
@@ -247,8 +245,7 @@ pub fn valueBox(context: *ui.Frame, key: ui.Key, value: f64, box_style: *const u
             // Not a number: the sync below puts the value back.
             committed = std.fmt.parseFloat(f64, std.mem.trim(u8, state.text.items, " ")) catch null;
         }
-        var buf: [32]u8 = undefined;
-        try syncText(state, std.fmt.bufPrint(&buf, "{d}", .{committed orelse value}) catch unreachable);
+        try syncText(state, try std.fmt.allocPrint(context.arena(), "{d}", .{committed orelse value}));
     }
     try context.e(TextInput{ .key = key, .buf = &state.text, .style = box_style });
     return committed;
