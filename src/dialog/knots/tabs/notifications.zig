@@ -39,7 +39,7 @@ fn speech(context: *ui.Frame) !void {
     try bind.toggle(context, ref, "tts_use_display_name", "Speak Display Name Instead of Character Name");
     try display_name.close(context);
     try bind.slider(context, ref, "tts_volume", "Volume", .{ .display = .percent });
-    try bind.slider(context, ref, "tts_rate", "Speed", .{});
+    try bind.slider(context, ref, "tts_rate", "Speed", .{ .display = .signed });
     try widgets.hintText(context, .src(@src()), "0 is normal speaking speed; negative is slower, positive is faster.");
     try options.close(context);
     try section.close(context);
