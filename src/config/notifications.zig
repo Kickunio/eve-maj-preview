@@ -117,9 +117,9 @@ pub const NotificationTypeConfigs = struct {
                 defer type_wire.deinit();
                 var wire_value = type_wire.value;
                 // type_wire's arena is freed by the defer above, so its strings must be re-duped.
-                if (wire_value.sound_path) |sp| wire_value.sound_path = try allocator.dupe(u8, sp);
-                if (wire_value.custom_text) |ct| wire_value.custom_text = try allocator.dupe(u8, ct);
-                if (wire_value.custom_text_alt) |ct| wire_value.custom_text_alt = try allocator.dupe(u8, ct);
+                if (wire_value.sound_path) |sound_path| wire_value.sound_path = try allocator.dupe(u8, sound_path);
+                if (wire_value.custom_text) |custom_text| wire_value.custom_text = try allocator.dupe(u8, custom_text);
+                if (wire_value.custom_text_alt) |custom_text_alt| wire_value.custom_text_alt = try allocator.dupe(u8, custom_text_alt);
                 result.map.set(notification_type, wire_value);
             }
             return result;
@@ -135,12 +135,12 @@ pub const NotificationTypeConfigs = struct {
         return out;
     }
 
-    pub fn fromWire(w: Wire, allocator: std.mem.Allocator) !NotificationTypeConfigs {
+    pub fn fromWire(encoded: Wire, allocator: std.mem.Allocator) !NotificationTypeConfigs {
         var out: NotificationTypeConfigs = .{};
         errdefer out.deinit(allocator);
         inline for (@typeInfo(notification.NotificationType).@"enum".field_names) |name| {
             const notification_type = @field(notification.NotificationType, name);
-            out.map.set(notification_type, try wire.decode(NotificationTypeConfig, w.map.get(notification_type), allocator));
+            out.map.set(notification_type, try wire.decode(NotificationTypeConfig, encoded.map.get(notification_type), allocator));
         }
         return out;
     }

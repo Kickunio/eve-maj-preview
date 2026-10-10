@@ -26,8 +26,8 @@ pub fn check(painter: *Painter, now: win32.Ticks) void {
     if (!travel.enabled) return;
 
     var eligible_count: usize = 0;
-    for (painter.thumbnails.items) |*thumb| {
-        if (!isTracked(thumb)) continue;
+    for (painter.thumbnails.items) |*thumbnail| {
+        if (!isTracked(thumbnail)) continue;
         eligible_count += 1;
     }
     if (eligible_count < 2) return;
@@ -39,39 +39,39 @@ pub fn check(painter: *Painter, now: win32.Ticks) void {
     for (painter.thumbnails.items) |*candidate| {
         if (!isTracked(candidate)) continue;
 
-        var count: usize = 0;
+        var same_system_count: usize = 0;
         var arrival_ms: win32.Ticks = .{};
         for (painter.thumbnails.items) |*other| {
             if (!isTracked(other)) continue;
             if (!std.mem.eql(u8, other.system_name, candidate.system_name)) continue;
-            count += 1;
+            same_system_count += 1;
             if (other.travel.last_jump_ms.ms > arrival_ms.ms) arrival_ms = other.travel.last_jump_ms;
         }
 
-        if (count > group_count) {
-            group_count = count;
+        if (same_system_count > group_count) {
+            group_count = same_system_count;
             group_system = candidate.system_name;
             group_arrival_ms = arrival_ms;
         }
     }
     if (group_count == 0) return;
 
-    const required: usize = switch (travel.threshold_mode) {
+    const required_count: usize = switch (travel.threshold_mode) {
         .percent => @intFromFloat(@ceil(travel.threshold_percent / 100.0 * @as(f32, @floatFromInt(eligible_count)))),
         .count => travel.threshold_count,
     };
-    if (group_count < required) return;
+    if (group_count < required_count) return;
 
     const window_ms: u64 = @as(u64, travel.window_seconds) * 1000;
     if (now.elapsedSince(group_arrival_ms) < window_ms) return;
 
-    for (painter.thumbnails.items) |*thumb| {
-        if (!isTracked(thumb)) continue;
-        if (std.mem.eql(u8, thumb.system_name, group_system)) continue;
-        if (thumb.travel.alert_fired) continue;
+    for (painter.thumbnails.items) |*thumbnail| {
+        if (!isTracked(thumbnail)) continue;
+        if (std.mem.eql(u8, thumbnail.system_name, group_system)) continue;
+        if (thumbnail.travel.alert_fired) continue;
 
-        thumb.travel.alert_fired = true;
-        painter.notify(thumb.source_hwnd, .{ .notification_type = .TravelLeftBehind, .source = thumb.system_name, .target = group_system });
+        thumbnail.travel.alert_fired = true;
+        painter.notify(thumbnail.source_hwnd, .{ .notification_type = .TravelLeftBehind, .source = thumbnail.system_name, .target = group_system });
     }
 }
 

@@ -58,8 +58,8 @@ pub const Trackers = struct {
         self.destroy(resources_mod.ResourceTracker, &self.resources, null);
     }
 
-    fn reconcile(self: *Trackers, comptime T: type, slot: *?*T, enabled: bool, window_seconds: u32, label: []const u8) void {
-        if (!enabled) {
+    fn reconcile(self: *Trackers, comptime T: type, slot: *?*T, is_enabled: bool, window_seconds: u32, label: []const u8) void {
+        if (!is_enabled) {
             self.destroy(T, slot, label);
             slog.debug("{s} tracking disabled", .{label});
             return;
@@ -78,8 +78,8 @@ pub const Trackers = struct {
         slog.debug("{s} tracking enabled ({d}s window)", .{ label, window_seconds });
     }
 
-    fn setupResources(self: *Trackers, enabled: bool) void {
-        if (!enabled) {
+    fn setupResources(self: *Trackers, is_enabled: bool) void {
+        if (!is_enabled) {
             self.destroy(resources_mod.ResourceTracker, &self.resources, null);
             return;
         }

@@ -16,7 +16,7 @@ const mouse_hook = @import("hotkeys/mouse_hook.zig");
 const keyboard_hook = @import("hotkeys/keyboard_hook.zig");
 const paste_upload = @import("hotkeys/paste_upload.zig");
 const chatlog = @import("chatlog.zig");
-const CharacterIds = @import("chatlog/character_ids.zig").CharacterIds;
+const character_ids = @import("chatlog/character_ids.zig");
 const activity = @import("activity/runtime.zig");
 const tts = @import("notifications/tts.zig");
 const sound = @import("notifications/sound.zig");
@@ -28,6 +28,7 @@ const knots_host = @import("dialog/knots/host.zig");
 const schedule = @import("util/schedule.zig");
 const log = @import("log.zig");
 
+const CharacterIds = character_ids.CharacterIds;
 const slog = log.scoped("main");
 
 const TIMER_ID: usize = 1;
@@ -76,7 +77,7 @@ pub fn main(init: std.process.Init) void {
     defer log.deinitFile();
 
     mainImpl(init) catch |err| {
-        slog.err("Fatal error: {}", .{err});
+        slog.err("Failed to run EVE-Maj Preview: {}", .{err});
         if (@errorReturnTrace()) |trace| {
             std.debug.dumpErrorReturnTrace(trace);
         }
@@ -219,27 +220,27 @@ fn mainImpl(init: std.process.Init) !void {
     // toSlice's result references several internal allocations, so it requires an arena rather than a plain allocator.
     var args_arena = std.heap.ArenaAllocator.init(g_allocator);
     defer args_arena.deinit();
-    const args2 = try init.minimal.args.toSlice(args_arena.allocator());
+    const args = try init.minimal.args.toSlice(args_arena.allocator());
 
     var j: usize = 1;
-    while (j < args2.len) : (j += 1) {
-        if (std.mem.eql(u8, args2[j], "--profile") or std.mem.eql(u8, args2[j], "-p")) {
-            if (j + 1 < args2.len) {
-                profile_name = args2[j + 1];
+    while (j < args.len) : (j += 1) {
+        if (std.mem.eql(u8, args[j], "--profile") or std.mem.eql(u8, args[j], "-p")) {
+            if (j + 1 < args.len) {
+                profile_name = args[j + 1];
                 j += 1;
             } else {
                 slog.err("Failed to parse arguments: --profile needs a profile name", .{});
                 return error.InvalidArguments;
             }
-        } else if (std.mem.eql(u8, args2[j], "--config")) {
+        } else if (std.mem.eql(u8, args[j], "--config")) {
             // Handled before the instance check above.
-        } else if (std.mem.eql(u8, args2[j], "--protocol")) {
+        } else if (std.mem.eql(u8, args[j], "--protocol")) {
             // Skip protocol arg (already handled above)
-            if (j + 1 < args2.len) {
+            if (j + 1 < args.len) {
                 j += 1;
             }
         } else {
-            slog.err("Failed to parse arguments: unknown argument '{s}'", .{args2[j]});
+            slog.err("Failed to parse arguments: unknown argument '{s}'", .{args[j]});
             return error.InvalidArguments;
         }
     }
@@ -488,8 +489,7 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
     }
 }
 
-/// Runs one WM_TIMER tick: scan for EVE windows, then push the results through
-/// the painter, chatlog monitor, and activity trackers.
+/// Runs one WM_TIMER tick: scans for EVE windows, then feeds the painter, chatlog monitor and activity trackers.
 fn onTimerTick() void {
     const tick_start = win32.Ticks.now();
     const force_scan = schedule.nextTickWouldBeLate(@intCast(tick_start.elapsedSince(g_last_forced_scan)), FORCED_SCAN_INTERVAL_MS, g_tick_interval_ms);

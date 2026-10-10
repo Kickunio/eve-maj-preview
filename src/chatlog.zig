@@ -7,13 +7,14 @@ const activity_mod = @import("activity/tracker.zig");
 const scout = @import("clients/scout.zig");
 const painter = @import("painter.zig");
 const config = @import("config.zig");
-const CharacterIds = @import("chatlog/character_ids.zig").CharacterIds;
+const character_ids_mod = @import("chatlog/character_ids.zig");
 const lines = @import("chatlog/lines.zig");
 const tail = @import("chatlog/tail.zig");
 const discovery = @import("chatlog/discovery.zig");
 const queue = @import("chatlog/queue.zig");
 const log = @import("log.zig");
 
+const CharacterIds = character_ids_mod.CharacterIds;
 const LogFile = tail.LogFile;
 const slog = log.scoped("chatlog");
 
@@ -30,7 +31,7 @@ pub const ChatlogMonitor = struct {
     global_settings: ?*config.GlobalConfig,
     /// Borrowed; outlives the monitor.
     character_ids: ?*CharacterIds,
-    // Set only while the worker is stopped (see activity/runtime.zig).
+    // The worker reads these; set only while it's stopped (see activity/runtime.zig and applySettings).
     combat_tracker: ?*activity_mod.CombatTracker = null,
     mining_tracker: ?*activity_mod.MiningTracker = null,
     bounty_tracker: ?*activity_mod.BountyTracker = null,
@@ -196,11 +197,11 @@ pub const ChatlogMonitor = struct {
             defer system_update.deinit(self.allocator);
             const scout_ptr = scout.g_scout_ptr orelse continue;
             const hwnd = scout_ptr.getHwndByName(system_update.character_name) orelse {
-                slog.warn("No HWND for '{s}', skipping system update", .{system_update.character_name});
+                slog.warn("Failed to apply the system update for '{s}': no window found", .{system_update.character_name});
                 continue;
             };
             const painter_ptr = painter.g_painter_ptr orelse {
-                slog.warn("No painter to apply system update for '{s}' to '{s}'", .{ system_update.character_name, system_update.system_name });
+                slog.warn("Failed to apply system '{s}' for '{s}': the painter isn't ready", .{ system_update.system_name, system_update.character_name });
                 continue;
             };
             painter_ptr.updateSystemNameByHwnd(hwnd, system_update.system_name, system_update.event_ts, system_update.is_jump) catch |err| {
@@ -242,14 +243,14 @@ pub const ChatlogMonitor = struct {
     /// Everything below runs on the worker, apart from teardown once it's stopped.
     fn workerMain(self: *ChatlogMonitor) void {
         slog.info("Chatlog worker thread started (TID: {})", .{std.Thread.getCurrentId()});
-        var loops: u64 = 0;
-        while (!self.should_exit.load(.acquire)) : (loops += 1) {
+        var loop_count: u64 = 0;
+        while (!self.should_exit.load(.acquire)) : (loop_count += 1) {
             self.processCommands() catch |err| slog.err("Failed to process worker commands: {}", .{err});
             self.pollLogFiles();
             self.rescanForNewLogs() catch |err| slog.err("Failed to rescan for new logs: {}", .{err});
             _ = win32.WaitForSingleObject(self.stop_event, self.poll_interval_ms);
         }
-        slog.info("Chatlog worker thread exiting (processed {} loops)", .{loops});
+        slog.info("Chatlog worker thread exiting (processed {} loops)", .{loop_count});
     }
 
     fn processCommands(self: *ChatlogMonitor) !void {
@@ -568,9 +569,9 @@ pub const ChatlogMonitor = struct {
             return;
         };
         const price_per_unit = global_settings.orePrice(parsed.name()) orelse 0;
-        const amount_f: f32 = @floatFromInt(parsed.amount);
-        const m3 = amount_f * @as(f32, @floatCast(volume_per_unit));
-        const isk = amount_f * @as(f32, @floatCast(price_per_unit));
+        const amount: f32 = @floatFromInt(parsed.amount);
+        const m3 = amount * @as(f32, @floatCast(volume_per_unit));
+        const isk = amount * @as(f32, @floatCast(price_per_unit));
         tracker.addEntry(file.character_name, .{ m3, isk, trackerNowMs() }) catch |err| {
             slog.warn("Failed to record mining entry for '{s}': {}", .{ file.character_name, err });
         };

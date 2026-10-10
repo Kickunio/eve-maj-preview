@@ -101,23 +101,23 @@ pub const NotificationStack = struct {
 
     /// Returns whether anything was removed.
     pub fn dismissClickSuppressed(self: *NotificationStack, allocator: std.mem.Allocator) bool {
-        const Ctx = struct {
+        const Context = struct {
             fn shouldRemove(_: @This(), entry: ActiveNotification) bool {
                 return entry.suppress_when_clicked;
             }
         };
-        return self.removeIf(allocator, Ctx{});
+        return self.removeIf(allocator, Context{});
     }
 
     /// Returns whether anything expired; duration_ms == 0 means permanent.
     pub fn expire(self: *NotificationStack, allocator: std.mem.Allocator, now: win32.Ticks) bool {
-        const Ctx = struct {
+        const Context = struct {
             now: win32.Ticks,
             fn shouldRemove(context: @This(), entry: ActiveNotification) bool {
                 return entry.duration_ms > 0 and context.now.elapsedSince(entry.start_time) >= entry.duration_ms;
             }
         };
-        return self.removeIf(allocator, Ctx{ .now = now });
+        return self.removeIf(allocator, Context{ .now = now });
     }
 
     /// Frees every entry's text without resetting the stack; for teardown, where the owning thumbnail is discarded.

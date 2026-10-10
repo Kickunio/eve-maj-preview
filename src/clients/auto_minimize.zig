@@ -25,7 +25,7 @@ pub const AutoMinimizer = struct {
     /// From the hotkey or tray, never saved; dropped once the setting it overrode changes.
     enabled_override: ?Override = null,
 
-    const Override = struct { enabled: bool, overridden_setting: bool };
+    const Override = struct { is_enabled: bool, overridden_setting: bool };
 
     pub fn init(allocator: std.mem.Allocator) AutoMinimizer {
         return .{ .last_focused_by_monitor = std.AutoHashMap(win32.HMONITOR, win32.HWND).init(allocator) };
@@ -46,7 +46,7 @@ pub const AutoMinimizer = struct {
     pub fn isEnabled(self: *const AutoMinimizer, painter: *const Painter) bool {
         const setting = painter.config.autoMinimize.enabled;
         const override = self.enabled_override orelse return setting;
-        return if (override.overridden_setting == setting) override.enabled else setting;
+        return if (override.overridden_setting == setting) override.is_enabled else setting;
     }
 
     fn dropStaleOverride(self: *AutoMinimizer, painter: *const Painter) void {
@@ -91,7 +91,7 @@ pub const AutoMinimizer = struct {
         if (painter.thumbnails.items.len == 0) return;
 
         const delay_ms: u64 = painter.config.autoMinimize.delayMs;
-        var minimized_any = false;
+        var has_minimized_any = false;
 
         // active_source_hwnd is the literal foreground window, so it's non-null even on a non-EVE app.
         const eve_has_focus = if (painter.active_source_hwnd) |hwnd| painter.hasEveClient(hwnd) else false;
@@ -103,22 +103,22 @@ pub const AutoMinimizer = struct {
             if (thumbnail.isFocused(painter.active_source_hwnd)) continue;
             if (thumbnail.was_minimized) continue;
             // Checked after the iconic skip: a minimized window is parked off-screen and reports the wrong monitor.
-            const on_other_monitor = if (focused_monitor) |monitor|
+            const is_on_other_monitor = if (focused_monitor) |monitor|
                 win32.MonitorFromWindow(thumbnail.source_hwnd, win32.MONITOR_DEFAULTTONEAREST) != monitor
             else
                 false;
-            const spared_by_focus_loss = painter.config.autoMinimize.exemptLastActiveOnFocusLoss and !eve_has_focus;
-            if ((on_other_monitor or spared_by_focus_loss) and self.isLastActiveOnItsMonitor(painter, thumbnail.source_hwnd)) continue;
+            const is_spared_by_focus_loss = painter.config.autoMinimize.exemptLastActiveOnFocusLoss and !eve_has_focus;
+            if ((is_on_other_monitor or is_spared_by_focus_loss) and self.isLastActiveOnItsMonitor(painter, thumbnail.source_hwnd)) continue;
             if (now.elapsedSince(thumbnail.auto_minimize.inactive_since) < delay_ms) continue;
             if (thumbnail.cached_excluded_from_minimize) continue;
             if (!win32.isWindow(thumbnail.source_hwnd)) continue;
 
             animation.showClient(painter.config, thumbnail.source_hwnd, win32.SW_FORCEMINIMIZE);
-            minimized_any = true;
+            has_minimized_any = true;
             slog.info("Auto-minimized {s} (inactive {}ms)", .{ thumbnail.character_name, now.elapsedSince(thumbnail.auto_minimize.inactive_since) });
         }
 
-        if (minimized_any) {
+        if (has_minimized_any) {
             for (painter.thumbnails.items) |*thumbnail| {
                 if (thumbnail.isFocused(painter.active_source_hwnd) and win32.isWindow(thumbnail.source_hwnd)) {
                     // Minimizing the other windows can transiently steal focus from the active one.
@@ -138,8 +138,8 @@ pub fn minimizeNewClient(config: *const Config, source_hwnd: win32.HWND) void {
 
 /// Temporary, not saved to the profile (hotkey and tray action).
 pub fn toggle(painter: *Painter) void {
-    const enabled = !painter.auto_minimize.isEnabled(painter);
-    painter.auto_minimize.enabled_override = .{ .enabled = enabled, .overridden_setting = painter.config.autoMinimize.enabled };
-    slog.info("Auto-minimize toggled: {s}", .{if (enabled) "enabled" else "disabled"});
-    painter.notifyAll(.{ .notification_type = .AutoMinimizeToggle, .state = if (enabled) .on else .off });
+    const is_enabled = !painter.auto_minimize.isEnabled(painter);
+    painter.auto_minimize.enabled_override = .{ .is_enabled = is_enabled, .overridden_setting = painter.config.autoMinimize.enabled };
+    slog.info("Auto-minimize toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
+    painter.notifyAll(.{ .notification_type = .AutoMinimizeToggle, .state = if (is_enabled) .on else .off });
 }

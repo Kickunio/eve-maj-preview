@@ -3,6 +3,7 @@ const std = @import("std");
 const notification = @import("notification.zig");
 
 const Notification = notification.Notification;
+const NotificationType = notification.NotificationType;
 
 /// Classifies an HTML-stripped gamelog line; null means it doesn't warrant a popup.
 /// Field slices borrow from `event_text`; ChatlogMonitor.queueNotification copies them.
@@ -233,11 +234,10 @@ fn parseNoneEvent(message: []const u8) ?Notification {
 }
 
 const testing = std.testing;
-const NotificationType = notification.NotificationType;
 
 fn classifiedType(line: []const u8) ?NotificationType {
-    const n = classify(line) orelse return null;
-    return n.notification_type;
+    const classified = classify(line) orelse return null;
+    return classified.notification_type;
 }
 
 test "classify maps each notify wording to its type" {

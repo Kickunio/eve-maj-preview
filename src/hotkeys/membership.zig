@@ -4,9 +4,10 @@ const win32 = @import("../platform/win32.zig");
 const input = @import("../thumbnail/input.zig");
 const animation = @import("../clients/animation.zig");
 const scout = @import("../clients/scout.zig");
-const HotkeyManager = @import("manager.zig").HotkeyManager;
+const manager_mod = @import("manager.zig");
 const log = @import("../log.zig");
 
+const HotkeyManager = manager_mod.HotkeyManager;
 const slog = log.scoped("hotkeys");
 
 /// Toggles a client in/out of cycling, with visual feedback via a semi-transparent overlay.
