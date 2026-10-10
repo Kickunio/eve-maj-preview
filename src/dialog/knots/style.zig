@@ -462,6 +462,8 @@ pub const slider_track: Style = .{ .height = .fixed(6), .background = .{ .color 
 pub const slider_fill: Style = .{ .background = .{ .color = BORDER } };
 /// knots grows the knob and draws a halo around it on hover and drag, both scaled from this width, so it's kept small.
 pub const slider_thumb: Style = .{ .width = .fixed(12), .background = .accent };
+/// A slider's knob in a disabled group: grey, like switch_on_inert.
+pub const slider_thumb_inert: Style = slider_thumb.with(.{ .background = .{ .color = MUTED } });
 
 pub const slider_value: Style = .{ .width = .fixed(48), .font = FONT_MONO, .foreground = .{ .color = TEXT_SECONDARY } };
 

@@ -738,7 +738,7 @@ pub fn slider(context: *ui.Frame, key: ui.Key, value: *f32, min: f32, max: f32, 
         .min = min,
         .max = max,
         .steps = steps,
-        .parts = .{ .track = &style.slider_track, .fill = &style.slider_fill, .thumb = &style.slider_thumb },
+        .parts = .{ .track = &style.slider_track, .fill = &style.slider_fill, .thumb = if (context.ui().inert_depth > 0) &style.slider_thumb_inert else &style.slider_thumb },
     });
     try track.close(context);
     return response.changed;
