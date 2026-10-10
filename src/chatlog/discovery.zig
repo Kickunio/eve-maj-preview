@@ -3,9 +3,10 @@ const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const lines = @import("lines.zig");
 const utf16 = @import("utf16.zig");
-const CharacterIds = @import("character_ids.zig").CharacterIds;
+const character_ids_mod = @import("character_ids.zig");
 const log = @import("../log.zig");
 
+const CharacterIds = character_ids_mod.CharacterIds;
 const slog = log.scoped("chatlog");
 
 /// Files checked by header when a character's ID isn't cached; a live character's log is always among the newest.
@@ -116,7 +117,7 @@ pub const LogFinder = struct {
             return null;
         };
 
-        var best_ts: u64 = 0;
+        var best_timestamp: u64 = 0;
         var best_buf: [NAME_BUF]u8 = undefined;
         var best: []const u8 = "";
 
@@ -126,9 +127,9 @@ pub const LogFinder = struct {
             if (!is_chatlog and std.mem.startsWith(u8, name, "Local_")) continue;
             const file_id = lines.characterIdFromFileName(name) orelse continue;
             if (!std.mem.eql(u8, file_id, id)) continue;
-            const ts = lines.logFileTimestamp(name, is_chatlog);
-            if (ts <= best_ts) continue;
-            best_ts = ts;
+            const timestamp = lines.logFileTimestamp(name, is_chatlog);
+            if (timestamp <= best_timestamp) continue;
+            best_timestamp = timestamp;
             @memcpy(best_buf[0..name.len], name);
             best = best_buf[0..name.len];
         }
@@ -137,13 +138,13 @@ pub const LogFinder = struct {
         return self.joinPath(dir, best);
     }
 
-    const Candidate = struct { ts: u64, name: []u8 };
+    const Candidate = struct { timestamp: u64, name: []u8 };
 
     /// Only the newest MAX_HEADER_CHECKS files are kept while listing, so a huge folder is never sorted or opened wholesale.
     fn findByHeader(self: *LogFinder, dir: []const u8, is_chatlog: bool, character_name: []const u8) ?[]u8 {
         var newest: [MAX_HEADER_CHECKS]Candidate = undefined;
-        var count: usize = 0;
-        defer for (newest[0..count]) |candidate| self.allocator.free(candidate.name);
+        var candidate_count: usize = 0;
+        defer for (newest[0..candidate_count]) |candidate| self.allocator.free(candidate.name);
 
         var files = FileNames.open(self.allocator, dir, if (is_chatlog) "Local_*.txt" else "*.txt") orelse return null;
         defer files.close();
@@ -151,26 +152,26 @@ pub const LogFinder = struct {
             if (!is_chatlog and std.mem.startsWith(u8, name, "Local_")) continue;
             // A client launch writes an ID-less gamelog with no listener, so it can never match.
             if (!is_chatlog and lines.characterIdFromFileName(name) == null) continue;
-            const ts = lines.logFileTimestamp(name, is_chatlog);
-            if (ts == 0) continue;
-            if (count == newest.len and ts <= newest[count - 1].ts) continue;
+            const timestamp = lines.logFileTimestamp(name, is_chatlog);
+            if (timestamp == 0) continue;
+            if (candidate_count == newest.len and timestamp <= newest[candidate_count - 1].timestamp) continue;
 
             const owned = self.allocator.dupe(u8, name) catch |err| {
                 slog.warn("Failed to copy log candidate name '{s}': {}", .{ name, err });
                 continue;
             };
-            if (count == newest.len) {
-                count -= 1;
-                self.allocator.free(newest[count].name);
+            if (candidate_count == newest.len) {
+                candidate_count -= 1;
+                self.allocator.free(newest[candidate_count].name);
             }
             // Newest first.
-            var i = count;
-            while (i > 0 and newest[i - 1].ts < ts) : (i -= 1) newest[i] = newest[i - 1];
-            newest[i] = .{ .ts = ts, .name = owned };
-            count += 1;
+            var i = candidate_count;
+            while (i > 0 and newest[i - 1].timestamp < timestamp) : (i -= 1) newest[i] = newest[i - 1];
+            newest[i] = .{ .timestamp = timestamp, .name = owned };
+            candidate_count += 1;
         }
 
-        for (newest[0..count]) |candidate| {
+        for (newest[0..candidate_count]) |candidate| {
             const path = self.joinPath(dir, candidate.name) orelse continue;
             if (self.isListener(path, is_chatlog, character_name)) {
                 if (lines.characterIdFromFileName(candidate.name)) |id| self.cacheId(character_name, id);
@@ -220,7 +221,7 @@ pub const LogFinder = struct {
 const FileNames = struct {
     handle: win32.HANDLE,
     find_data: win32.WIN32_FIND_DATAW,
-    pending: bool,
+    has_pending: bool,
     name_buf: [NAME_BUF]u8 = undefined,
 
     fn open(allocator: std.mem.Allocator, dir: []const u8, pattern: []const u8) ?FileNames {
@@ -235,7 +236,7 @@ const FileNames = struct {
         };
         defer allocator.free(search_w);
 
-        var files: FileNames = .{ .handle = undefined, .find_data = undefined, .pending = true };
+        var files: FileNames = .{ .handle = undefined, .find_data = undefined, .has_pending = true };
         files.handle = win32.FindFirstFileW(search_w.ptr, &files.find_data);
         // No match at all is also INVALID_HANDLE_VALUE.
         if (files.handle == win32.INVALID_HANDLE_VALUE) return null;
@@ -249,10 +250,10 @@ const FileNames = struct {
     /// Valid until the next call.
     fn next(self: *FileNames) ?[]const u8 {
         while (true) {
-            if (!self.pending) {
+            if (!self.has_pending) {
                 if (win32.FindNextFileW(self.handle, &self.find_data) == win32.FALSE) return null;
             }
-            self.pending = false;
+            self.has_pending = false;
             if (self.find_data.dwFileAttributes & win32.FILE_ATTRIBUTE_DIRECTORY != 0) continue;
             const raw: []const u16 = self.find_data.cFileName[0..];
             const len = std.mem.findScalar(u16, raw, 0) orelse raw.len;
@@ -267,7 +268,10 @@ const FileNames = struct {
 
 /// Null if the folder can't be watched (yet); the caller logs, since it's retried every worker loop.
 fn watchFolder(allocator: std.mem.Allocator, dir: []const u8) ?win32.HANDLE {
-    const dir_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, dir) catch return null;
+    const dir_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, dir) catch |err| {
+        slog.debug("Failed to convert '{s}' to UTF-16 to watch it: {}", .{ dir, err });
+        return null;
+    };
     defer allocator.free(dir_w);
     // Only files being created or renamed, not written to.
     const handle = win32.FindFirstChangeNotificationW(dir_w.ptr, win32.FALSE, win32.FILE_NOTIFY_CHANGE_FILE_NAME);
