@@ -548,7 +548,8 @@ pub const ChatlogMonitor = struct {
             if (activity_mod.parseCombatLine(stripped_text)) |parsed| {
                 // Filtered weapons still count toward DPS but mustn't retrigger Taking Damage.
                 const counts_for_alert = !activity_mod.isWeaponExcluded(parsed.weapon, self.damage_alert_excluded_weapons);
-                tracker.addEntry(file.character_name, .{ parsed.amount, parsed.is_incoming, trackerNowMs(), counts_for_alert }) catch |err| {
+                const hit: activity_mod.CombatWindow.Hit = .{ .amount = parsed.amount, .timestamp_ms = trackerNowMs(), .is_incoming = parsed.is_incoming, .counts_for_alert = counts_for_alert };
+                tracker.addEntry(file.character_name, .{hit}) catch |err| {
                     slog.warn("Failed to record combat entry for '{s}': {}", .{ file.character_name, err });
                 };
             }

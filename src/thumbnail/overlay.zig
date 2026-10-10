@@ -301,6 +301,7 @@ const Fonts = struct {
 const IskPeriod = struct { seconds: f32, suffix: []const u8 };
 
 const Border = struct { show: bool, width: u8, color: u32, style: BorderStyle };
+const BorderFlags = struct { is_focused: bool, hides_all: bool };
 
 pub fn renderSettingsEqual(a: RenderSettings, b: RenderSettings) bool {
     return a.show_thumbnail == b.show_thumbnail and visualEqual(a, b);
@@ -399,7 +400,7 @@ pub fn createRenderSettings(config: *const config_mod.Config, thumbnail: *const 
     const hide_all = !is_visible or thumbnail.cached_hide_thumbnail or active_hidden;
     const show_text = !hide_all and tc.showText;
     const opaque_bgs = tc.applyOpacityToOverlayTexts;
-    const border = resolveBorder(config, thumbnail, state, state_config, is_focused, hide_all);
+    const border = resolveBorder(config, thumbnail, state, state_config, .{ .is_focused = is_focused, .hides_all = hide_all });
     const size = overlaySize(config, thumbnail, dpi_scale);
     const stats = &thumbnail.stats;
     const session_minutes = if (show_text and tc.showSessionTimer) thumbnail.sessionMinutes(win32.Ticks.now()) else null;
@@ -671,8 +672,9 @@ fn resolveTextBgColor(state_config: config_mod.StateVisualConfig, base_color: u3
 }
 
 /// Colour precedence, lowest first: the Active/Inactive base, the state's own override, the newest notification's type while alerting, then the character's own colours.
-fn resolveBorder(config: *const config_mod.Config, thumbnail: *const ThumbnailWindow, state: state_mod.ThumbnailState, state_config: config_mod.StateVisualConfig, is_focused: bool, hide_all: bool) Border {
+fn resolveBorder(config: *const config_mod.Config, thumbnail: *const ThumbnailWindow, state: state_mod.ThumbnailState, state_config: config_mod.StateVisualConfig, flags: BorderFlags) Border {
     const tc = &config.thumbnail;
+    const is_focused = flags.is_focused;
     // Alert builds on Active, being an attention event.
     const focused_look = state == .active or state == .alert;
     // Only the newest notification drives border effects; older entries only add text lines.
@@ -680,7 +682,7 @@ fn resolveBorder(config: *const config_mod.Config, thumbnail: *const ThumbnailWi
 
     // A notification hiding or flashing the border is skipped for the focused character, so it can't fight that character's active border.
     const notification_hides = if (newest) |notification| !is_focused and (!notification.show_border or notification.isFlashOff(win32.Ticks.now())) else false;
-    const show = !hide_all and !notification_hides and (state_config.showBorder orelse (if (focused_look) tc.showBorderWhenFocused else tc.showBorderWhenInactive));
+    const show = !flags.hides_all and !notification_hides and (state_config.showBorder orelse (if (focused_look) tc.showBorderWhenFocused else tc.showBorderWhenInactive));
 
     // With suppress_when_focused, a focused character's alert borders as Active.
     const suppressed = if (newest) |notification| notification.suppress_when_focused and is_focused else false;

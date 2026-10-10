@@ -90,11 +90,14 @@ pub const CycleOrder = struct {
     is_forward: bool,
     remaining_count: usize,
 
-    pub fn init(cursor: ?usize, item_count: usize, is_forward: bool, wraps: bool) CycleOrder {
+    pub const Options = struct { is_forward: bool, wraps: bool = true };
+
+    pub fn init(cursor: ?usize, item_count: usize, options: Options) CycleOrder {
+        const is_forward = options.is_forward;
         const valid_cursor = if (cursor) |position| (if (position < item_count) position else null) else null;
         // Wraps harmlessly when item_count == 0: remaining_count is 0, so next() never steps.
         const before_start = valid_cursor orelse (if (is_forward) item_count -% 1 else 0);
-        const remaining_count = if (wraps) item_count else if (valid_cursor) |position| (if (is_forward) item_count - 1 - position else position) else item_count;
+        const remaining_count = if (options.wraps) item_count else if (valid_cursor) |position| (if (is_forward) item_count - 1 - position else position) else item_count;
         return .{ .index = before_start, .item_count = item_count, .is_forward = is_forward, .remaining_count = remaining_count };
     }
 
@@ -123,7 +126,7 @@ pub fn directionName(is_forward: bool) []const u8 {
 /// Cycles to the next running character sharing this hotkey.
 pub fn activatePerCharacterGroup(manager: *HotkeyManager, group: *bindings.CharacterGroup) void {
     const member_count = group.character_indices.len;
-    var it = CycleOrder.init(group.current_index, member_count, true, true);
+    var it = CycleOrder.init(group.current_index, member_count, .{ .is_forward = true });
     while (it.next()) |member_index| {
         const character_index = group.character_indices[member_index];
         if (character_index >= manager.config.characters.items.len) continue;
@@ -184,7 +187,7 @@ pub fn cycleGroups(manager: *HotkeyManager, group_indices: []const usize, is_for
         }
     }
 
-    var it = CycleOrder.init(found_index, total_count, is_forward, !stops_at_ends);
+    var it = CycleOrder.init(found_index, total_count, .{ .is_forward = is_forward, .wraps = !stops_at_ends });
     while (it.next()) |slot_index| {
         if (slot_index < member_count) {
             const member = chainMember(groups, group_indices, slot_index);
@@ -242,7 +245,7 @@ pub fn cycleExcluded(manager: *HotkeyManager, is_forward: bool) void {
         return;
     }
 
-    var it = CycleOrder.init(manager.cycle.excluded_index, excluded_count, is_forward, true);
+    var it = CycleOrder.init(manager.cycle.excluded_index, excluded_count, .{ .is_forward = is_forward });
     while (it.next()) |name_index| {
         const character_name = excluded_names[name_index];
 
@@ -276,7 +279,7 @@ pub fn cycleNotified(manager: *HotkeyManager, is_forward: bool) void {
     }
 
     const found_index = if (manager.cycle.last_notified_name) |last_name| strings.indexOfString(names.items, last_name) else null;
-    var it = CycleOrder.init(found_index, notified_count, is_forward, true);
+    var it = CycleOrder.init(found_index, notified_count, .{ .is_forward = is_forward });
     while (it.next()) |index| {
         const character_name = names.items[index];
 
@@ -319,7 +322,7 @@ pub fn cycleAllClients(manager: *HotkeyManager, is_forward: bool) void {
     }
 
     const respects_exclusions = manager.liveGlobal().cycleAllClientsRespectExclusions;
-    var it = CycleOrder.init(found_index, window_count, is_forward, true);
+    var it = CycleOrder.init(found_index, window_count, .{ .is_forward = is_forward });
     while (it.next()) |index| {
         const eve_window = windows[order[index]];
         if (scout.isGenericCharacterName(eve_window.character_name)) continue;
@@ -357,7 +360,7 @@ pub fn cycleNotLoggedIn(manager: *HotkeyManager, is_forward: bool) void {
         }
     }
 
-    var it = CycleOrder.init(found_index, hwnd_count, is_forward, true);
+    var it = CycleOrder.init(found_index, hwnd_count, .{ .is_forward = is_forward });
     const index = it.next() orelse return;
     const hwnd = hwnds.items[index];
     slog.info("Cycling {s} to not-logged-in client ({}/{})", .{ directionName(is_forward), index + 1, hwnd_count });

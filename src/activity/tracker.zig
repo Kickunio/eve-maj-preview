@@ -158,10 +158,12 @@ pub const CombatWindow = struct {
         return .{ .ring = .init(window_seconds) };
     }
 
-    /// `counts_for_alert` only gates `last_incoming_hit_ms` (checkDamageAlert's trigger) — the hit is always kept so DPS stays accurate for filtered hits.
-    pub fn addEntry(self: *CombatWindow, amount: u32, is_incoming: bool, timestamp_ms: i64, counts_for_alert: bool) void {
-        self.ring.push(.{ .timestamp_ms = timestamp_ms, .amount = amount, .is_incoming = is_incoming });
-        if (is_incoming and counts_for_alert and timestamp_ms > self.last_incoming_hit_ms) self.last_incoming_hit_ms = timestamp_ms;
+    /// One damage line. `counts_for_alert` only gates `last_incoming_hit_ms` (checkDamageAlert's trigger): the hit is always kept so DPS stays accurate for filtered hits.
+    pub const Hit = struct { amount: u32, timestamp_ms: i64, is_incoming: bool, counts_for_alert: bool = true };
+
+    pub fn addEntry(self: *CombatWindow, hit: Hit) void {
+        self.ring.push(.{ .timestamp_ms = hit.timestamp_ms, .amount = hit.amount, .is_incoming = hit.is_incoming });
+        if (hit.is_incoming and hit.counts_for_alert and hit.timestamp_ms > self.last_incoming_hit_ms) self.last_incoming_hit_ms = hit.timestamp_ms;
     }
 
     /// Fires when incoming damage has landed since the last alert; repeat-rate is the Notifications tab's throttle, not this. Stays silent once combat stops instead of repeating on a timer.
@@ -682,8 +684,8 @@ test "isWeaponExcluded matches case-insensitive substrings and skips blank entri
 
 test "CombatWindow withholds a rate until hits span three seconds, only for a direction with hits" {
     var window: CombatWindow = .init(10);
-    window.addEntry(100, true, 1_000, true);
-    window.addEntry(100, true, 2_000, true);
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 1_000, .is_incoming = true });
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 2_000, .is_incoming = true });
     const dps = window.computeDps(2_000);
     try testing.expect(dps.incoming == null);
     try testing.expectEqual(@as(f32, 0.0), dps.outgoing.?);
@@ -691,9 +693,9 @@ test "CombatWindow withholds a rate until hits span three seconds, only for a di
 
 test "CombatWindow warms up on the hits after the first moment, over the time since" {
     var window: CombatWindow = .init(10);
-    window.addEntry(100, true, 1_000, true);
-    window.addEntry(50, false, 3_000, true);
-    window.addEntry(100, true, 5_000, true);
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 1_000, .is_incoming = true });
+    window.addEntry(.{ .amount = 50, .timestamp_ms = 3_000, .is_incoming = false });
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 5_000, .is_incoming = true });
     const dps = window.computeDps(5_000);
     try testing.expectEqual(@as(f32, 25.0), dps.incoming.?);
     try testing.expectEqual(@as(f32, 12.5), dps.outgoing.?);
@@ -701,7 +703,7 @@ test "CombatWindow warms up on the hits after the first moment, over the time si
 
 test "CombatWindow shows a lone first-second volley over the window after 3 seconds" {
     var window: CombatWindow = .init(10);
-    window.addEntry(100, true, 1_000, true);
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 1_000, .is_incoming = true });
     try testing.expect(window.computeDps(2_000).incoming == null);
     try testing.expectEqual(@as(f32, 10.0), window.computeDps(4_500).incoming.?);
 }
@@ -715,14 +717,14 @@ test "MiningWindow waits for a second cycle after a lone first one" {
 test "CombatWindow rates a streak a window old as its total over the window" {
     var window: CombatWindow = .init(10);
     var t: i64 = 1_000;
-    while (t <= 20_000) : (t += 1_000) window.addEntry(100, true, t, true);
+    while (t <= 20_000) : (t += 1_000) window.addEntry(.{ .amount = 100, .timestamp_ms = t, .is_incoming = true });
     try testing.expectEqual(@as(f32, 100.0), window.computeDps(20_500).incoming.?);
 }
 
 test "CombatWindow reports zero once the last hit leaves the window" {
     var window: CombatWindow = .init(10);
-    window.addEntry(100, true, 1_000, true);
-    window.addEntry(100, true, 5_000, true);
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 1_000, .is_incoming = true });
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 5_000, .is_incoming = true });
     const dps = window.computeDps(15_000);
     try testing.expectEqual(@as(f32, 0.0), dps.incoming.?);
     try testing.expectEqual(@as(f32, 0.0), dps.outgoing.?);
@@ -731,7 +733,7 @@ test "CombatWindow reports zero once the last hit leaves the window" {
 test "CombatWindow keeps only the newest hits once the ring wraps" {
     var window: CombatWindow = .init(10);
     for (0..RING_CAPACITY + 88) |i| {
-        window.addEntry(1, true, 1_000 + @as(i64, @intCast(i)) * 10, true);
+        window.addEntry(.{ .amount = 1, .timestamp_ms = 1_000 + @as(i64, @intCast(i)) * 10, .is_incoming = true });
     }
     try testing.expectEqual(@as(usize, RING_CAPACITY), window.ring.count);
     const newest_ms = 1_000 + @as(i64, RING_CAPACITY + 87) * 10;
@@ -744,14 +746,14 @@ test "CombatWindow alerts once per burst of incoming damage" {
     var window: CombatWindow = .init(10);
     try testing.expect(!window.checkDamageAlert());
 
-    window.addEntry(100, true, 1_000, true);
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 1_000, .is_incoming = true });
     try testing.expect(window.checkDamageAlert());
     try testing.expect(!window.checkDamageAlert());
 
-    window.addEntry(100, true, 2_000, false);
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 2_000, .is_incoming = true, .counts_for_alert = false });
     try testing.expect(!window.checkDamageAlert());
 
-    window.addEntry(100, true, 3_000, true);
+    window.addEntry(.{ .amount = 100, .timestamp_ms = 3_000, .is_incoming = true });
     try testing.expect(window.checkDamageAlert());
 }
 
