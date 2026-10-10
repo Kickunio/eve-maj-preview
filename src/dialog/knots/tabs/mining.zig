@@ -1,4 +1,4 @@
-//! The configuration window's Combat, Mining, Bounty and Resources tabs, whose texts are placed and styled on the Appearance tab's thumbnail preview; main thread only.
+//! The configuration window's Mining tab: the mining overlay's tuning, its alerts and the ore prices; main thread only.
 const std = @import("std");
 const ui = @import("ui");
 const config = @import("../../../config.zig");
@@ -16,23 +16,8 @@ const Text = ui.component.Text;
 /// Ores first, then ice, moon ores and gas.
 const ORE_CATEGORIES = [_][]const u8{ "Ore", "Ice", "Moons", "Gas" };
 
-pub fn showCombat(context: *ui.Frame) !void {
-    try chatlogNotice(context, "Combat");
-    const section = try widgets.openSection(context, "Combat Overlay Settings", "Displays incoming and outgoing DPS below each thumbnail, calculated from EVE gamelogs. Requires chatlog monitoring to be enabled.", &style.section);
-    const ref = session.profile().child("combat");
-    try bind.toggle(context, ref, "enabled", "Enable Text Overlays");
-    const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
-    try bind.number(context, ref, "window_seconds", "Window", .{ .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "The rolling look-back period DPS is averaged over, not how often the number updates.");
-    try bind.number(context, ref, "update_interval_ms", "Update Interval", .{ .ms_as_seconds = true, .unit = "s" });
-    try bind.text(context, ref, "damage_alert_excluded_weapons", "Exclude Weapons", "e.g. Smartbomb, Warp Scrambler");
-    try widgets.hintText(context, .src(@src()), "Case-insensitive, comma-separated name matches. Only suppresses the Taking Damage alert - excluded hits still count toward the DPS shown above.");
-    try options.close(context);
-    try section.close(context);
-}
-
-pub fn showMining(context: *ui.Frame) !void {
-    try chatlogNotice(context, "Mining");
+pub fn show(context: *ui.Frame) !void {
+    try chatlogNotice(context);
     const ref = session.profile().child("mining");
     const section = try widgets.openSection(context, "Mining Overlay Settings", "Displays m3 mined per second on each thumbnail, calculated from EVE gamelogs. Requires chatlog monitoring to be enabled.", &style.section);
     try bind.toggle(context, ref, "enabled", "Enable Text Overlays");
@@ -124,37 +109,7 @@ pub fn setOrePrice(name: []const u8, price: f64) void {
     added.set("price", price);
 }
 
-pub fn showBounty(context: *ui.Frame) !void {
-    try chatlogNotice(context, "Bounty");
-    const section = try widgets.openSection(context, "Bounty Overlay Settings", "Displays ISK bounty payouts per minute/hour on each thumbnail, calculated from EVE gamelogs. Requires chatlog monitoring to be enabled.", &style.section);
-    const ref = session.profile().child("bounty");
-    try bind.toggle(context, ref, "enabled", "Enable Text Overlays");
-    const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
-    try bind.number(context, ref, "window_seconds", "Window", .{ .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "The rolling look-back period the ISK/s rate is averaged over, not how often the number updates.");
-    try bind.number(context, ref, "update_interval_ms", "Update Interval", .{ .ms_as_seconds = true, .unit = "s" });
-    try bind.choice(context, ref, "isk_rate_unit", "ISK Rate Unit");
-    try bind.toggle(context, ref, "show_prefix", "Show ISK: Prefix");
-    try options.close(context);
-    try section.close(context);
-}
-
-pub fn showResources(context: *ui.Frame) !void {
-    const section = try widgets.openSection(context, "Resource Usage Overlay Settings", "Displays each client's CPU%, RAM, and VRAM usage on its thumbnail, sampled directly from Windows rather than from EVE's logs.", &style.section);
-    const ref = session.profile().child("resources");
-    try bind.toggle(context, ref, "enabled", "Enable Text Overlays");
-    const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
-    try bind.toggle(context, ref, "show_cpu", "Show CPU %");
-    try widgets.hintText(context, .src(@src()), "That EVE client process's own usage, not total system CPU.");
-    try bind.toggle(context, ref, "show_ram", "Show RAM");
-    try bind.toggle(context, ref, "show_vram", "Show VRAM");
-    try widgets.hintText(context, .src(@src()), "Only counts video memory that EVE client's own process has allocated, not the GPU's total usage.");
-    try bind.number(context, ref, "update_interval_ms", "Update Interval", .{ .ms_as_seconds = true, .unit = "s" });
-    try options.close(context);
-    try section.close(context);
-}
-
-fn chatlogNotice(context: *ui.Frame, comptime overlay: []const u8) !void {
+fn chatlogNotice(context: *ui.Frame) !void {
     if (session.profile().ptr.chatlog.enabled) return;
-    try widgets.notice(context, .str("knots.overlays.chatlog:" ++ overlay), "The " ++ overlay ++ " overlay requires Log Monitoring enabled to read logs.");
+    try widgets.notice(context, .str("knots.mining.chatlog"), "The Mining overlay requires Log Monitoring enabled to read logs.");
 }

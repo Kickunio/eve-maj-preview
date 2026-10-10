@@ -14,10 +14,13 @@ const Fields = overlay_text.Fields;
 /// The settings struct a chip's fields live in.
 pub const Section = enum { thumbnail, notifications, combat, mining, bounty, resources };
 
-/// One row of a chip's popover.
+/// One row of a chip's popover; number, choice and text rows show only in Advanced Mode, like the tabs they came from.
 pub const PopoverField = union(enum) {
     /// A setting of the chip's section; `disables_color` greys out the text colour while it's on.
     toggle: struct { field: []const u8, label: []const u8, disables_color: bool = false },
+    number: struct { field: []const u8, label: []const u8, unit: []const u8, ms_as_seconds: bool = false, hint: ?[]const u8 = null },
+    choice: struct { field: []const u8, label: []const u8 },
+    text: struct { field: []const u8, label: []const u8, placeholder: []const u8, hint: ?[]const u8 = null },
     /// The chip's text colour.
     color,
     /// Name, size and weight on one row.
@@ -44,6 +47,9 @@ pub const Chip = struct {
 };
 
 const STYLE_ROWS = [_]PopoverField{ .font, .background };
+const WINDOW_HINT = "The rolling look-back period the rate is averaged over, not how often the number updates.";
+const UPDATE_INTERVAL = PopoverField{ .number = .{ .field = "update_interval_ms", .label = "Update Interval", .unit = "s", .ms_as_seconds = true } };
+const COMBAT_WINDOW = PopoverField{ .number = .{ .field = "window_seconds", .label = "Window", .unit = "s", .hint = WINDOW_HINT } };
 
 pub const CHIPS = [_]Chip{
     .{
@@ -125,6 +131,14 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "enabled", .label = "Enable Combat Overlays" } },
             .{ .toggle = .{ .field = "show_incoming", .label = "Show Incoming Damage" } },
             .{ .toggle = .{ .field = "incoming_show_prefix", .label = "Show IN: Prefix" } },
+            COMBAT_WINDOW,
+            UPDATE_INTERVAL,
+            .{ .text = .{
+                .field = "damage_alert_excluded_weapons",
+                .label = "Exclude Weapons",
+                .placeholder = "e.g. Smartbomb, Warp Scrambler",
+                .hint = "Case-insensitive, comma-separated name matches. Only suppresses the Taking Damage alert - excluded hits still count toward the DPS shown.",
+            } },
             .color,
         } ++ STYLE_ROWS),
     },
@@ -141,6 +155,8 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "enabled", .label = "Enable Combat Overlays" } },
             .{ .toggle = .{ .field = "show_outgoing", .label = "Show Outgoing Damage" } },
             .{ .toggle = .{ .field = "outgoing_show_prefix", .label = "Show OUT: Prefix" } },
+            COMBAT_WINDOW,
+            UPDATE_INTERVAL,
             .color,
         } ++ STYLE_ROWS),
     },
@@ -169,6 +185,9 @@ pub const CHIPS = [_]Chip{
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "enabled", .label = "Show Bounty Rate" } },
             .{ .toggle = .{ .field = "show_prefix", .label = "Show ISK: Prefix" } },
+            .{ .number = .{ .field = "window_seconds", .label = "Window", .unit = "s", .hint = WINDOW_HINT } },
+            UPDATE_INTERVAL,
+            .{ .choice = .{ .field = "isk_rate_unit", .label = "ISK Rate Unit" } },
             .color,
         } ++ STYLE_ROWS),
     },
@@ -184,6 +203,7 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "show_cpu", .label = "Show CPU %" } },
             .{ .toggle = .{ .field = "show_ram", .label = "Show RAM" } },
             .{ .toggle = .{ .field = "show_vram", .label = "Show VRAM" } },
+            UPDATE_INTERVAL,
             .color,
         } ++ STYLE_ROWS),
     },
@@ -276,6 +296,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
 
     const was_aligned = widgets.useAlignedRows(true);
     defer _ = widgets.useAlignedRows(was_aligned);
+    const is_advanced = session.global().get("advancedMode");
     var color_disabled = false;
     // Every row after the section's master switch, or the chip's show switch, waits on it.
     var gates: [2]widgets.Group = undefined;
@@ -289,6 +310,15 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
                     gates[gate_count] = try widgets.openGroup(context, .str("knots.chip.gate:" ++ chip.label ++ ":" ++ toggle.field), ref.get(toggle.field));
                     gate_count += 1;
                 }
+            },
+            .number => |number| if (is_advanced) {
+                try bind.number(context, ref, number.field, number.label, .{ .unit = number.unit, .ms_as_seconds = number.ms_as_seconds });
+                if (number.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ number.field), hint);
+            },
+            .choice => |choice| if (is_advanced) try bind.choice(context, ref, choice.field, choice.label),
+            .text => |text| if (is_advanced) {
+                try bind.text(context, ref, text.field, text.label, text.placeholder);
+                if (text.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ text.field), hint);
             },
             .color => {
                 const color = try widgets.openGroup(context, .str("knots.chip.color:" ++ chip.label), !color_disabled);

@@ -25,7 +25,7 @@ const chatlog = @import("tabs/chatlog.zig");
 const notifications = @import("tabs/notifications.zig");
 const event_alerts = @import("tabs/event_alerts.zig");
 const notification_history = @import("tabs/notification_history.zig");
-const overlays = @import("tabs/overlays.zig");
+const mining = @import("tabs/mining.zig");
 const placement = @import("tabs/placement.zig");
 
 const Rect = ui.component.Rect;
@@ -72,10 +72,7 @@ const Tab = enum {
     event_alerts,
     notification_history,
     chatlog,
-    combat,
     mining,
-    bounty,
-    resources,
 
     fn label(tab: Tab) []const u8 {
         return switch (tab) {
@@ -89,10 +86,7 @@ const Tab = enum {
             .event_alerts => "Event Alerts",
             .notification_history => "Notification History",
             .chatlog => "Log Monitoring",
-            .combat => "Combat",
             .mining => "Mining",
-            .bounty => "Bounty",
-            .resources => "Resources",
             .general => "General",
             .about => "About",
             .backups => "Backups",
@@ -105,7 +99,7 @@ const Tab = enum {
             .appearance, .placement => .display,
             .hotkeys, .behavior => .input,
             .notifications, .event_alerts, .notification_history, .chatlog => .alerts,
-            .combat, .mining, .bounty, .resources => .overlays,
+            .mining => .overlays,
             .about, .backups, .general => .app,
         };
     }
@@ -122,10 +116,7 @@ const Tab = enum {
             .event_alerts => .bell,
             .notification_history => .clock,
             .chatlog => .magnifier,
-            .combat => .swords,
             .mining => .diamond,
-            .bounty => .dollar,
-            .resources => .striped_square,
             .general => .gear,
             .about => .star,
             .backups => .reset,
@@ -135,7 +126,7 @@ const Tab = enum {
     /// Shown only in Advanced Mode.
     fn isAdvanced(tab: Tab) bool {
         return switch (tab) {
-            .combat, .mining, .bounty, .resources => true,
+            .mining => true,
             .characters, .hotkey_groups, .appearance, .placement, .hotkeys, .behavior, .notifications, .event_alerts, .notification_history, .chatlog, .general, .about, .backups => false,
         };
     }
@@ -144,7 +135,7 @@ const Tab = enum {
     fn needsThumbnails(tab: Tab) bool {
         return switch (tab) {
             .placement => true,
-            .characters, .hotkey_groups, .appearance, .hotkeys, .behavior, .notifications, .event_alerts, .notification_history, .chatlog, .combat, .mining, .bounty, .resources, .general, .about, .backups => false,
+            .characters, .hotkey_groups, .appearance, .hotkeys, .behavior, .notifications, .event_alerts, .notification_history, .chatlog, .mining, .general, .about, .backups => false,
         };
     }
 
@@ -153,7 +144,7 @@ const Tab = enum {
         return switch (tab) {
             .characters, .hotkey_groups, .event_alerts => true,
             .placement => placement.fillsWindow(),
-            .appearance, .hotkeys, .behavior, .notifications, .notification_history, .chatlog, .combat, .mining, .bounty, .resources, .general, .about, .backups => false,
+            .appearance, .hotkeys, .behavior, .notifications, .notification_history, .chatlog, .mining, .general, .about, .backups => false,
         };
     }
 
@@ -256,10 +247,7 @@ fn showTab(context: *ui.Frame, tab: Tab) !void {
         .notifications => try notifications.show(context),
         .event_alerts => try event_alerts.show(context),
         .notification_history => try notification_history.show(context),
-        .combat => try overlays.showCombat(context),
-        .mining => try overlays.showMining(context),
-        .bounty => try overlays.showBounty(context),
-        .resources => try overlays.showResources(context),
+        .mining => try mining.show(context),
         .general => try general.show(context),
         .hotkeys => try hotkeys.show(context),
         .hotkey_groups => try hotkey_groups.show(context),

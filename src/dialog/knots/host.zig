@@ -26,7 +26,7 @@ const lang = @import("lang.zig");
 const search = @import("search.zig");
 const import_dialog = @import("import_dialog.zig");
 const update_notice = @import("update_notice.zig");
-const overlays = @import("tabs/overlays.zig");
+const mining = @import("tabs/mining.zig");
 const portraits = @import("portraits.zig");
 const prices = @import("prices.zig");
 const behavior = @import("tabs/behavior.zig");
@@ -391,7 +391,7 @@ fn applyPrices(lParam: win32.LPARAM) void {
         status.show(.failure, "Failed to fetch prices from ESI.", .{});
         return;
     }
-    for (fetched.prices) |price| overlays.setOrePrice(price.name, price.price);
+    for (fetched.prices) |price| mining.setOrePrice(price.name, price.price);
     status.show(if (fetched.prices.len > 0) .success else .failure, "Updated {d} of {d} price(s)", .{ fetched.prices.len, prices.NAMES.len });
 }
 
