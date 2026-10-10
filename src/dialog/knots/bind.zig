@@ -186,6 +186,15 @@ pub fn optionalValueBox(context: *ui.Frame, key: ui.Key, value: ?f64, placeholde
     return typed;
 }
 
+/// optionalValueBox with `unit` inside the box, e.g. "px"; draws its frame and unit with `key` indices 5 and 6.
+pub fn optionalUnitValueBox(context: *ui.Frame, key: ui.Key, value: ?f64, placeholder: []const u8, unit: []const u8) !Typed {
+    const field_rect = try openUnitField(context, key.indexed(6), key);
+    const typed = try optionalValueBox(context, key, value, placeholder, &style.unit_field_input);
+    try context.e(Text{ .selectable = false, .key = key.indexed(5), .content = unit, .style = &style.muted_text });
+    try field_rect.close(context);
+    return typed;
+}
+
 /// A number box for a value that isn't one setting, e.g. an ore's price override; returns what was typed once the box loses focus.
 pub fn valueBox(context: *ui.Frame, key: ui.Key, value: f64, box_style: *const ui.Style) !?f64 {
     const state = try textState(key);

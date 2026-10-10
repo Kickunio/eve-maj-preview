@@ -79,9 +79,9 @@ fn panelSettings(context: *ui.Frame, ref: DisplayRef) !void {
 
     const layout = try widgets.openFieldGroup(context, .str("knots.notification_history.layout"), "Layout");
     const size = try widgets.openBinding(context, .src(@src()), "Size");
-    try bind.numberBox(context, ref, "notifInfoPanelWidth", .{});
+    try bind.unitNumberBox(context, ref, "notifInfoPanelWidth", "px", .{});
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "\u{00D7}", .style = &style.muted_text });
-    try bind.numberBox(context, ref, "notifInfoPanelHeight", .{});
+    try bind.unitNumberBox(context, ref, "notifInfoPanelHeight", "px", .{});
     try size.close(context);
     try bind.number(context, ref, "notifInfoPanelMaxRows", "Max Rows", .{});
     try bind.slider(context, ref, "notifInfoPanelOpacity", "Opacity", .{ .display = .percent_of_255 });

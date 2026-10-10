@@ -72,11 +72,11 @@ fn dimensions(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
         thumbnail.set("width", @intFromFloat(@round(width)));
         thumbnail.set("height", @intFromFloat(@round(width / ratio)));
     }
-    try bind.numberBox(context, thumbnail, "width", .{});
+    try bind.unitNumberBox(context, thumbnail, "width", "px", .{});
     try context.e(Text{ .selectable = false, .key = .str("knots.thumbnails.size.x"), .content = "\u{00D7}", .style = &style.muted_text });
-    try bind.numberBox(context, thumbnail, "height", .{});
+    try bind.unitNumberBox(context, thumbnail, "height", "px", .{});
     try row.close(context);
-    try widgets.hintText(context, .src(@src()), "Width \u{00D7} height in pixels. The slider keeps the current aspect ratio; type into the boxes for any size.");
+    try widgets.hintText(context, .src(@src()), "The slider keeps the current aspect ratio; type into the boxes for any size.");
     try section.close(context);
 }
 

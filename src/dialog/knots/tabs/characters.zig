@@ -197,13 +197,13 @@ fn thumbnailSize(context: *ui.Frame, character: CharacterRef) !void {
     try context.e(Rect{ .key = .src(@src()), .style = &style.spacer });
     const size = character.get("thumbnailSize") orelse config.CharacterThumbnailSizeConfig{};
     var next = size;
-    switch (try bind.optionalValueBox(context, ui.Key.str("knots.character.width").indexed(character.index), toFloat(size.width), try std.fmt.allocPrint(arena, "{d}", .{inherited.width}), &style.number_input)) {
+    switch (try bind.optionalUnitValueBox(context, ui.Key.str("knots.character.width").indexed(character.index), toFloat(size.width), try std.fmt.allocPrint(arena, "{d}", .{inherited.width}), "px")) {
         .unchanged => {},
         .cleared => next.width = null,
         .value => |width| next.width = @intFromFloat(@round(width)),
     }
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "\u{00D7}", .style = &style.muted_text });
-    switch (try bind.optionalValueBox(context, ui.Key.str("knots.character.height").indexed(character.index), toFloat(size.height), try std.fmt.allocPrint(arena, "{d}", .{inherited.height}), &style.number_input)) {
+    switch (try bind.optionalUnitValueBox(context, ui.Key.str("knots.character.height").indexed(character.index), toFloat(size.height), try std.fmt.allocPrint(arena, "{d}", .{inherited.height}), "px")) {
         .unchanged => {},
         .cleared => next.height = null,
         .value => |height| next.height = @intFromFloat(@round(height)),
