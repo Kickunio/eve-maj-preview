@@ -164,7 +164,7 @@ fn mainImpl(init: std.process.Init) !void {
     g_allocator = init.gpa;
     knots_host.init(g_allocator, g_io);
     defer knots_host.deinit();
-    g_trackers = .{ .allocator = g_allocator, .io = g_io };
+    g_trackers = .init(g_allocator, g_io);
 
     setCwdToExeDir();
     config.migrateLegacyLayout();

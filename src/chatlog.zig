@@ -4,6 +4,7 @@ const win32 = @import("platform/win32.zig");
 const notification_mod = @import("notifications/notification.zig");
 const gamelog_events = @import("notifications/gamelog_events.zig");
 const activity_mod = @import("activity/tracker.zig");
+const activity_lines = @import("activity/lines.zig");
 const scout = @import("clients/scout.zig");
 const painter = @import("painter.zig");
 const config = @import("config.zig");
@@ -541,13 +542,13 @@ pub const ChatlogMonitor = struct {
     /// Feeds the DPS tracker and queues any notification the line warrants.
     fn handleGamelogEvent(self: *ChatlogMonitor, file: *LogFile, event_text: []const u8) void {
         // Stripped once for both uses; this is the highest-volume line type.
-        var stripped_buf: [512]u8 = undefined;
-        const stripped_text = activity_mod.stripHtml(event_text, &stripped_buf);
+        var stripped_buf: [activity_lines.MAX_STRIPPED_LENGTH]u8 = undefined;
+        const stripped_text = activity_lines.stripHtml(event_text, &stripped_buf);
 
         if (self.combat_tracker) |tracker| {
-            if (activity_mod.parseCombatLine(stripped_text)) |parsed| {
+            if (activity_lines.parseCombatLine(stripped_text)) |parsed| {
                 // Filtered weapons still count toward DPS but mustn't retrigger Taking Damage.
-                const counts_for_alert = !activity_mod.isWeaponExcluded(parsed.weapon, self.damage_alert_excluded_weapons);
+                const counts_for_alert = !activity_lines.isWeaponExcluded(parsed.weapon, self.damage_alert_excluded_weapons);
                 const hit: activity_mod.CombatWindow.Hit = .{ .amount = parsed.amount, .timestamp_ms = trackerNowMs(), .is_incoming = parsed.is_incoming, .counts_for_alert = counts_for_alert };
                 tracker.addEntry(file.character_name, .{hit}) catch |err| {
                     slog.warn("Failed to record combat entry for '{s}': {}", .{ file.character_name, err });
@@ -563,7 +564,7 @@ pub const ChatlogMonitor = struct {
     /// A missing price counts as 0 ISK; only a missing volume drops the yield, since m3 can't be computed without it.
     fn handleMiningEvent(self: *ChatlogMonitor, file: *LogFile, event_text: []const u8) void {
         const tracker = self.mining_tracker orelse return;
-        const parsed = activity_mod.parseMiningLine(event_text) orelse return;
+        const parsed = activity_lines.parseMiningLine(event_text) orelse return;
         const global_settings = self.global_settings orelse return;
         const volume_per_unit = global_settings.oreVolume(parsed.name()) orelse {
             slog.warn("Unknown ore, ice or gas '{s}' in mining line, dropping yield", .{parsed.name()});
@@ -580,7 +581,7 @@ pub const ChatlogMonitor = struct {
 
     fn handleBountyEvent(self: *ChatlogMonitor, file: *LogFile, event_text: []const u8) void {
         const tracker = self.bounty_tracker orelse return;
-        const isk = activity_mod.parseBountyLine(event_text) orelse return;
+        const isk = activity_lines.parseBountyLine(event_text) orelse return;
         tracker.addEntry(file.character_name, .{ isk, trackerNowMs() }) catch |err| {
             slog.warn("Failed to record bounty entry for '{s}': {}", .{ file.character_name, err });
         };

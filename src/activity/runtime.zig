@@ -29,8 +29,11 @@ pub const Trackers = struct {
     last_resource_update_ms: i64 = 0,
     last_alert_check_ms: i64 = 0,
 
-    /// Matches the trackers to `config`, keeping each one that stays enabled with its history while a monitor feeds it, and hands them to `monitor`, whose worker thread must be stopped.
-    /// Fail-soft: a tracker that can't be created is logged and left off rather than aborting startup or a reload.
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) Trackers {
+        return .{ .allocator = allocator, .io = io };
+    }
+
+    /// Matches the trackers to `config`, keeping enabled ones' history, and hands them to `monitor` (worker stopped); a tracker that can't be created is logged and left off.
     pub fn setup(self: *Trackers, config: *const Config, monitor: ?*chatlog.ChatlogMonitor) void {
         if (monitor == null) {
             self.destroy(tracker_mod.CombatTracker, &self.combat, "Combat DPS");
@@ -42,11 +45,11 @@ pub const Trackers = struct {
         self.reconcile(tracker_mod.BountyTracker, &self.bounty, config.bounty.enabled, config.bounty.window_seconds, "Bounty rate");
         self.setupResources(config.resources.enabled);
 
-        if (monitor) |m| {
-            m.combat_tracker = self.combat;
-            m.mining_tracker = self.mining;
-            m.bounty_tracker = self.bounty;
-            m.setDamageAlertExcludedWeapons(config.combat.damage_alert_excluded_weapons);
+        if (monitor) |active_monitor| {
+            active_monitor.combat_tracker = self.combat;
+            active_monitor.mining_tracker = self.mining;
+            active_monitor.bounty_tracker = self.bounty;
+            active_monitor.setDamageAlertExcludedWeapons(config.combat.damage_alert_excluded_weapons);
         }
     }
 
@@ -93,12 +96,12 @@ pub const Trackers = struct {
         slog.debug("Resource usage tracking enabled", .{});
     }
 
-    fn destroy(self: *Trackers, comptime T: type, slot: *?*T, kind: ?[]const u8) void {
+    fn destroy(self: *Trackers, comptime T: type, slot: *?*T, label: ?[]const u8) void {
         const tracker = slot.* orelse return;
         slot.* = null;
         tracker.deinit();
         self.allocator.destroy(tracker);
-        if (kind) |k| slog.debug("Cleaned up {s} tracker", .{k});
+        if (label) |name| slog.debug("Cleaned up {s} tracker", .{name});
     }
 
     /// Pushes each enabled tracker's values into the painter at its configured interval, checks alerts every ALERT_CHECK_INTERVAL_MS, then redraws what changed once.
@@ -114,10 +117,10 @@ pub const Trackers = struct {
         }
 
         self.setupResources(config.resources.enabled);
-        if (self.resources) |t| {
-            if (schedule.isDue(now_ms - self.last_resource_update_ms, @intCast(config.resources.update_interval_ms), tick_interval_ms)) {
+        if (self.resources) |tracker| {
+            if (schedule.isDue(now_ms - self.last_resource_update_ms, config.resources.update_interval_ms, tick_interval_ms)) {
                 self.last_resource_update_ms = now_ms;
-                pushResources(t, windows, now_ms);
+                pushResources(tracker, windows, now_ms);
             }
         }
 
@@ -153,9 +156,9 @@ fn pushThrottled(
     now_ms: i64,
     tick_interval_ms: i64,
     last_update_ms: *i64,
-    interval_ms: anytype,
+    interval_ms: u32,
 ) void {
-    if (!schedule.isDue(now_ms - last_update_ms.*, @intCast(interval_ms), tick_interval_ms)) return;
+    if (!schedule.isDue(now_ms - last_update_ms.*, interval_ms, tick_interval_ms)) return;
     last_update_ms.* = now_ms;
 
     const painter = painter_mod.g_painter_ptr orelse return;
