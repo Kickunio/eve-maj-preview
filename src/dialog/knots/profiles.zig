@@ -148,9 +148,9 @@ fn run(action: Action, name: []const u8, accent: ?u32) !void {
         .delete => {
             // Checked before any switch, which a refused delete mustn't cause.
             try config.checkProfileDeletable(name);
-            const running = std.mem.eql(u8, name, main.g_store.live.profile_name);
-            if (running or std.mem.eql(u8, name, session.profile().ptr.profile_name)) try session.editProfile(main.g_store.live.profile_name);
-            if (running) main.switchProfile(config.DEFAULT_PROFILE);
+            const is_running = std.mem.eql(u8, name, main.g_store.live.profile_name);
+            if (is_running or std.mem.eql(u8, name, session.profile().ptr.profile_name)) try session.editProfile(main.g_store.live.profile_name);
+            if (is_running) main.switchProfile(config.DEFAULT_PROFILE);
             try config.deleteProfileToBackup(g_allocator, name);
             status.show(.success, "Deleted profile '{s}' (kept as a backup)", .{displayName(name)});
         },

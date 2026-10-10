@@ -40,9 +40,9 @@ const Confirm = enum { delete, reset };
 var g_allocator: std.mem.Allocator = undefined;
 /// The profile picked in the dropdown, waiting on Make It Live / Just Edit. Owned; freed when the prompt closes.
 var g_switch_target: ?[]u8 = null;
-var g_switch_open: bool = false;
+var g_is_switch_open: bool = false;
 var g_name_prompt: ?NamePrompt = null;
-var g_name_open: bool = false;
+var g_is_name_open: bool = false;
 /// The name being typed. Owned; freed in deinit.
 var g_name_text: std.ArrayList(u8) = .empty;
 var g_name_color: Color = undefined;
@@ -50,7 +50,7 @@ var g_name_color: Color = undefined;
 var g_restore_backup: ?[]u8 = null;
 var g_restore_label: ?[]u8 = null;
 var g_confirm: ?Confirm = null;
-var g_confirm_open: bool = false;
+var g_is_confirm_open: bool = false;
 
 pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
@@ -63,14 +63,14 @@ pub fn deinit() void {
     g_name_text = .empty;
     clearRestore();
     g_name_prompt = null;
-    g_name_open = false;
+    g_is_name_open = false;
     g_confirm = null;
-    g_confirm_open = false;
+    g_is_confirm_open = false;
 }
 
 /// The accent picked in the name prompt, previewed on the window until it closes.
 pub fn previewAccent() ?u32 {
-    if (!g_name_open) return null;
+    if (!g_is_name_open) return null;
     return widgets.argbFromColor(g_name_color);
 }
 
@@ -92,8 +92,13 @@ pub fn show(context: *ui.Frame) !void {
     const editing = session.profile().ptr.profile_name;
     if (try iconButton(context, .add, false)) openNamePrompt(.create, "");
     if (try iconButton(context, .copy, false)) {
+        const name = profiles.displayName(editing);
         var buf: [profile_files.MAX_NAME_LEN + COPY_SUFFIX.len]u8 = undefined;
-        openNamePrompt(.copy, std.fmt.bufPrint(&buf, "{s}{s}", .{ profiles.displayName(editing), COPY_SUFFIX }) catch profiles.displayName(editing));
+        const suggested = std.fmt.bufPrint(&buf, "{s}{s}", .{ name, COPY_SUFFIX }) catch |err| blk: {
+            slog.warn("Failed to suggest a name for the copy of '{s}': {}", .{ name, err });
+            break :blk name;
+        };
+        openNamePrompt(.copy, suggested);
     }
     const is_default = std.mem.eql(u8, editing, config.DEFAULT_PROFILE);
     if (try iconButton(context, .delete, is_default)) openConfirm(.delete);
@@ -143,16 +148,16 @@ fn profileSelect(context: *ui.Frame) !void {
 fn openSwitchPrompt(name: []u8) void {
     clearSwitchTarget();
     g_switch_target = name;
-    g_switch_open = true;
+    g_is_switch_open = true;
 }
 
 fn switchPrompt(context: *ui.Frame) !void {
     const target = g_switch_target orelse return;
-    if (!g_switch_open) {
+    if (!g_is_switch_open) {
         clearSwitchTarget();
         return;
     }
-    const dialog = widgets.modal(.src(@src()), &g_switch_open, &style.modal);
+    const dialog = widgets.modal(.src(@src()), &g_is_switch_open, &style.modal);
     _ = try dialog.open(context);
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Switch Profile?", .style = &style.heading });
     try context.e(Text{
@@ -168,14 +173,14 @@ fn switchPrompt(context: *ui.Frame) !void {
     try widgets.hintText(context, .src(@src()), hint);
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
-    if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_switch_open = false;
+    if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_is_switch_open = false;
     if (try modalButton(context, .src(@src()), "Just Edit", &style.plain_button)) {
         profiles.request(.edit, target, null);
-        g_switch_open = false;
+        g_is_switch_open = false;
     }
     if (try modalButton(context, .src(@src()), "Make It Live", &style.primary_button)) {
         profiles.request(.make_live, target, null);
-        g_switch_open = false;
+        g_is_switch_open = false;
     }
     try actions.close(context);
     try dialog.close(context);
@@ -192,16 +197,16 @@ fn openNamePrompt(prompt: NamePrompt, initial: []const u8) void {
         .copy => session.profile().ptr.accentColor,
     });
     g_name_prompt = prompt;
-    g_name_open = true;
+    g_is_name_open = true;
 }
 
 fn namePrompt(context: *ui.Frame) !void {
     const prompt = g_name_prompt orelse return;
-    if (!g_name_open) {
+    if (!g_is_name_open) {
         g_name_prompt = null;
         return;
     }
-    const dialog = widgets.modal(.src(@src()), &g_name_open, &style.modal);
+    const dialog = widgets.modal(.src(@src()), &g_is_name_open, &style.modal);
     _ = try dialog.open(context);
     try context.e(Text{
         .selectable = false,
@@ -221,7 +226,7 @@ fn namePrompt(context: *ui.Frame) !void {
     try widgets.hintText(context, .src(@src()), "Letters, digits, spaces, '-' and '_', up to 16 characters. The colour tints this window while the profile is edited.");
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
-    if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_name_open = false;
+    if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_is_name_open = false;
     if (try modalButton(context, .src(@src()), "OK", &style.primary_button)) submitName(prompt);
     try actions.close(context);
     try dialog.close(context);
@@ -229,7 +234,8 @@ fn namePrompt(context: *ui.Frame) !void {
 
 fn submitName(prompt: NamePrompt) void {
     const typed = std.mem.trim(u8, g_name_text.items, " ");
-    const file_name = config.profileFileName(g_allocator, typed) catch {
+    const file_name = config.profileFileName(g_allocator, typed) catch |err| {
+        slog.warn("Failed to name the profile '{s}': {}", .{ typed, err });
         status.show(.failure, "'{s}' isn't a valid profile name: use letters, digits, spaces, '-' and '_', up to 16 characters", .{typed});
         return;
     };
@@ -240,7 +246,7 @@ fn submitName(prompt: NamePrompt) void {
         .copy => profiles.request(.copy, file_name, accent),
         .restore => if (g_restore_backup) |backup| profiles.requestRestore(file_name, backup, accent),
     }
-    g_name_open = false;
+    g_is_name_open = false;
 }
 
 /// From the Import dialog: names the profile `backup` (a backup file name) is restored as, starting from `display_name`.
@@ -267,17 +273,17 @@ fn clearRestore() void {
 
 fn openConfirm(confirm: Confirm) void {
     g_confirm = confirm;
-    g_confirm_open = true;
+    g_is_confirm_open = true;
 }
 
 fn confirmPrompt(context: *ui.Frame) !void {
     const confirm = g_confirm orelse return;
-    if (!g_confirm_open) {
+    if (!g_is_confirm_open) {
         g_confirm = null;
         return;
     }
     const name = session.profile().ptr.profile_name;
-    const dialog = widgets.modal(.src(@src()), &g_confirm_open, &style.modal);
+    const dialog = widgets.modal(.src(@src()), &g_is_confirm_open, &style.modal);
     _ = try dialog.open(context);
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = switch (confirm) {
         .delete => "Delete Profile?",
@@ -294,7 +300,7 @@ fn confirmPrompt(context: *ui.Frame) !void {
     });
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
-    if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_confirm_open = false;
+    if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_is_confirm_open = false;
     if (try modalButton(context, .src(@src()), switch (confirm) {
         .delete => "Delete",
         .reset => "Reset",
@@ -303,7 +309,7 @@ fn confirmPrompt(context: *ui.Frame) !void {
             .delete => .delete,
             .reset => .reset,
         }, name, null);
-        g_confirm_open = false;
+        g_is_confirm_open = false;
     }
     try actions.close(context);
     try dialog.close(context);
@@ -321,13 +327,13 @@ fn clearSwitchTarget() void {
 }
 
 /// Returns whether it was clicked; hovering it names what it does.
-fn iconButton(context: *ui.Frame, icon: Icon, disabled: bool) !bool {
+fn iconButton(context: *ui.Frame, icon: Icon, is_disabled: bool) !bool {
     const tip = Tooltip{ .key = ui.Key.str("knots.header.icon.tip").indexed(@backingInt(icon)), .content = tooltip(icon) };
     _ = try tip.open(context);
     const button = Button{
         .key = ui.Key.str("knots.header.icon").indexed(@backingInt(icon)),
-        .disabled = disabled,
-        .style = if (disabled) &style.icon_button_disabled else switch (icon) {
+        .disabled = is_disabled,
+        .style = if (is_disabled) &style.icon_button_disabled else switch (icon) {
             .add => &style.icon_button_add,
             .copy => &style.icon_button,
             .delete => &style.icon_button_danger,
@@ -336,7 +342,7 @@ fn iconButton(context: *ui.Frame, icon: Icon, disabled: bool) !bool {
         },
     };
     const response = try button.openResponse(context);
-    const tint: Color = if (disabled)
+    const tint: Color = if (is_disabled)
         style.BORDER_STRONG
     else if (response.hovered) switch (icon) {
         .add => style.SUCCESS,
@@ -360,7 +366,7 @@ fn iconButton(context: *ui.Frame, icon: Icon, disabled: bool) !bool {
     });
     try button.close(context);
     try tip.close(context);
-    return response.clicked and !disabled;
+    return response.clicked and !is_disabled;
 }
 
 fn tooltip(icon: Icon) []const u8 {
