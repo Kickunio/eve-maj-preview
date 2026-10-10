@@ -429,7 +429,7 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
         win32.WM_HOTKEYS_STATE_CHANGED => {
             if (painter.g_painter_ptr) |painter_ptr| {
                 if (hotkeys.g_hotkey_manager_ptr) |manager| {
-                    painter_ptr.notifyAll(.{ .ntype = .HotkeySuspend, .state = if (manager.areHotkeysSuspended()) .suspended else .resumed });
+                    painter_ptr.notifyAll(.{ .notification_type = .HotkeySuspend, .state = if (manager.areHotkeysSuspended()) .suspended else .resumed });
                 }
             }
             return 0;
@@ -671,7 +671,7 @@ fn reloadWithProfile(new_profile_name: []const u8, global_draft: ?*config.Global
     if (profile_changed) {
         const name = g_store.live.profile_name;
         const display_name = if (std.mem.endsWith(u8, name, ".json")) name[0 .. name.len - ".json".len] else name;
-        if (painter.g_painter_ptr) |painter_ptr| painter_ptr.notifyAll(.{ .ntype = .ProfileSwitch, .target = display_name });
+        if (painter.g_painter_ptr) |painter_ptr| painter_ptr.notifyAll(.{ .notification_type = .ProfileSwitch, .target = display_name });
     }
 
     slog.info("=== Profile reload complete: {s} ===", .{new_profile_name});

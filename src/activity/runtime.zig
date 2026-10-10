@@ -130,14 +130,14 @@ pub const Trackers = struct {
         const stopped_window_ms: i64 = @as(i64, config.mining.stopped_alert_window_seconds) * std.time.ms_per_s;
         for (windows) |eve_window| {
             if (self.combat) |combat| {
-                if (combat.query(eve_window.character_name, tracker_mod.CombatWindow.checkDamageAlert, .{}, false)) painter.notify(eve_window.hwnd, .{ .ntype = .TakingDamage });
+                if (combat.query(eve_window.character_name, tracker_mod.CombatWindow.checkDamageAlert, .{}, false)) painter.notify(eve_window.hwnd, .{ .notification_type = .TakingDamage });
             }
             if (self.mining) |mining| {
                 if (mining.query(eve_window.character_name, tracker_mod.MiningWindow.checkIdleAlert, .{ now_ms, idle_window_ms, config.mining.idle_alert_threshold }, false)) {
-                    painter.notify(eve_window.hwnd, .{ .ntype = .MiningIdle });
+                    painter.notify(eve_window.hwnd, .{ .notification_type = .MiningIdle });
                 }
                 if (mining.query(eve_window.character_name, tracker_mod.MiningWindow.checkStoppedAlert, .{ now_ms, stopped_window_ms }, false)) {
-                    painter.notify(eve_window.hwnd, .{ .ntype = .MiningStopped });
+                    painter.notify(eve_window.hwnd, .{ .notification_type = .MiningStopped });
                 }
             }
         }

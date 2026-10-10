@@ -71,7 +71,7 @@ pub fn check(painter: *Painter, now: win32.Ticks) void {
         if (thumb.travel.alert_fired) continue;
 
         thumb.travel.alert_fired = true;
-        painter.notify(thumb.source_hwnd, .{ .ntype = .TravelLeftBehind, .source = thumb.system_name, .target = group_system });
+        painter.notify(thumb.source_hwnd, .{ .notification_type = .TravelLeftBehind, .source = thumb.system_name, .target = group_system });
     }
 }
 

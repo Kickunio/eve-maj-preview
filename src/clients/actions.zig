@@ -84,7 +84,7 @@ pub fn moveAllClientsToSavedPositions(eve_windows: []const scout.EveWindow, conf
         if (!eve_window.is_eve_client or config.isExcludedFromAutoMove(eve_window.character_name)) continue;
         const position = config.getCharacterWindowPosition(eve_window.character_name) orelse continue;
         moveClientToPosition(config, eve_window.hwnd, position);
-        painter.notify(eve_window.hwnd, .{ .ntype = .SavedPositionMove });
+        painter.notify(eve_window.hwnd, .{ .notification_type = .SavedPositionMove });
         moved_count += 1;
         slog.debug("Moved {s} to saved position ({}, {})", .{ eve_window.character_name, position.x, position.y });
     }

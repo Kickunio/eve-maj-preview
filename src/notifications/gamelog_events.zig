@@ -75,7 +75,7 @@ fn nonEmpty(text: []const u8) ?[]const u8 {
 fn genericEvent(message: []const u8) ?Notification {
     const cleaned = std.mem.trim(u8, message, " \t\r\n.");
     if (cleaned.len == 0) return null;
-    return .{ .ntype = .Generic, .source = cleaned };
+    return .{ .notification_type = .Generic, .source = cleaned };
 }
 
 fn parseQuestionEvent(message: []const u8) ?Notification {
@@ -83,7 +83,7 @@ fn parseQuestionEvent(message: []const u8) ?Notification {
 
     // "<a href...>NAME</a> wants you to join their fleet, do you accept?"
     if (std.mem.find(u8, trimmed, "wants you to join their fleet")) |_| {
-        return .{ .ntype = .FleetInvite, .source = textBefore(trimmed, " wants you to join their fleet") };
+        return .{ .notification_type = .FleetInvite, .source = textBefore(trimmed, " wants you to join their fleet") };
     }
 
     return null;
@@ -94,102 +94,102 @@ fn parseNotifyEvent(message: []const u8) ?Notification {
 
     // "Following [leader] in warp"
     if (std.mem.startsWith(u8, trimmed, "Following ") and std.mem.find(u8, trimmed, " in warp") != null) {
-        return .{ .ntype = .FleetFollow, .source = textBetween(trimmed, "Following ", " in warp") };
+        return .{ .notification_type = .FleetFollow, .source = textBetween(trimmed, "Following ", " in warp") };
     }
 
     // "Regrouping to [leader]"
     if (std.mem.find(u8, trimmed, "Regrouping to ") != null) {
-        return .{ .ntype = .FleetRegroup, .source = textAfter(trimmed, "Regrouping to ") };
+        return .{ .notification_type = .FleetRegroup, .source = textAfter(trimmed, "Regrouping to ") };
     }
 
     if (std.mem.find(u8, trimmed, "Your fleet is disbanding") != null) {
-        return .{ .ntype = .FleetDisband };
+        return .{ .notification_type = .FleetDisband };
     }
 
     if (std.mem.find(u8, trimmed, "Starting clone jumping") != null) {
-        return .{ .ntype = .JumpCloning };
+        return .{ .notification_type = .JumpCloning };
     }
 
     // "Successfully compressed [ore] into [count] [compressed]"
     if (std.mem.find(u8, trimmed, "Successfully compressed") != null) {
-        return .{ .ntype = .MiningCompression, .source = textBetween(trimmed, "compressed ", " into "), .target = textAfter(trimmed, " into ") };
+        return .{ .notification_type = .MiningCompression, .source = textBetween(trimmed, "compressed ", " into "), .target = textAfter(trimmed, " into ") };
     }
 
     // "[miner] deactivates as it finds the resource it was harvesting a pale shadow of its former glory."
     if (std.mem.find(u8, trimmed, "a pale shadow of its former glory") != null) {
-        return .{ .ntype = .AsteroidDepleted, .source = withoutYour(textBefore(trimmed, " deactivates as it finds")) };
+        return .{ .notification_type = .AsteroidDepleted, .source = withoutYour(textBefore(trimmed, " deactivates as it finds")) };
     }
 
     // "Your [module] has completed operations. Ship's cargo hold is full."
     if (std.mem.find(u8, trimmed, "cargo hold is full") != null) {
-        return .{ .ntype = .CargoFull, .source = withoutYour(textBefore(trimmed, " has completed operations")) };
+        return .{ .notification_type = .CargoFull, .source = withoutYour(textBefore(trimmed, " has completed operations")) };
     }
 
     // Checked before the proximity decloak below, whose wording this also contains.
     if (std.mem.find(u8, trimmed, "cloak deactivates") != null and
         std.mem.find(u8, trimmed, "Mobile Observatory") != null)
     {
-        return .{ .ntype = .ObservatoryDecloak };
+        return .{ .notification_type = .ObservatoryDecloak };
     }
 
     // "Your cloak deactivates due to proximity to a nearby [source]"
     if (std.mem.find(u8, trimmed, "cloak deactivates") != null) {
-        return .{ .ntype = .Decloak, .source = withoutPrefix(textAfter(trimmed, "proximity to "), "a nearby ") };
+        return .{ .notification_type = .Decloak, .source = withoutPrefix(textAfter(trimmed, "proximity to "), "a nearby ") };
     }
 
     // "Your cloaking systems are unable to activate due to your ship being within..."
     if (std.mem.find(u8, trimmed, "cloaking systems are unable to activate") != null) {
-        return .{ .ntype = .CloakFailed };
+        return .{ .notification_type = .CloakFailed };
     }
 
     // "[module] deactivates due to the destruction of the [crystal]"
     if (std.mem.find(u8, trimmed, "deactivates due to the destruction") != null) {
-        return .{ .ntype = .CrystalBroke, .source = withoutYour(textBefore(trimmed, " deactivates due to the destruction")), .target = textAfter(trimmed, "destruction of the ") };
+        return .{ .notification_type = .CrystalBroke, .source = withoutYour(textBefore(trimmed, " deactivates due to the destruction")), .target = textAfter(trimmed, "destruction of the ") };
     }
 
     // "Bomb Launcher II has run out of charges"
     if (std.mem.find(u8, trimmed, "Bomb Launcher") != null and std.mem.find(u8, trimmed, "has run out of charges") != null) {
-        return .{ .ntype = .BombLauncherEmpty, .source = textBefore(trimmed, " has run out of charges") };
+        return .{ .notification_type = .BombLauncherEmpty, .source = textBefore(trimmed, " has run out of charges") };
     }
 
     // Checks for "Your" to avoid triggering on other players' self-destructs.
     if (std.mem.find(u8, trimmed, "Your") != null and std.mem.find(u8, trimmed, "will self-destruct in") != null) {
-        return .{ .ntype = .SelfDestruct, .state = .started };
+        return .{ .notification_type = .SelfDestruct, .state = .started };
     }
     if (std.mem.find(u8, trimmed, "You have aborted the self-destruct") != null) {
-        return .{ .ntype = .SelfDestruct, .state = .aborted };
+        return .{ .notification_type = .SelfDestruct, .state = .aborted };
     }
 
     if (std.mem.find(u8, trimmed, "You cannot do that while docking") != null) {
-        return .{ .ntype = .Docking };
+        return .{ .notification_type = .Docking };
     }
 
     if (std.mem.find(u8, trimmed, "Autopilot disabled - Waypoint reached") != null) {
-        return .{ .ntype = .AutopilotReached };
+        return .{ .notification_type = .AutopilotReached };
     }
 
     if (std.mem.find(u8, trimmed, "Autopilot approaching target") != null) {
-        return .{ .ntype = .AutopilotApproaching };
+        return .{ .notification_type = .AutopilotApproaching };
     }
 
     // "Please get within 2500 meters of the stargate to jump."
     if (std.mem.find(u8, trimmed, "get within") != null and std.mem.find(u8, trimmed, "stargate to jump") != null) {
-        return .{ .ntype = .JumpRange };
+        return .{ .notification_type = .JumpRange };
     }
 
     // "You are within a warp disruption zone. Get 20000.0 meters from Warp Disrupt Probe to warp."
     if (std.mem.find(u8, trimmed, "within a warp disruption zone") != null) {
-        return .{ .ntype = .WarpBubble, .source = textBetween(trimmed, "meters from ", " to warp") };
+        return .{ .notification_type = .WarpBubble, .source = textBetween(trimmed, "meters from ", " to warp") };
     }
 
     // "The stargate denies you permission to jump for the moment due to your recent acts of aggression."
     if (std.mem.find(u8, trimmed, "recent acts of aggression") != null) {
-        return .{ .ntype = .AggressionCantJump };
+        return .{ .notification_type = .AggressionCantJump };
     }
 
-    if (conduitDestination(trimmed)) |system| return .{ .ntype = .ConduitJump, .target = system };
+    if (conduitDestination(trimmed)) |system| return .{ .notification_type = .ConduitJump, .target = system };
     if (std.mem.find(u8, trimmed, "Conduit Field") != null and std.mem.find(u8, trimmed, "jumps you to") != null) {
-        return .{ .ntype = .ConduitJump };
+        return .{ .notification_type = .ConduitJump };
     }
 
     return null;
@@ -203,14 +203,14 @@ fn parseCombatEvent(message: []const u8) ?Notification {
     if (std.mem.find(u8, trimmed, "Warp scramble attempt") != null and
         std.mem.endsWith(u8, trimmed, "to you!"))
     {
-        return .{ .ntype = .WarpScrambled, .source = textBetween(trimmed, "attempt from ", " to you!") };
+        return .{ .notification_type = .WarpScrambled, .source = textBetween(trimmed, "attempt from ", " to you!") };
     }
 
     // Same "to you!" requirement as the scramble check above.
     if (std.mem.find(u8, trimmed, "Warp disruption attempt") != null and
         std.mem.endsWith(u8, trimmed, "to you!"))
     {
-        return .{ .ntype = .WarpDisrupted, .source = textBetween(trimmed, "attempt from ", " to you!") };
+        return .{ .notification_type = .WarpDisrupted, .source = textBetween(trimmed, "attempt from ", " to you!") };
     }
 
     return null;
@@ -226,7 +226,7 @@ fn parseNoneEvent(message: []const u8) ?Notification {
 
     // "<a href...>NAME</a> is inviting you to a conversation"
     if (std.mem.find(u8, trimmed, "is inviting you to a conversation") != null) {
-        return .{ .ntype = .ConversationInvite, .source = textBefore(trimmed, " is inviting you to a conversation") };
+        return .{ .notification_type = .ConversationInvite, .source = textBefore(trimmed, " is inviting you to a conversation") };
     }
 
     return genericEvent(trimmed);
@@ -237,7 +237,7 @@ const NotificationType = notification.NotificationType;
 
 fn classifiedType(line: []const u8) ?NotificationType {
     const n = classify(line) orelse return null;
-    return n.ntype;
+    return n.notification_type;
 }
 
 test "classify maps each notify wording to its type" {
@@ -279,7 +279,7 @@ test "classify only raises a scramble or disruption aimed at you" {
 
 test "classify reads self-destruct start and abort, but not another player's" {
     const started = classify("[ 2026.09.06 16:13:00 ] (notify) Your ship will self-destruct in 120 seconds.").?;
-    try testing.expectEqual(NotificationType.SelfDestruct, started.ntype);
+    try testing.expectEqual(NotificationType.SelfDestruct, started.notification_type);
     try testing.expectEqual(notification.State.started, started.state.?);
 
     const aborted = classify("[ 2026.09.06 16:13:00 ] (notify) You have aborted the self-destruct sequence.").?;
@@ -299,7 +299,7 @@ test "classify skips hints and jumps, and keeps untagged lines as generic" {
     try testing.expect(classify("[ 2026.09.05 01:16:08 ] (None) Jumping from C-J6MT to 8-WYQZ") == null);
 
     const generic = classify("[ 2026.09.05 01:16:08 ] Session changed...").?;
-    try testing.expectEqual(NotificationType.Generic, generic.ntype);
+    try testing.expectEqual(NotificationType.Generic, generic.notification_type);
     try testing.expectEqualStrings("Session changed", generic.source.?);
     try testing.expect(classify("[ 2026.09.05 01:16:08 ]  ...") == null);
 }
@@ -351,7 +351,7 @@ test "classify leaves a field unset when the line has no name in it" {
 
 test "classify reads the conduit destination" {
     const conduit = classify("[ 2026.09.06 16:13:01 ] (notify) The Conduit Field activated by Some Pilot jumps you to Ahbazon.").?;
-    try testing.expectEqual(NotificationType.ConduitJump, conduit.ntype);
+    try testing.expectEqual(NotificationType.ConduitJump, conduit.notification_type);
     try testing.expectEqualStrings("Ahbazon", conduit.target.?);
 }
 

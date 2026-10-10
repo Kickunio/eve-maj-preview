@@ -32,7 +32,7 @@ pub fn toggleThumbnailExclusion(manager: *HotkeyManager, source_hwnd: win32.HWND
         animation.showClient(manager.live(), source_hwnd, win32.SW_FORCEMINIMIZE);
     }
 
-    manager.painter.notify(source_hwnd, .{ .ntype = .CycleExclusion, .state = if (thumbnail.is_excluded_from_cycle) .excluded else .included });
+    manager.painter.notify(source_hwnd, .{ .notification_type = .CycleExclusion, .state = if (thumbnail.is_excluded_from_cycle) .excluded else .included });
 
     manager.painter.renderThumbnail(thumbnail) catch |err| {
         slog.err("Failed to render thumbnail after exclusion toggle: {}", .{err});
@@ -91,5 +91,5 @@ pub fn assignHoveredToGroup(manager: *HotkeyManager, group_index: usize) void {
         group.name
     else
         std.mem.print(&group_label_buf, "Hotkey Group {}", .{group_index + 1}) catch unreachable;
-    manager.painter.notify(thumbnail.source_hwnd, .{ .ntype = .GroupMembership, .state = if (added) .added else .removed, .target = group_label });
+    manager.painter.notify(thumbnail.source_hwnd, .{ .notification_type = .GroupMembership, .state = if (added) .added else .removed, .target = group_label });
 }

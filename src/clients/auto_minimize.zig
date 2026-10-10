@@ -141,5 +141,5 @@ pub fn toggle(painter: *Painter) void {
     const enabled = !painter.auto_minimize.isEnabled(painter);
     painter.auto_minimize.enabled_override = .{ .enabled = enabled, .overridden_setting = painter.config.autoMinimize.enabled };
     slog.info("Auto-minimize toggled: {s}", .{if (enabled) "enabled" else "disabled"});
-    painter.notifyAll(.{ .ntype = .AutoMinimizeToggle, .state = if (enabled) .on else .off });
+    painter.notifyAll(.{ .notification_type = .AutoMinimizeToggle, .state = if (enabled) .on else .off });
 }

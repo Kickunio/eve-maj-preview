@@ -462,14 +462,14 @@ pub const ChatlogMonitor = struct {
 
     /// Gated by the type's settings in Painter.notify, once the main thread delivers it.
     fn queueNotification(self: *ChatlogMonitor, character_name: []const u8, notification: notification_mod.Notification) void {
-        var event: queue.NotificationEvent = .{ .character_name = "", .notification = .{ .ntype = notification.ntype, .state = notification.state } };
+        var event: queue.NotificationEvent = .{ .character_name = "", .notification = .{ .notification_type = notification.notification_type, .state = notification.state } };
         self.copyNotificationEvent(&event, character_name, notification) catch |err| {
             event.deinit(self.allocator);
-            slog.err("Failed to copy {s} notification for '{s}': {}", .{ @tagName(notification.ntype), character_name, err });
+            slog.err("Failed to copy {s} notification for '{s}': {}", .{ @tagName(notification.notification_type), character_name, err });
             return;
         };
         self.notifications.push(event) catch |err| {
-            slog.err("Failed to queue {s} notification for '{s}': {}", .{ @tagName(notification.ntype), character_name, err });
+            slog.err("Failed to queue {s} notification for '{s}': {}", .{ @tagName(notification.notification_type), character_name, err });
         };
     }
 
@@ -531,7 +531,7 @@ pub const ChatlogMonitor = struct {
         file.last_system_hash = system_hash;
 
         // Only jumps notify: undock and Local detection report the same arrival and would fire it twice.
-        if (source == .jump) self.queueNotification(file.character_name, .{ .ntype = .SystemChange, .target = system });
+        if (source == .jump) self.queueNotification(file.character_name, .{ .notification_type = .SystemChange, .target = system });
         // 0: live lines arrive in order, so need no staleness check. Undocks and Local changes aren't travel.
         self.queueSystemUpdate(file.character_name, system, 0, is_jump);
         slog.info("System change ({s}): {s} -> {s}", .{ @tagName(source), file.character_name, system });

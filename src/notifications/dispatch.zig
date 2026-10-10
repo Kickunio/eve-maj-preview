@@ -23,11 +23,11 @@ pub fn notify(painter: *Painter, source_hwnd: win32.HWND, notification: notifica
         return;
     };
     const settings = &painter.config.thumbnail.notifications;
-    const type_config = settings.getTypeConfig(notification.ntype);
+    const type_config = settings.getTypeConfig(notification.notification_type);
     var text_buf: [TEXT_MAX]u8 = undefined;
     const text = notification_mod.text(notification, type_config.customText(), thumbnail.character_name, &text_buf);
-    const queued = queue(painter, thumbnail, text, notification.ntype, true) catch |err| {
-        slog.err("Failed to show {s} notification for '{s}': {}", .{ @tagName(notification.ntype), thumbnail.character_name, err });
+    const queued = queue(painter, thumbnail, text, notification.notification_type, true) catch |err| {
+        slog.err("Failed to show {s} notification for '{s}': {}", .{ @tagName(notification.notification_type), thumbnail.character_name, err });
         return;
     };
     if (!queued) return;
@@ -42,15 +42,15 @@ pub fn notify(painter: *Painter, source_hwnd: win32.HWND, notification: notifica
 /// Shows `notification` on every EVE client's thumbnail for a global user action; kept out of history, and sound/speech play once rather than per thumbnail.
 pub fn notifyAll(painter: *Painter, notification: notification_mod.Notification) void {
     const settings = &painter.config.thumbnail.notifications;
-    const type_config = settings.getTypeConfig(notification.ntype);
+    const type_config = settings.getTypeConfig(notification.notification_type);
     var text_buf: [TEXT_MAX]u8 = undefined;
     const text = notification_mod.text(notification, type_config.customText(), null, &text_buf);
 
     var shown = false;
     for (painter.thumbnails.items) |*thumbnail| {
         if (!thumbnail.is_eve_client) continue;
-        const queued = queue(painter, thumbnail, text, notification.ntype, false) catch |err| {
-            slog.err("Failed to show {s} notification for '{s}': {}", .{ @tagName(notification.ntype), thumbnail.character_name, err });
+        const queued = queue(painter, thumbnail, text, notification.notification_type, false) catch |err| {
+            slog.err("Failed to show {s} notification for '{s}': {}", .{ @tagName(notification.notification_type), thumbnail.character_name, err });
             continue;
         };
         shown = shown or queued;
@@ -58,9 +58,9 @@ pub fn notifyAll(painter: *Painter, notification: notification_mod.Notification)
     if (shown) alert_effects.play(settings, type_config, text, null);
 }
 
-/// Config dialog's "Test Notification": shows `ntype` with sample fields on every EVE client, bypasses every suppression, force-shows hidden thumbnails for its duration, and skips history/cycle tracking; alerts play once rather than per thumbnail.
-pub fn showTest(painter: *Painter, ntype: notification_mod.NotificationType, type_config: config.NotificationTypeConfig) !void {
-    const example = notification_mod.sample(ntype);
+/// Config dialog's "Test Notification": shows `notification_type` with sample fields on every EVE client, bypasses every suppression, force-shows hidden thumbnails for its duration, and skips history/cycle tracking; alerts play once rather than per thumbnail.
+pub fn showTest(painter: *Painter, notification_type: notification_mod.NotificationType, type_config: config.NotificationTypeConfig) !void {
+    const example = notification_mod.sample(notification_type);
     var text_buf: [TEXT_MAX]u8 = undefined;
     var spoken_buf: [TEXT_MAX]u8 = undefined;
     var spoken: ?[]const u8 = null;
@@ -76,7 +76,7 @@ pub fn showTest(painter: *Painter, ntype: notification_mod.NotificationType, typ
             @memcpy(spoken_buf[0..text.len], text);
             spoken = spoken_buf[0..text.len];
         }
-        push(painter, thumbnail, .fromConfig(try painter.allocator.dupe(u8, text), ntype, type_config, now, duration_ms));
+        push(painter, thumbnail, .fromConfig(try painter.allocator.dupe(u8, text), notification_type, type_config, now, duration_ms));
 
         // The alert blocks re-hiding, so the thumbnail stays up until expire() restores it.
         if (!thumbnail.isVisible()) {
@@ -120,27 +120,27 @@ pub fn expire(painter: *Painter) void {
 }
 
 /// Applies the type's enable/mute/suppress/throttle rules and queues the notification; false if it was filtered out.
-fn queue(painter: *Painter, thumbnail: *ThumbnailWindow, text: []const u8, ntype: notification_mod.NotificationType, record_history: bool) !bool {
+fn queue(painter: *Painter, thumbnail: *ThumbnailWindow, text: []const u8, notification_type: notification_mod.NotificationType, record_history: bool) !bool {
     const settings = &painter.config.thumbnail.notifications;
     if (!settings.enabled) return false;
     if (painter.config.isNotificationMuted(thumbnail.character_name)) return false;
 
-    const type_config = settings.getTypeConfig(ntype);
+    const type_config = settings.getTypeConfig(notification_type);
     if (!type_config.enabled) return false;
     if (type_config.suppress_when_focused and thumbnail.isFocused(painter.active_source_hwnd)) return false;
 
     const now = win32.Ticks.now();
     if (type_config.suppress_when_clicked and now.elapsedSince(thumbnail.last_click_time) < settings.suppress_click_duration_ms) return false;
-    if (thumbnail.notifications.isThrottled(ntype, type_config.throttle_ms, now)) return false;
-    thumbnail.notifications.markShown(ntype, now);
+    if (thumbnail.notifications.isThrottled(notification_type, type_config.throttle_ms, now)) return false;
+    thumbnail.notifications.markShown(notification_type, now);
 
-    push(painter, thumbnail, .fromConfig(try painter.allocator.dupe(u8, text), ntype, type_config, now, type_config.duration_ms));
+    push(painter, thumbnail, .fromConfig(try painter.allocator.dupe(u8, text), notification_type, type_config, now, type_config.duration_ms));
 
     // Game events feed the "cycle to recently notified" queue; feedback on the user's own action must not.
-    if (!notification_mod.isUserAction(ntype)) painter.notified_queue.track(painter.allocator, thumbnail.character_name);
-    if (record_history) painter.notification_history.push(thumbnail.source_hwnd, thumbnail.character_name, text, ntype, thumbnail.cached_character_color);
+    if (!notification_mod.isUserAction(notification_type)) painter.notified_queue.track(painter.allocator, thumbnail.character_name);
+    if (record_history) painter.notification_history.push(thumbnail.source_hwnd, thumbnail.character_name, text, notification_type, thumbnail.cached_character_color);
 
-    slog.debug("Queued notification for {s}: [{s}] {s} (border_color_override: {?})", .{ thumbnail.character_name, @tagName(ntype), text, type_config.border_color });
+    slog.debug("Queued notification for {s}: [{s}] {s} (border_color_override: {?})", .{ thumbnail.character_name, @tagName(notification_type), text, type_config.border_color });
     return true;
 }
 

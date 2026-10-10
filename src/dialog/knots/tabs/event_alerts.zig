@@ -33,9 +33,9 @@ const TYPES_IN_ORDER = blk: {
     var ordered: [std.enums.values(NotificationType).len]NotificationType = undefined;
     var count: usize = 0;
     for (std.enums.values(notification.NotificationCategory)) |category| {
-        for (std.enums.values(NotificationType)) |ntype| {
-            if (notification.notificationCategory(ntype) != category) continue;
-            ordered[count] = ntype;
+        for (std.enums.values(NotificationType)) |notification_type| {
+            if (notification.notificationCategory(notification_type) != category) continue;
+            ordered[count] = notification_type;
             count += 1;
         }
     }
@@ -99,19 +99,19 @@ fn searchBox(context: *ui.Frame) !void {
     try row.close(context);
 }
 
-fn typeLabel(ntype: NotificationType) []const u8 {
-    return lang.textFmt("notification.{s}.label", .{@tagName(ntype)}, @tagName(ntype));
+fn typeLabel(notification_type: NotificationType) []const u8 {
+    return lang.textFmt("notification.{s}.label", .{@tagName(notification_type)}, @tagName(notification_type));
 }
 
 /// The short name keeps the roster narrow; the detail header uses the full one.
-fn typeShortLabel(ntype: NotificationType) []const u8 {
-    return lang.textFmt("notification.{s}.shortLabel", .{@tagName(ntype)}, typeLabel(ntype));
+fn typeShortLabel(notification_type: NotificationType) []const u8 {
+    return lang.textFmt("notification.{s}.shortLabel", .{@tagName(notification_type)}, typeLabel(notification_type));
 }
 
-fn matchesSearch(ntype: NotificationType) bool {
+fn matchesSearch(notification_type: NotificationType) bool {
     const query = std.mem.trim(u8, g_search.items, " ");
     if (query.len == 0) return true;
-    return std.ascii.findIgnoreCase(typeShortLabel(ntype), query) != null or std.ascii.findIgnoreCase(typeLabel(ntype), query) != null;
+    return std.ascii.findIgnoreCase(typeShortLabel(notification_type), query) != null or std.ascii.findIgnoreCase(typeLabel(notification_type), query) != null;
 }
 
 fn typeRoster(context: *ui.Frame) !void {
@@ -119,19 +119,19 @@ fn typeRoster(context: *ui.Frame) !void {
     _ = try roster.open(context);
     const rows = Rect{ .key = .src(@src()), .style = &style.roster_rows };
     _ = try rows.open(context);
-    for (TYPES_IN_ORDER) |ntype| {
-        if (!matchesSearch(ntype)) continue;
-        const index = @backingInt(ntype);
-        const is_selected = ntype == g_selected;
+    for (TYPES_IN_ORDER) |notification_type| {
+        if (!matchesSearch(notification_type)) continue;
+        const index = @backingInt(notification_type);
+        const is_selected = notification_type == g_selected;
         const row = Button{ .key = ui.Key.str("knots.events.row").indexed(index), .style = if (is_selected) &style.roster_row_selected else &style.roster_row };
         if ((try widgets.openRosterRow(context, row)).clicked and !is_selected) {
-            g_selected = ntype;
+            g_selected = notification_type;
             context.requestRedraw();
         }
         try context.e(Text{
             .selectable = false,
             .key = ui.Key.str("knots.events.name").indexed(index),
-            .content = typeShortLabel(ntype),
+            .content = typeShortLabel(notification_type),
             .style = if (is_selected) &style.roster_name_selected else &style.roster_name,
         });
         try row.close(context);
@@ -140,17 +140,17 @@ fn typeRoster(context: *ui.Frame) !void {
     try roster.close(context);
 }
 
-fn typeDetail(context: *ui.Frame, ntype: NotificationType) !void {
-    const ref = typeRef(@backingInt(ntype));
+fn typeDetail(context: *ui.Frame, notification_type: NotificationType) !void {
+    const ref = typeRef(@backingInt(notification_type));
     const stack = try widgets.openScrollPane(context, .str("knots.events.detail"), style.detail_scroll);
     const previous_rows = widgets.useDetailRows();
     defer widgets.restoreRows(previous_rows);
 
     const header = try widgets.openDetailHeader(context, .src(@src()));
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = typeLabel(ntype), .style = &style.roster_name_selected });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = typeLabel(notification_type), .style = &style.roster_name_selected });
     var is_enabled: bool = ref.get("enabled");
     if ((try context.interact(Button{ .key = .src(@src()), .label = "\u{25B6} Test", .disabled = !is_enabled, .style = &style.plain_button })).clicked) {
-        testNotification(ntype);
+        testNotification(notification_type);
     }
     try header.close(context);
     if (try widgets.switchRow(context, ui.Key.str("knots.events.enabled").indexed(ref.index), "Enabled", &is_enabled)) ref.set("enabled", is_enabled);
@@ -165,7 +165,7 @@ fn typeDetail(context: *ui.Frame, ntype: NotificationType) !void {
     try timing.close(context);
     try widgets.separator(context, .str("knots.events.separator.timing"));
 
-    try customText(context, ref, ntype);
+    try customText(context, ref, notification_type);
     try widgets.separator(context, .str("knots.events.separator.text"));
 
     const behavior = try widgets.openFieldGroup(context, .str("knots.events.behavior"), "Behavior");
@@ -188,51 +188,51 @@ fn typeDetail(context: *ui.Frame, ntype: NotificationType) !void {
     try border.close(context);
     try widgets.separator(context, .str("knots.events.separator.border"));
 
-    try sound(context, ref, @backingInt(ntype));
+    try sound(context, ref, @backingInt(notification_type));
     try rest.close(context);
     try stack.close(context);
 }
 
 /// One box per state the type has, the placeholder chips that fill in event values, a preview of each box, and the text colour.
-fn customText(context: *ui.Frame, ref: TypeRef, ntype: NotificationType) !void {
-    const primary_sample = notification.sample(ntype);
-    const alt_state = notification.altState(ntype);
+fn customText(context: *ui.Frame, ref: TypeRef, notification_type: NotificationType) !void {
+    const primary_sample = notification.sample(notification_type);
+    const alt_state = notification.altState(notification_type);
     const group = try widgets.openFieldGroup(context, .str("knots.events.text"), "Custom Text");
-    try textBox(context, ref, ntype, .custom_text, primary_sample, alt_state != null);
+    try textBox(context, ref, notification_type, .custom_text, primary_sample, alt_state != null);
     if (alt_state) |state| {
         var alt_sample = primary_sample;
         alt_sample.state = state;
-        try textBox(context, ref, ntype, .custom_text_alt, alt_sample, true);
+        try textBox(context, ref, notification_type, .custom_text_alt, alt_sample, true);
     }
 
     const chips = Rect{ .key = .src(@src()), .style = &style.chip_row };
     _ = try chips.open(context);
     const chip_box = Rect{ .key = .src(@src()), .style = &style.chip_box };
     _ = try chip_box.open(context);
-    for (notification.placeholders(ntype), 0..) |placeholder, index| {
+    for (notification.placeholders(notification_type), 0..) |placeholder, index| {
         const token = try std.fmt.allocPrint(context.arena(), "{{{s}}}", .{placeholder.name});
         if ((try context.interact(Button{ .key = ui.Key.str("knots.events.chip").indexed(index), .label = token, .style = &style.placeholder_chip })).clicked) {
-            insertToken(context, ref, ntype, token);
+            insertToken(context, ref, notification_type, token);
         }
     }
     if ((try context.interact(Button{ .key = .src(@src()), .label = NEWLINE_TOKEN, .style = &style.placeholder_chip })).clicked) {
-        insertToken(context, ref, ntype, NEWLINE_TOKEN);
+        insertToken(context, ref, notification_type, NEWLINE_TOKEN);
     }
     try chip_box.close(context);
     try chips.close(context);
 
-    try preview(context, ntype, .custom_text, ref.get("custom_text"), primary_sample);
+    try preview(context, notification_type, .custom_text, ref.get("custom_text"), primary_sample);
     if (alt_state) |state| {
         var alt_sample = primary_sample;
         alt_sample.state = state;
-        try preview(context, ntype, .custom_text_alt, ref.get("custom_text_alt"), alt_sample);
+        try preview(context, notification_type, .custom_text_alt, ref.get("custom_text_alt"), alt_sample);
     }
     try widgets.hintText(context, .src(@src()), "Leave empty to use the default wording shown in grey. Click a placeholder to insert it; it's filled in from the event. Type \\n for a new line.");
     try bind.optionalColor(context, ref, "text_color", "Text Color", session.profile().ptr.thumbnail.notifications.color);
     try group.close(context);
 }
 
-fn textBox(context: *ui.Frame, ref: TypeRef, ntype: NotificationType, comptime field: TextField, sample: notification.Notification, has_states: bool) !void {
+fn textBox(context: *ui.Frame, ref: TypeRef, notification_type: NotificationType, comptime field: TextField, sample: notification.Notification, has_states: bool) !void {
     const name = @tagName(field);
     const state = sample.state orelse .on;
     const label = if (has_states) lang.textFmt("notification.state.{s}.label", .{@tagName(state)}, @tagName(state)) else "Text";
@@ -240,7 +240,7 @@ fn textBox(context: *ui.Frame, ref: TypeRef, ntype: NotificationType, comptime f
     var buf: [128]u8 = undefined;
     // The box keeps its placeholder until the frame is drawn, so it can't point at this stack buffer.
     try bind.styledTextBox(context, ref, name, try context.arena().dupe(u8, notification.defaultText(sample, &buf)), &style.custom_text_input);
-    if (context.ui().focused(bind.boxKey(ref, name).hash())) g_last_text_field.set(ntype, field);
+    if (context.ui().focused(bind.boxKey(ref, name).hash())) g_last_text_field.set(notification_type, field);
     if ((try context.interact(Button{ .key = ui.Key.str("knots.events.text.clear:" ++ name).indexed(ref.index), .label = "\u{00D7}", .style = &style.icon_button_danger_text })).clicked) {
         ref.set(name, null);
     }
@@ -248,8 +248,8 @@ fn textBox(context: *ui.Frame, ref: TypeRef, ntype: NotificationType, comptime f
 }
 
 /// Inserts at the caret of the box last focused, as long as it still fits.
-fn insertToken(context: *ui.Frame, ref: TypeRef, ntype: NotificationType, token: []const u8) void {
-    switch (g_last_text_field.get(ntype)) {
+fn insertToken(context: *ui.Frame, ref: TypeRef, notification_type: NotificationType, token: []const u8) void {
+    switch (g_last_text_field.get(notification_type)) {
         inline .custom_text, .custom_text_alt => |field| {
             const name = @tagName(field);
             const current = ref.get(name) orelse "";
@@ -267,11 +267,11 @@ fn insertToken(context: *ui.Frame, ref: TypeRef, ntype: NotificationType, token:
 }
 
 /// Mirrors notifications/template.zig's render with each placeholder's sample value.
-fn preview(context: *ui.Frame, ntype: NotificationType, comptime field: TextField, custom: ?[]const u8, sample: notification.Notification) !void {
+fn preview(context: *ui.Frame, notification_type: NotificationType, comptime field: TextField, custom: ?[]const u8, sample: notification.Notification) !void {
     var default_buf: [128]u8 = undefined;
     var render_buf: [256]u8 = undefined;
     const typed = std.mem.trim(u8, custom orelse "", " ");
-    const shown = if (typed.len == 0) notification.defaultText(sample, &default_buf) else template.render(typed, notification.placeholders(ntype), .{
+    const shown = if (typed.len == 0) notification.defaultText(sample, &default_buf) else template.render(typed, notification.placeholders(notification_type), .{
         .source = sample.source,
         .target = sample.target,
         .character = notification.SAMPLE_CHARACTER,
@@ -284,7 +284,7 @@ fn preview(context: *ui.Frame, ntype: NotificationType, comptime field: TextFiel
         if (line_count > 0) try kept.append(context.arena(), '\n');
         try kept.appendSlice(context.arena(), line);
     }
-    try widgets.paragraph(context, ui.Key.str("knots.events.preview:" ++ @tagName(field)).indexed(@backingInt(ntype)), try std.fmt.allocPrint(context.arena(), "Preview: {s}", .{kept.items}));
+    try widgets.paragraph(context, ui.Key.str("knots.events.preview:" ++ @tagName(field)).indexed(@backingInt(notification_type)), try std.fmt.allocPrint(context.arena(), "Preview: {s}", .{kept.items}));
 }
 
 /// The file's name only; the full path is what's saved.
@@ -304,12 +304,12 @@ fn sound(context: *ui.Frame, ref: TypeRef, type_index: usize) !void {
 }
 
 /// Fires the type on every thumbnail with the settings the window has for it, saved or not.
-fn testNotification(ntype: NotificationType) void {
+fn testNotification(notification_type: NotificationType) void {
     const painter = painter_mod.g_painter_ptr orelse {
         slog.warn("Failed to test notification: the painter isn't ready", .{});
         return;
     };
-    painter.showTestNotification(ntype, session.profile().ptr.thumbnail.notifications.getTypeConfig(ntype)) catch |err| {
+    painter.showTestNotification(notification_type, session.profile().ptr.thumbnail.notifications.getTypeConfig(notification_type)) catch |err| {
         slog.err("Failed to test notification: {}", .{err});
         status.show(.failure, "Failed to test notification: {}", .{err});
     };

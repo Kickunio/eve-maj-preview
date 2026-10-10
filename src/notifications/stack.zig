@@ -25,10 +25,10 @@ pub const ActiveNotification = struct {
     flash_border: bool = false,
 
     /// `owned_text` must come from the allocator later passed to the stack, which frees it on removal.
-    pub fn fromConfig(owned_text: []const u8, ntype: notification.NotificationType, type_config: config.NotificationTypeConfig, now: win32.Ticks, duration_ms: u32) ActiveNotification {
+    pub fn fromConfig(owned_text: []const u8, notification_type: notification.NotificationType, type_config: config.NotificationTypeConfig, now: win32.Ticks, duration_ms: u32) ActiveNotification {
         return .{
             .text = owned_text,
-            .notification_type = ntype,
+            .notification_type = notification_type,
             .start_time = now,
             .duration_ms = duration_ms,
             .suppress_when_focused = type_config.suppress_when_focused,
@@ -73,14 +73,14 @@ pub const NotificationStack = struct {
         return if (self.len > 0) self.entries[0] else null;
     }
 
-    pub fn isThrottled(self: *const NotificationStack, ntype: notification.NotificationType, throttle_ms: u32, now: win32.Ticks) bool {
+    pub fn isThrottled(self: *const NotificationStack, notification_type: notification.NotificationType, throttle_ms: u32, now: win32.Ticks) bool {
         if (throttle_ms == 0) return false;
-        const last = self.last_shown_by_type.get(ntype);
+        const last = self.last_shown_by_type.get(notification_type);
         return !last.isZero() and now.elapsedSince(last) < throttle_ms;
     }
 
-    pub fn markShown(self: *NotificationStack, ntype: notification.NotificationType, now: win32.Ticks) void {
-        self.last_shown_by_type.set(ntype, now);
+    pub fn markShown(self: *NotificationStack, notification_type: notification.NotificationType, now: win32.Ticks) void {
+        self.last_shown_by_type.set(notification_type, now);
     }
 
     /// Inserts at the front, replacing any entry of the same type (bump-to-top) and evicting the oldest once full.
