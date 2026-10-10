@@ -10,24 +10,24 @@ pub fn insertThousandsSeparators(buf: []u8, text: []const u8) []const u8 {
     const first_group = if (digit_end % 3 == 0) 3 else digit_end % 3;
     if (first_group > buf.len) return text;
     @memcpy(buf[0..first_group], text[0..first_group]);
-    var out = first_group;
+    var out_len = first_group;
 
     var i = first_group;
     while (i < digit_end) : (i += 3) {
-        if (out + 4 > buf.len) return text;
-        buf[out] = ',';
-        @memcpy(buf[out + 1 ..][0..3], text[i..][0..3]);
-        out += 4;
+        if (out_len + 4 > buf.len) return text;
+        buf[out_len] = ',';
+        @memcpy(buf[out_len + 1 ..][0..3], text[i..][0..3]);
+        out_len += 4;
     }
 
     const rest = text[digit_end..];
-    if (out + rest.len > buf.len) return text;
-    @memcpy(buf[out..][0..rest.len], rest);
-    return buf[0 .. out + rest.len];
+    if (out_len + rest.len > buf.len) return text;
+    @memcpy(buf[out_len..][0..rest.len], rest);
+    return buf[0 .. out_len + rest.len];
 }
 
-/// Abbreviates an ISK value with k/m suffixes (e.g. 2_450_000.0 -> "2.5m", 200_000.0 -> "200k", 850.0 -> "850").
-pub fn formatIskAbbrev(buf: []u8, value: f32) []const u8 {
+/// Abbreviates an ISK value with k/m suffixes (e.g. 2_450_000.0 -> "2.5m", 200_000.0 -> "200k", 850.0 -> "850"); "?" if `buf` is too small.
+pub fn formatIskAbbreviated(buf: []u8, value: f32) []const u8 {
     const abs_value = @abs(value);
     if (abs_value >= 999_500.0) {
         return std.mem.print(buf, "{d:.1}m", .{value / 1_000_000.0}) catch "?";
@@ -38,7 +38,7 @@ pub fn formatIskAbbrev(buf: []u8, value: f32) []const u8 {
     }
 }
 
-/// Whole minutes as "42m", or "3h 07m" from an hour on.
+/// Whole minutes as "42m", or "3h 07m" from an hour on; "?" if `buf` is too small.
 pub fn formatSessionDuration(buf: []u8, minutes: u64) []const u8 {
     if (minutes < 60) return std.mem.print(buf, "{d}m", .{minutes}) catch "?";
     return std.mem.print(buf, "{d}h {d:0>2}m", .{ minutes / 60, minutes % 60 }) catch "?";
@@ -60,23 +60,23 @@ test "insertThousandsSeparators returns the text unchanged when the buffer is to
     try testing.expectEqualStrings("12345", insertThousandsSeparators(&buf, "12345"));
 }
 
-test "formatIskAbbrev switches suffix at a thousand and a million" {
+test "formatIskAbbreviated switches suffix at a thousand and a million" {
     var buf: [32]u8 = undefined;
-    try testing.expectEqualStrings("850", formatIskAbbrev(&buf, 850.0));
-    try testing.expectEqualStrings("1k", formatIskAbbrev(&buf, 1_000.0));
-    try testing.expectEqualStrings("200k", formatIskAbbrev(&buf, 200_000.0));
-    try testing.expectEqualStrings("1.0m", formatIskAbbrev(&buf, 1_000_000.0));
-    try testing.expectEqualStrings("2.5m", formatIskAbbrev(&buf, 2_460_000.0));
-    try testing.expectEqualStrings("-1.5m", formatIskAbbrev(&buf, -1_500_000.0));
+    try testing.expectEqualStrings("850", formatIskAbbreviated(&buf, 850.0));
+    try testing.expectEqualStrings("1k", formatIskAbbreviated(&buf, 1_000.0));
+    try testing.expectEqualStrings("200k", formatIskAbbreviated(&buf, 200_000.0));
+    try testing.expectEqualStrings("1.0m", formatIskAbbreviated(&buf, 1_000_000.0));
+    try testing.expectEqualStrings("2.5m", formatIskAbbreviated(&buf, 2_460_000.0));
+    try testing.expectEqualStrings("-1.5m", formatIskAbbreviated(&buf, -1_500_000.0));
 }
 
-test "formatIskAbbrev never shows 1000 before a suffix" {
+test "formatIskAbbreviated never shows 1000 before a suffix" {
     var buf: [32]u8 = undefined;
-    try testing.expectEqualStrings("999", formatIskAbbrev(&buf, 999.4));
-    try testing.expectEqualStrings("1k", formatIskAbbrev(&buf, 999.6));
-    try testing.expectEqualStrings("999k", formatIskAbbrev(&buf, 999_400.0));
-    try testing.expectEqualStrings("1.0m", formatIskAbbrev(&buf, 999_720.0));
-    try testing.expectEqualStrings("-1.0m", formatIskAbbrev(&buf, -999_720.0));
+    try testing.expectEqualStrings("999", formatIskAbbreviated(&buf, 999.4));
+    try testing.expectEqualStrings("1k", formatIskAbbreviated(&buf, 999.6));
+    try testing.expectEqualStrings("999k", formatIskAbbreviated(&buf, 999_400.0));
+    try testing.expectEqualStrings("1.0m", formatIskAbbreviated(&buf, 999_720.0));
+    try testing.expectEqualStrings("-1.0m", formatIskAbbreviated(&buf, -999_720.0));
 }
 
 test "formatSessionDuration switches to hours at sixty minutes and pads the minutes" {

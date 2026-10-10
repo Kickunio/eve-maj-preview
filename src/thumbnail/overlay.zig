@@ -625,7 +625,7 @@ fn iskPeriod(unit: anytype) IskPeriod {
 fn iskRateText(layout: *Layout, prefix: []const u8, isk_per_second: ?f32, period: IskPeriod) []const u8 {
     const rate = isk_per_second orelse return layout.print("{s}?? ISK/{s}", .{ prefix, period.suffix });
     var isk_buf: [16]u8 = undefined;
-    return layout.print("{s}{s} ISK/{s}", .{ prefix, format.formatIskAbbrev(&isk_buf, rate * period.seconds), period.suffix });
+    return layout.print("{s}{s} ISK/{s}", .{ prefix, format.formatIskAbbreviated(&isk_buf, rate * period.seconds), period.suffix });
 }
 
 fn addResources(layout: *Layout, fonts: Fonts, config: *const config_mod.Config, stats: *const window.ActivityStats, settings: RenderSettings) !void {

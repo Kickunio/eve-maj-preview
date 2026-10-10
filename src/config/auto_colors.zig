@@ -124,9 +124,9 @@ pub const AutoColorStore = struct {
 
     /// Writes pending colours; deferred to when the last thumbnail closes (and to deinit) so a session with EVE open never touches the disk for it.
     pub fn flush(self: *AutoColorStore) void {
-        if (!self.system.dirty and !self.character.dirty) return;
-        self.system.dirty = false;
-        self.character.dirty = false;
+        if (!self.system.is_dirty and !self.character.is_dirty) return;
+        self.system.is_dirty = false;
+        self.character.is_dirty = false;
         self.save();
     }
 

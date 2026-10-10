@@ -9,12 +9,18 @@ const DISTINCT_LIGHTNESS = [_]f32{ 0.70, 0.80, 0.90 };
 const DISTINCT_CHROMA = [_]f32{ 0.10, 0.15, 0.20, 0.26 };
 const MAX_DISTINCT_CANDIDATES = DISTINCT_HUE_STEPS * DISTINCT_LIGHTNESS.len * DISTINCT_CHROMA.len;
 const MAX_DISTINCT_TAKEN = 128;
+const DISTINCT_PALETTE = buildDistinctPalette();
 
 const Oklab = struct { l: f32, a: f32, b: f32 };
 
 const Candidate = struct { rgb: u32, lab: Oklab };
 
-/// Names mapped to colors that stay fixed once assigned, least recently seen first; persistence is the owner's job (see `dirty`).
+const DistinctPalette = struct {
+    candidates: [MAX_DISTINCT_CANDIDATES]Candidate,
+    count: usize,
+};
+
+/// Names mapped to colors that stay fixed once assigned, least recently seen first; persistence is the owner's job (see `is_dirty`).
 pub const AutoColors = struct {
     pub const MAX_ENTRIES = 64;
     pub const MAX_AVOIDED = 32;
@@ -26,7 +32,7 @@ pub const AutoColors = struct {
 
     entries: std.ArrayList(Entry) = .empty,
     /// Set whenever an entry is added, evicted or reordered; the owner clears it after persisting.
-    dirty: bool = false,
+    is_dirty: bool = false,
 
     pub fn deinit(self: *AutoColors, allocator: std.mem.Allocator) void {
         for (self.entries.items) |entry| allocator.free(entry.name);
@@ -44,7 +50,7 @@ pub const AutoColors = struct {
     pub fn colorFor(self: *AutoColors, allocator: std.mem.Allocator, name: []const u8, avoid: []const u32) u32 {
         for (self.entries.items, 0..) |entry, i| {
             if (!std.ascii.eqlIgnoreCase(entry.name, name)) continue;
-            if (i + 1 < self.entries.items.len) self.dirty = true;
+            if (i + 1 < self.entries.items.len) self.is_dirty = true;
             const seen = self.entries.orderedRemove(i);
             self.entries.appendAssumeCapacity(seen);
             return seen.color;
@@ -53,14 +59,14 @@ pub const AutoColors = struct {
         var taken: [MAX_AVOIDED + MAX_ENTRIES]u32 = undefined;
         const avoided = avoid[0..@min(avoid.len, MAX_AVOIDED)];
         @memcpy(taken[0..avoided.len], avoided);
-        var count = avoided.len;
+        var taken_count = avoided.len;
         for (self.entries.items) |entry| {
-            if (count == taken.len) break;
-            taken[count] = entry.color;
-            count += 1;
+            if (taken_count == taken.len) break;
+            taken[taken_count] = entry.color;
+            taken_count += 1;
         }
 
-        const picked = 0xFF000000 | pickDistinctColor(name, taken[0..count]);
+        const picked = 0xFF000000 | pickDistinctColor(name, taken[0..taken_count]);
         self.record(allocator, name, picked);
         return picked;
     }
@@ -70,20 +76,16 @@ pub const AutoColors = struct {
             const evicted = self.entries.orderedRemove(0);
             allocator.free(evicted.name);
         }
-        self.dirty = true;
+        self.is_dirty = true;
         self.put(allocator, name, color) catch |err| {
             slog.err("Failed to record color for '{s}': {}", .{ name, err });
         };
     }
 };
 
-// Filled on first use; only touched from the main thread.
-var g_candidate_table: [MAX_DISTINCT_CANDIDATES]Candidate = undefined;
-var g_candidate_count: usize = 0;
-
 /// Picks the palette color farthest (in OKLab) from every color in `taken`; with nothing taken, `seed_string` picks the starting point and breaks ties, so the result is deterministic. Returns 0xRRGGBB.
 pub fn pickDistinctColor(seed_string: []const u8, taken: []const u32) u32 {
-    const candidates = distinctCandidates();
+    const candidates = DISTINCT_PALETTE.candidates[0..DISTINCT_PALETTE.count];
     const count = candidates.len;
 
     var taken_labs: [MAX_DISTINCT_TAKEN]Oklab = undefined;
@@ -113,12 +115,12 @@ pub fn withAlpha(rgb: u32, alpha: u8) u32 {
 
 /// For layered windows, which are presented premultiplied; valid only when drawing onto an already-transparent buffer.
 pub fn premultiplyAlpha(color: u32) u32 {
-    const fg_alpha = (color >> 24) & 0xFF;
-    if (fg_alpha == 255) return color;
-    const r = ((color >> 16) & 0xFF) * fg_alpha / 255;
-    const g = ((color >> 8) & 0xFF) * fg_alpha / 255;
-    const b = (color & 0xFF) * fg_alpha / 255;
-    return (fg_alpha << 24) | (r << 16) | (g << 8) | b;
+    const alpha = (color >> 24) & 0xFF;
+    if (alpha == 255) return color;
+    const r = ((color >> 16) & 0xFF) * alpha / 255;
+    const g = ((color >> 8) & 0xFF) * alpha / 255;
+    const b = (color & 0xFF) * alpha / 255;
+    return (alpha << 24) | (r << 16) | (g << 8) | b;
 }
 
 /// Mixes each channel `percent`% of the way toward white, keeping alpha.
@@ -145,20 +147,21 @@ pub fn inkFor(background: u32) u32 {
     return if (299 * r + 587 * g + 114 * b > 550 * 255) 0xFF1A1408 else 0xFFF5F0E6;
 }
 
-fn distinctCandidates() []const Candidate {
-    if (g_candidate_count == 0) {
-        for (0..DISTINCT_HUE_STEPS) |hue_step| {
-            const hue = @as(f32, @floatFromInt(hue_step)) * (360.0 / @as(f32, DISTINCT_HUE_STEPS));
-            for (DISTINCT_LIGHTNESS) |lightness| {
-                for (DISTINCT_CHROMA) |chroma| {
-                    const rgb = oklchToRgb(lightness, chroma, hue) orelse continue;
-                    g_candidate_table[g_candidate_count] = .{ .rgb = rgb, .lab = rgbToOklab(rgb) };
-                    g_candidate_count += 1;
-                }
+/// Comptime only: drops the hue/lightness/chroma steps that fall outside sRGB.
+fn buildDistinctPalette() DistinctPalette {
+    @setEvalBranchQuota(1_000_000);
+    var palette: DistinctPalette = .{ .candidates = undefined, .count = 0 };
+    for (0..DISTINCT_HUE_STEPS) |hue_step| {
+        const hue = @as(f32, @floatFromInt(hue_step)) * (360.0 / @as(f32, DISTINCT_HUE_STEPS));
+        for (DISTINCT_LIGHTNESS) |lightness| {
+            for (DISTINCT_CHROMA) |chroma| {
+                const rgb = oklchToRgb(lightness, chroma, hue) orelse continue;
+                palette.candidates[palette.count] = .{ .rgb = rgb, .lab = rgbToOklab(rgb) };
+                palette.count += 1;
             }
         }
     }
-    return g_candidate_table[0..g_candidate_count];
+    return palette;
 }
 
 fn srgbByteToLinear(byte: u32) f32 {
@@ -201,15 +204,15 @@ fn oklchToRgb(lightness: f32, chroma: f32, hue_degrees: f32) ?u32 {
     const m = m_ * m_ * m_;
     const s = s_ * s_ * s_;
 
-    const r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
-    const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
-    const bl = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+    const red = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    const green = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    const blue = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
 
     const tolerance = 0.002;
-    for ([_]f32{ r, g, bl }) |channel| {
+    for ([_]f32{ red, green, blue }) |channel| {
         if (channel < -tolerance or channel > 1.0 + tolerance) return null;
     }
-    return (linearToSrgbByte(r) << 16) | (linearToSrgbByte(g) << 8) | linearToSrgbByte(bl);
+    return (linearToSrgbByte(red) << 16) | (linearToSrgbByte(green) << 8) | linearToSrgbByte(blue);
 }
 
 fn oklabDistance(x: Oklab, y: Oklab) f32 {
@@ -259,11 +262,11 @@ test "AutoColors keeps a name's color and marks only new assignments dirty" {
 
     const assigned = colors.colorFor(testing.allocator, "Some Pilot", &.{});
     try testing.expectEqual(@as(u32, 0xFF000000), assigned & 0xFF000000);
-    try testing.expect(colors.dirty);
+    try testing.expect(colors.is_dirty);
 
-    colors.dirty = false;
+    colors.is_dirty = false;
     try testing.expectEqual(assigned, colors.colorFor(testing.allocator, "SOME PILOT", &.{}));
-    try testing.expect(!colors.dirty);
+    try testing.expect(!colors.is_dirty);
     try testing.expect(colors.colorFor(testing.allocator, "Other Pilot", &.{}) != assigned);
 }
 
@@ -274,7 +277,7 @@ test "AutoColors marks the store dirty when a lookup changes the recency order" 
     try colors.put(testing.allocator, "Older Pilot", 0xFF123456);
     try colors.put(testing.allocator, "Newer Pilot", 0xFF654321);
     _ = colors.colorFor(testing.allocator, "Older Pilot", &.{});
-    try testing.expect(colors.dirty);
+    try testing.expect(colors.is_dirty);
     try testing.expectEqualStrings("Older Pilot", colors.entries.items[1].name);
 }
 
@@ -283,7 +286,7 @@ test "AutoColors.put restores a color without marking the store dirty" {
     defer colors.deinit(testing.allocator);
 
     try colors.put(testing.allocator, "Some Pilot", 0xFF123456);
-    try testing.expect(!colors.dirty);
+    try testing.expect(!colors.is_dirty);
     try testing.expectEqual(@as(u32, 0xFF123456), colors.colorFor(testing.allocator, "some pilot", &.{}));
 }
 

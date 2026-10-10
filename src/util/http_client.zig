@@ -20,7 +20,7 @@ pub fn fetch(allocator: std.mem.Allocator, client: *std.http.Client, url: []cons
         .location = .{ .url = url },
         .headers = .{
             .user_agent = .{ .override = "EVE-Maj-Preview" },
-            .content_type = if (options.content_type) |ct| .{ .override = ct } else .default,
+            .content_type = if (options.content_type) |content_type| .{ .override = content_type } else .default,
         },
         .extra_headers = options.extra_headers,
         .payload = options.payload,

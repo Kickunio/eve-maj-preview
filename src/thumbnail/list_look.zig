@@ -169,7 +169,7 @@ pub fn writeStat(writer: *std.Io.Writer, reading: StatReading) void {
         .mining_rate => if (value < 10.0) writer.print("{d:.1}", .{value}) catch {} else writer.print("{d:.0}", .{value}) catch {},
         .bounty_rate => {
             var isk_buf: [16]u8 = undefined;
-            writer.writeAll(format.formatIskAbbrev(&isk_buf, value)) catch {};
+            writer.writeAll(format.formatIskAbbreviated(&isk_buf, value)) catch {};
         },
     }
 }
