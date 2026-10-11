@@ -7,11 +7,11 @@ const placement = @import("../layout/placement.zig");
 const spaces = @import("../layout/spaces.zig");
 const monitors = @import("../layout/monitors.zig");
 const log = @import("../log.zig");
-const slog = log.scoped("arrange");
 
 const Painter = painter_mod.Painter;
 const ThumbnailWindow = window.ThumbnailWindow;
 const Size = window.Size;
+const slog = log.scoped("arrange");
 
 pub const Place = struct { position: config_mod.Position, size: Size };
 
@@ -108,7 +108,7 @@ pub fn beginDefer(painter: *const Painter) ?win32.HDWP {
     return win32.BeginDeferWindowPos(window_count + 2);
 }
 
-/// Moves every thumbnail to where the display settings put it. Never writes startX/startY, which can be live-dragged in the running app.
+/// Never writes startX/startY, which can be live-dragged in the running app.
 pub fn repositionAll(painter: *Painter) void {
     var assignment = assignSpaces(painter) catch |err| {
         slog.err("Failed to assign thumbnails to their spaces: {}", .{err});

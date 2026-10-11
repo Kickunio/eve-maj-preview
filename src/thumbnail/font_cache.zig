@@ -7,12 +7,12 @@ const log = @import("../log.zig");
 
 const slog = log.scoped("font_cache");
 
-/// Per-purpose font cache slot. Kept as u4 (not u3) so a future slot doesn't need a resize.
 /// `combat` is incoming DPS's slot; outgoing DPS has its own.
 pub const FontSlot = enum(u4) { main, combat, mining, bounty, system_name, group_badge, notification, combat_outgoing, resources, session_timer };
 
 const Entry = struct {
     font: ?win32.HFONT = null,
+    /// Owned; freed when replaced or in deinit.
     name: []const u8 = "",
     size: i32 = 0,
     weight: types.FontWeight = .Regular,
@@ -24,7 +24,7 @@ pub const FontCache = struct {
     entries: std.AutoHashMap(u32, Entry),
 
     pub fn init(allocator: std.mem.Allocator) FontCache {
-        return .{ .allocator = allocator, .entries = std.AutoHashMap(u32, Entry).init(allocator) };
+        return .{ .allocator = allocator, .entries = .init(allocator) };
     }
 
     pub fn deinit(self: *FontCache) void {
@@ -41,7 +41,7 @@ pub const FontCache = struct {
         return self.get(.main, dpi, thumbnail_config.characterNameFontName, win32.scalePixels(thumbnail_config.characterNameFontSize, win32.dpiToScale(dpi)), thumbnail_config.characterNameFontWeight);
     }
 
-    /// Gets or creates the cached font for the given (slot, dpi), recreating it only if its settings changed.
+    /// Recreated only when its settings change; the cache owns the returned font.
     pub fn get(self: *FontCache, slot: FontSlot, dpi: u32, font_name: []const u8, font_size: i32, font_weight: types.FontWeight) !win32.HFONT {
         const gop = try self.entries.getOrPut(cacheKey(slot, dpi));
         if (!gop.found_existing) gop.value_ptr.* = .{};
@@ -84,11 +84,7 @@ pub const FontCache = struct {
             win32.CLEARTYPE_QUALITY,
             win32.DEFAULT_PITCH,
             font_name_z,
-        );
-
-        if (font == null) {
-            return error.CreateFontFailed;
-        }
+        ) orelse return error.CreateFontFailed;
 
         self.allocator.free(entry.name);
         entry.font = font;
@@ -98,7 +94,7 @@ pub const FontCache = struct {
 
         slog.debug("Created cached font for slot {} @ {} DPI: {s} size={} weight={}", .{ slot, dpi, font_name, font_size, font_weight });
 
-        return font.?;
+        return font;
     }
 };
 

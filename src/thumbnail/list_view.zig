@@ -2,18 +2,21 @@
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const gdi_overlay = @import("../platform/gdi_overlay.zig");
-const PanelWindow = @import("../platform/panel_window.zig").PanelWindow;
+const panel_window = @import("../platform/panel_window.zig");
 const config_mod = @import("../config.zig");
 const types = @import("../config/types.zig");
 const list_look = @import("list_look.zig");
 const painter_mod = @import("../painter.zig");
-const ThumbnailWindow = @import("window.zig").ThumbnailWindow;
+const window = @import("window.zig");
 const input = @import("input.zig");
 const drag_panel = @import("../drag/panel.zig");
 const template = @import("../notifications/template.zig");
 const pixel_buffer = @import("../util/pixel_buffer.zig");
 
-const TEXT_BUF: usize = 256;
+const PanelWindow = panel_window.PanelWindow;
+const ThumbnailWindow = window.ThumbnailWindow;
+
+const TEXT_BUFFER_SIZE: usize = 256;
 /// Kept clear for the right-hand slot when a long name is cut short.
 const RIGHT_SLOT_MIN_WIDTH: i32 = 70;
 
@@ -30,6 +33,7 @@ const RowText = struct {
 pub const ListWindow = struct {
     panel: PanelWindow,
     store: *config_mod.ProfileStore,
+    /// Borrows store.live.
     config: *const config_mod.Config,
     /// Indices into the thumbnails render() was given, one per row in display order; hidden characters get none.
     rows: std.ArrayList(usize) = .empty,
@@ -78,8 +82,8 @@ pub const ListWindow = struct {
     }
 
     /// The list's active colour, or the character's own (or unique) active border colour.
-    fn resolveActiveBadgeColor(self: *const ListWindow, thumb: *const ThumbnailWindow) u32 {
-        if (thumb.cached_border_colors) |colors| {
+    fn resolveActiveBadgeColor(self: *const ListWindow, thumbnail: *const ThumbnailWindow) u32 {
+        if (thumbnail.cached_border_colors) |colors| {
             if (colors.activeBorderColor) |color| return color;
         }
         return self.config.display.listViewActiveColor;
@@ -133,83 +137,83 @@ pub const ListWindow = struct {
         }
 
         try self.row_source_hwnds.resize(self.panel.allocator, self.rows.items.len);
-        for (self.rows.items, self.row_source_hwnds.items) |thumb_index, *hwnd| hwnd.* = thumbnails[thumb_index].source_hwnd;
+        for (self.rows.items, self.row_source_hwnds.items) |thumbnail_index, *hwnd| hwnd.* = thumbnails[thumbnail_index].source_hwnd;
     }
 
     /// A hash of everything that affects the rendered pixels, to skip the redraw when nothing changed.
     fn computeRenderSignature(self: *const ListWindow, thumbnails: []const ThumbnailWindow, active_source_hwnd: ?win32.HWND) u64 {
         const display = &self.config.display;
-        var h = std.hash.Wyhash.init(0);
-        h.update(std.mem.asBytes(&self.rows.items.len));
-        h.update(std.mem.asBytes(&display.listViewColumns));
-        h.update(std.mem.asBytes(&display.listViewColumnWidth));
-        h.update(std.mem.asBytes(&display.listViewOrder));
-        h.update(std.mem.asBytes(&display.listViewOpacity));
-        h.update(display.listViewFontName);
-        h.update(std.mem.asBytes(&display.listViewFontSize));
-        h.update(std.mem.asBytes(&display.listViewFontWeight));
-        h.update(std.mem.asBytes(&display.listViewShowSystemName));
-        h.update(std.mem.asBytes(&display.listViewIndicatorStyle));
-        h.update(std.mem.asBytes(&display.listViewShowNotifications));
-        h.update(std.mem.asBytes(&display.listViewNotificationColor));
-        h.update(std.mem.asBytes(&display.listViewShowIncomingDps));
-        h.update(std.mem.asBytes(&display.listViewShowIncomingPrefix));
-        h.update(std.mem.asBytes(&display.listViewIncomingDpsColor));
-        h.update(std.mem.asBytes(&display.listViewShowOutgoingDps));
-        h.update(std.mem.asBytes(&display.listViewShowOutgoingPrefix));
-        h.update(std.mem.asBytes(&display.listViewOutgoingDpsColor));
-        h.update(std.mem.asBytes(&display.listViewShowMiningRate));
-        h.update(std.mem.asBytes(&display.listViewShowMiningPrefix));
-        h.update(std.mem.asBytes(&display.listViewMiningRateColor));
-        h.update(std.mem.asBytes(&display.listViewShowBountyRate));
-        h.update(std.mem.asBytes(&display.listViewShowBountyPrefix));
-        h.update(std.mem.asBytes(&display.listViewBountyRateColor));
-        h.update(std.mem.asBytes(&self.config.combat.enabled));
-        h.update(std.mem.asBytes(&self.config.mining.enabled));
-        h.update(std.mem.asBytes(&self.config.bounty.enabled));
-        h.update(std.mem.asBytes(&self.config.bounty.isk_rate_unit));
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&self.rows.items.len));
+        hasher.update(std.mem.asBytes(&display.listViewColumns));
+        hasher.update(std.mem.asBytes(&display.listViewColumnWidth));
+        hasher.update(std.mem.asBytes(&display.listViewOrder));
+        hasher.update(std.mem.asBytes(&display.listViewOpacity));
+        hasher.update(display.listViewFontName);
+        hasher.update(std.mem.asBytes(&display.listViewFontSize));
+        hasher.update(std.mem.asBytes(&display.listViewFontWeight));
+        hasher.update(std.mem.asBytes(&display.listViewShowSystemName));
+        hasher.update(std.mem.asBytes(&display.listViewIndicatorStyle));
+        hasher.update(std.mem.asBytes(&display.listViewShowNotifications));
+        hasher.update(std.mem.asBytes(&display.listViewNotificationColor));
+        hasher.update(std.mem.asBytes(&display.listViewShowIncomingDps));
+        hasher.update(std.mem.asBytes(&display.listViewShowIncomingPrefix));
+        hasher.update(std.mem.asBytes(&display.listViewIncomingDpsColor));
+        hasher.update(std.mem.asBytes(&display.listViewShowOutgoingDps));
+        hasher.update(std.mem.asBytes(&display.listViewShowOutgoingPrefix));
+        hasher.update(std.mem.asBytes(&display.listViewOutgoingDpsColor));
+        hasher.update(std.mem.asBytes(&display.listViewShowMiningRate));
+        hasher.update(std.mem.asBytes(&display.listViewShowMiningPrefix));
+        hasher.update(std.mem.asBytes(&display.listViewMiningRateColor));
+        hasher.update(std.mem.asBytes(&display.listViewShowBountyRate));
+        hasher.update(std.mem.asBytes(&display.listViewShowBountyPrefix));
+        hasher.update(std.mem.asBytes(&display.listViewBountyRateColor));
+        hasher.update(std.mem.asBytes(&self.config.combat.enabled));
+        hasher.update(std.mem.asBytes(&self.config.mining.enabled));
+        hasher.update(std.mem.asBytes(&self.config.bounty.enabled));
+        hasher.update(std.mem.asBytes(&self.config.bounty.isk_rate_unit));
         // Rows are hashed before they're sorted, so the configured order has to be hashed itself.
         if (display.listViewOrder == .ConfiguredCharacters) {
-            for (self.config.characters.items) |character| hashString(&h, character.name);
+            for (self.config.characters.items) |character| hashString(&hasher, character.name);
         }
 
-        for (self.rows.items) |thumb_index| {
-            const thumbnail = &thumbnails[thumb_index];
+        for (self.rows.items) |thumbnail_index| {
+            const thumbnail = &thumbnails[thumbnail_index];
             const render_state = thumbnail.effectiveRenderState(active_source_hwnd);
-            hashString(&h, thumbnail.character_name);
-            hashString(&h, thumbnail.cached_display_name);
-            hashString(&h, thumbnail.system_name);
-            h.update(std.mem.asBytes(&render_state));
-            h.update(std.mem.asBytes(&thumbnail.is_excluded_from_cycle));
-            h.update(std.mem.asBytes(&thumbnail.stats.incoming_dps));
-            h.update(std.mem.asBytes(&thumbnail.stats.outgoing_dps));
-            h.update(std.mem.asBytes(&thumbnail.stats.mining_rate));
-            h.update(std.mem.asBytes(&thumbnail.stats.bounty_isk_rate));
-            h.update(std.mem.asBytes(&thumbnail.stats.has_dps));
-            h.update(std.mem.asBytes(&thumbnail.stats.has_mining));
-            h.update(std.mem.asBytes(&thumbnail.stats.has_bounty));
-            if (thumbnail.system_name.len > 0) h.update(std.mem.asBytes(&thumbnail.cached_system_color));
-            if (thumbnail.cached_character_color) |cc| h.update(std.mem.asBytes(&cc));
+            hashString(&hasher, thumbnail.character_name);
+            hashString(&hasher, thumbnail.cached_display_name);
+            hashString(&hasher, thumbnail.system_name);
+            hasher.update(std.mem.asBytes(&render_state));
+            hasher.update(std.mem.asBytes(&thumbnail.is_excluded_from_cycle));
+            hasher.update(std.mem.asBytes(&thumbnail.stats.incoming_dps));
+            hasher.update(std.mem.asBytes(&thumbnail.stats.outgoing_dps));
+            hasher.update(std.mem.asBytes(&thumbnail.stats.mining_rate));
+            hasher.update(std.mem.asBytes(&thumbnail.stats.bounty_isk_rate));
+            hasher.update(std.mem.asBytes(&thumbnail.stats.has_dps));
+            hasher.update(std.mem.asBytes(&thumbnail.stats.has_mining));
+            hasher.update(std.mem.asBytes(&thumbnail.stats.has_bounty));
+            if (thumbnail.system_name.len > 0) hasher.update(std.mem.asBytes(&thumbnail.cached_system_color));
+            if (thumbnail.cached_character_color) |cc| hasher.update(std.mem.asBytes(&cc));
             if (render_state == .active) {
                 const badge_color = self.resolveActiveBadgeColor(thumbnail);
-                h.update(std.mem.asBytes(&badge_color));
+                hasher.update(std.mem.asBytes(&badge_color));
             }
-            for (thumbnail.notifications.items()) |notif| {
-                hashString(&h, notif.text);
-                h.update(std.mem.asBytes(&notif.border_color_override));
-                h.update(std.mem.asBytes(&notif.text_color_override));
+            for (thumbnail.notifications.items()) |notification| {
+                hashString(&hasher, notification.text);
+                hasher.update(std.mem.asBytes(&notification.border_color_override));
+                hasher.update(std.mem.asBytes(&notification.text_color_override));
             }
         }
 
-        return h.final();
+        return hasher.final();
     }
 
     /// The row's combat, mining and bounty rates the list shows, in writing order; empty when none is.
-    fn statReadings(self: *const ListWindow, thumb: *const ThumbnailWindow, out: *[list_look.STAT_COUNT]list_look.StatReading) []const list_look.StatReading {
+    fn statReadings(self: *const ListWindow, thumbnail: *const ThumbnailWindow, out: *[list_look.STAT_COUNT]list_look.StatReading) []const list_look.StatReading {
         const config = self.config;
         const settings: list_look.StatSettings = .{ .display = &config.display, .combat = &config.combat, .mining = &config.mining, .bounty = &config.bounty };
-        const stats = &thumb.stats;
-        const bounty_period_seconds: f32 = if (config.bounty.isk_rate_unit == .hour) 3600.0 else 60.0;
+        const stats = &thumbnail.stats;
+        const bounty_period_seconds = config.bounty.isk_rate_unit.seconds();
         var count: usize = 0;
         for (std.enums.values(list_look.Stat)) |stat| {
             if (!list_look.showsStat(settings, stat)) continue;
@@ -232,14 +236,14 @@ pub const ListWindow = struct {
         try self.panel.ensureSmallFont("List View small", display.listViewFontName, list_look.smallFontSize(display.listViewFontSize), display.listViewFontWeight);
 
         self.rows.clearRetainingCapacity();
-        var any_visible = false;
+        var has_visible_row = false;
         for (thumbnails, 0..) |*thumbnail, i| {
             if (thumbnail.cached_hide_thumbnail) continue;
             try self.rows.append(self.panel.allocator, i);
-            if (thumbnail.visibility_state == .visible) any_visible = true;
+            if (thumbnail.visibility_state == .visible) has_visible_row = true;
         }
         // Also hidden once the visibility toggle or auto-hide has hidden every client.
-        if (!any_visible) {
+        if (!has_visible_row) {
             self.panel.hide();
             return;
         }
@@ -278,7 +282,7 @@ pub const ListWindow = struct {
             _ = win32.SelectObject(dc, font);
         };
 
-        for (self.rows.items, 0..) |thumb_index, i| self.drawRow(bitmap, &thumbnails[thumb_index], i, columns, sizes, row_text, active_source_hwnd);
+        for (self.rows.items, 0..) |thumbnail_index, row_index| self.drawRow(bitmap, &thumbnails[thumbnail_index], row_index, columns, sizes, row_text, active_source_hwnd);
 
         pixel_buffer.fixTextAlpha(bitmap.pixels, width, height);
         pixel_buffer.drawRoundedFrame(bitmap.pixels, bitmap.width, bitmap.height, list_look.CORNER_RADIUS, list_look.BORDER);
@@ -286,24 +290,24 @@ pub const ListWindow = struct {
         self.panel.present(display.listViewOpacity, signature);
     }
 
-    /// Row `i` in display order: its tint, status badge, name, and one right-hand slot for a notification, stats or system.
-    fn drawRow(self: *const ListWindow, bitmap: *const gdi_overlay.OverlayBitmap, thumb: *const ThumbnailWindow, i: usize, columns: i32, sizes: list_look.Metrics, row_text: ?RowText, active_source_hwnd: ?win32.HWND) void {
+    /// Row `row_index` in display order: its tint, status badge, name, and one right-hand slot for a notification, stats or system.
+    fn drawRow(self: *const ListWindow, bitmap: *const gdi_overlay.OverlayBitmap, thumbnail: *const ThumbnailWindow, row_index: usize, columns: i32, sizes: list_look.Metrics, row_text: ?RowText, active_source_hwnd: ?win32.HWND) void {
         const display = &self.config.display;
         const width: usize = bitmap.width;
         const height: usize = bitmap.height;
         const columns_u: usize = @intCast(columns);
-        const row: i32 = @intCast(i / columns_u);
-        const column: i32 = @intCast(i % columns_u);
+        const row: i32 = @intCast(row_index / columns_u);
+        const column: i32 = @intCast(row_index % columns_u);
         const row_top: i32 = sizes.header_height + row * sizes.row_height;
         const column_left: i32 = column * sizes.column_width;
-        const render_state = thumb.effectiveRenderState(active_source_hwnd);
+        const render_state = thumbnail.effectiveRenderState(active_source_hwnd);
         const is_active = render_state == .active;
         const is_alert = render_state == .alert;
-        const is_excluded = thumb.is_excluded_from_cycle;
-        const active_color = self.resolveActiveBadgeColor(thumb);
+        const is_excluded = thumbnail.is_excluded_from_cycle;
+        const active_color = self.resolveActiveBadgeColor(thumbnail);
 
         const tint: ?u32 = if (is_alert)
-            list_look.alertTint(alertColor(thumb))
+            list_look.alertTint(alertColor(thumbnail))
         else if (is_active)
             list_look.activeTint(active_color)
         else
@@ -333,32 +337,32 @@ pub const ListWindow = struct {
         const name_color: u32 = if (is_excluded)
             list_look.MUTED
         else
-            thumb.cached_character_color orelse if (is_active) list_look.activeNameColor(active_color) else list_look.NAME;
-        const max_name_w: usize = @intCast(sizes.column_width - name_offset - list_look.PADDING_X - RIGHT_SLOT_MIN_WIDTH);
-        if (measureTextWidth(dc, thumb.cached_display_name) <= max_name_w) {
-            drawText(dc, thumb.cached_display_name, text_left, name_y, name_color);
+            thumbnail.cached_character_color orelse if (is_active) list_look.activeNameColor(active_color) else list_look.NAME;
+        const max_name_width: usize = @intCast(sizes.column_width - name_offset - list_look.PADDING_X - RIGHT_SLOT_MIN_WIDTH);
+        if (measureTextWidth(dc, thumbnail.cached_display_name) <= max_name_width) {
+            drawText(dc, thumbnail.cached_display_name, text_left, name_y, name_color);
         } else {
-            drawTextTruncated(dc, thumb.cached_display_name, text_left, name_y, name_color, max_name_w);
+            drawTextTruncated(dc, thumbnail.cached_display_name, text_left, name_y, name_color, max_name_width);
         }
 
         var readings_buf: [list_look.STAT_COUNT]list_look.StatReading = undefined;
-        const readings = self.statReadings(thumb, &readings_buf);
+        const readings = self.statReadings(thumbnail, &readings_buf);
 
         _ = win32.SelectObject(dc, text.small_font);
         const small_y = row_top + @divTrunc(sizes.row_height - text.small_height, 2);
         const right_x = column_left + sizes.column_width - list_look.PADDING_X;
 
         // One slot only: the newest notification wins, then stats, then exclusion, then the system.
-        var notif_buf: [TEXT_BUF]u8 = undefined;
-        const newest = if (display.listViewShowNotifications) thumb.notifications.newest() else null;
-        if (newest) |notif| {
-            drawTextRight(dc, template.oneLine(notif.text, &notif_buf), right_x, small_y, notif.text_color_override orelse display.listViewNotificationColor, text_left);
+        var notification_buffer: [TEXT_BUFFER_SIZE]u8 = undefined;
+        const newest = if (display.listViewShowNotifications) thumbnail.notifications.newest() else null;
+        if (newest) |notification| {
+            drawTextRight(dc, template.oneLine(notification.text, &notification_buffer), right_x, small_y, notification.text_color_override orelse display.listViewNotificationColor, text_left);
         } else if (readings.len > 0) {
             drawStatsRight(dc, display, readings, right_x, small_y, text_left);
         } else if (is_excluded) {
             drawTextRight(dc, "Excluded", right_x, small_y, list_look.MUTED, text_left);
-        } else if (display.listViewShowSystemName and thumb.system_name.len > 0) {
-            drawTextRight(dc, thumb.system_name, right_x, small_y, thumb.cached_system_color, text_left);
+        } else if (display.listViewShowSystemName and thumbnail.system_name.len > 0) {
+            drawTextRight(dc, thumbnail.system_name, right_x, small_y, thumbnail.cached_system_color, text_left);
         }
     }
 };
@@ -366,9 +370,9 @@ pub const ListWindow = struct {
 var g_class_registered: bool = false;
 
 /// The newest notification's border colour, which tints an alerting row.
-fn alertColor(thumb: *const ThumbnailWindow) u32 {
-    const notif = thumb.notifications.newest() orelse return list_look.BADGE_ALERT;
-    return notif.border_color_override orelse list_look.BADGE_ALERT;
+fn alertColor(thumbnail: *const ThumbnailWindow) u32 {
+    const notification = thumbnail.notifications.newest() orelse return list_look.BADGE_ALERT;
+    return notification.border_color_override orelse list_look.BADGE_ALERT;
 }
 
 fn registerWindowClass(instance: win32.HINSTANCE) !void {
@@ -420,26 +424,26 @@ fn drawIndicator(bitmap: *const gdi_overlay.OverlayBitmap, style: types.ListIndi
     const width: usize = bitmap.width;
     const height: usize = bitmap.height;
     const radius = list_look.BADGE_RADIUS;
-    const cx = column_left + list_look.PADDING_X + radius;
-    const cy = row_top + @divTrunc(row_height, 2);
+    const center_x = column_left + list_look.PADDING_X + radius;
+    const center_y = row_top + @divTrunc(row_height, 2);
     switch (style) {
-        .Dot => drawDot(bitmap.pixels, width, height, cx, cy, radius, argb),
-        .Square => pixel_buffer.fillRect(bitmap.pixels, width, height, @intCast(cx - radius), @intCast(cy - radius), @intCast(radius * 2), @intCast(radius * 2), argb),
+        .Dot => drawDot(bitmap.pixels, width, height, center_x, center_y, radius, argb),
+        .Square => pixel_buffer.fillRect(bitmap.pixels, width, height, @intCast(center_x - radius), @intCast(center_y - radius), @intCast(radius * 2), @intCast(radius * 2), argb),
         .None => {},
     }
 }
 
-fn drawDot(pixels: [*]u32, width: usize, height: usize, cx: i32, cy: i32, r: i32, argb: u32) void {
-    const r2 = r * r;
-    var dy: i32 = -r;
-    while (dy <= r) : (dy += 1) {
-        var dx: i32 = -r;
-        while (dx <= r) : (dx += 1) {
-            if (dx * dx + dy * dy <= r2) {
-                const px: i32 = cx + dx;
-                const py: i32 = cy + dy;
-                if (px >= 0 and py >= 0 and @as(usize, @intCast(px)) < width and @as(usize, @intCast(py)) < height) {
-                    pixels[@as(usize, @intCast(py)) * width + @as(usize, @intCast(px))] = argb;
+fn drawDot(pixels: [*]u32, width: usize, height: usize, center_x: i32, center_y: i32, radius: i32, argb: u32) void {
+    const radius_squared = radius * radius;
+    var dy: i32 = -radius;
+    while (dy <= radius) : (dy += 1) {
+        var dx: i32 = -radius;
+        while (dx <= radius) : (dx += 1) {
+            if (dx * dx + dy * dy <= radius_squared) {
+                const x: i32 = center_x + dx;
+                const y: i32 = center_y + dy;
+                if (x >= 0 and y >= 0 and @as(usize, @intCast(x)) < width and @as(usize, @intCast(y)) < height) {
+                    pixels[@as(usize, @intCast(y)) * width + @as(usize, @intCast(x))] = argb;
                 }
             }
         }
@@ -449,27 +453,27 @@ fn drawDot(pixels: [*]u32, width: usize, height: usize, cx: i32, cy: i32, r: i32
 /// Ignores `color`'s alpha byte.
 fn drawText(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32) void {
     _ = win32.SetBkMode(dc, win32.TRANSPARENT);
-    const buf = gdi_overlay.toBufZ(TEXT_BUF, text);
-    const n = @min(text.len, TEXT_BUF - 1);
+    const text_z = gdi_overlay.toBufZ(TEXT_BUFFER_SIZE, text);
+    const length = @min(text.len, TEXT_BUFFER_SIZE - 1);
     _ = win32.SetTextColor(dc, gdi_overlay.toColorRef(color & 0x00FF_FFFF));
-    _ = win32.TextOutA(dc, x, y, &buf, @intCast(n));
+    _ = win32.TextOutA(dc, x, y, &text_z, @intCast(length));
 }
 
 /// The selected font's line height.
 fn lineHeight(dc: win32.HDC) i32 {
-    return gdi_overlay.measureTextSize(TEXT_BUF, dc, "Ag").cy;
+    return gdi_overlay.measureTextSize(TEXT_BUFFER_SIZE, dc, "Ag").cy;
 }
 
 fn measureTextWidth(dc: win32.HDC, text: []const u8) usize {
-    return gdi_overlay.measureTextWidth(TEXT_BUF, dc, text);
+    return gdi_overlay.measureTextWidth(TEXT_BUFFER_SIZE, dc, text);
 }
 
 /// Right edge at `right_x`; skipped rather than drawn left of `min_x`, where it would overlap the name.
 fn drawTextRight(dc: win32.HDC, text: []const u8, right_x: i32, y: i32, rgb: u32, min_x: i32) void {
-    const n = @min(text.len, TEXT_BUF - 1);
-    const x = right_x - @as(i32, @intCast(measureTextWidth(dc, text[0..n])));
+    const length = @min(text.len, TEXT_BUFFER_SIZE - 1);
+    const x = right_x - @as(i32, @intCast(measureTextWidth(dc, text[0..length])));
     if (x < min_x) return;
-    drawText(dc, text[0..n], x, y, rgb);
+    drawText(dc, text[0..length], x, y, rgb);
 }
 
 /// Right-aligned at `right_x`, each reading in its own colour a space apart; skipped like drawTextRight rather than drawn left of `min_x`.
@@ -495,15 +499,15 @@ fn drawStatsRight(dc: win32.HDC, display: *const config_mod.DisplayConfig, readi
     }
 }
 
-/// Truncated with "..." to fit `max_w` pixels.
-fn drawTextTruncated(dc: win32.HDC, text: []const u8, x: i32, y: i32, rgb: u32, max_w: usize) void {
-    var out: [TEXT_BUF:0]u8 = undefined;
-    const truncated = gdi_overlay.truncateTextToFit(TEXT_BUF, dc, &out, text, max_w);
+/// Truncated with "..." to fit `max_width` pixels.
+fn drawTextTruncated(dc: win32.HDC, text: []const u8, x: i32, y: i32, rgb: u32, max_width: usize) void {
+    var out: [TEXT_BUFFER_SIZE:0]u8 = undefined;
+    const truncated = gdi_overlay.truncateTextToFit(TEXT_BUFFER_SIZE, dc, &out, text, max_width);
     drawText(dc, truncated, x, y, rgb);
 }
 
 /// Length-prefixed, so swapping "Bob" and "BobBob" can't leave the hashed byte stream unchanged.
-fn hashString(h: *std.hash.Wyhash, text: []const u8) void {
-    h.update(std.mem.asBytes(&text.len));
-    h.update(text);
+fn hashString(hasher: *std.hash.Wyhash, text: []const u8) void {
+    hasher.update(std.mem.asBytes(&text.len));
+    hasher.update(text);
 }

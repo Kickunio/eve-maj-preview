@@ -34,7 +34,9 @@ test {
     _ = @import("notifications/template.zig");
     _ = @import("platform/virtual_keys.zig");
     _ = @import("protocol.zig");
+    _ = @import("thumbnail/draw.zig");
     _ = @import("thumbnail/list_look.zig");
+    _ = @import("thumbnail/state.zig");
     _ = @import("util/color.zig");
     _ = @import("util/format.zig");
     _ = @import("util/pixel_buffer.zig");

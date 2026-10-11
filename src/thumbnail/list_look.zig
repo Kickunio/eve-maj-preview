@@ -1,4 +1,4 @@
-//! The client list panel's look, shared by the panel and the config dialog's preview: its sizes, palette, colour rules and stat text; no I/O. The History Panel shares its palette and sizes.
+//! The client list panel's look, shared with its config preview and the History Panel: sizes, palette, colour rules and stat text; no I/O.
 const std = @import("std");
 const types = @import("../config/types.zig");
 const activity = @import("../config/activity.zig");
@@ -98,11 +98,11 @@ pub fn rowHeight(font_size: i32) i32 {
     return @max(MIN_ROW_HEIGHT, lineHeight(font_size) + ROW_TEXT_PADDING);
 }
 
-/// Columns to lay `count` rows out in, row by row: the configured number, at most MAX_COLUMNS, and never more than there are rows.
-pub fn effectiveColumns(configured: u32, count: usize) i32 {
+/// Columns to lay `row_count` rows out in, row by row: the configured number, at most MAX_COLUMNS, and never more than there are rows.
+pub fn effectiveColumns(configured: u32, row_count: usize) i32 {
     const clamped: i32 = @max(1, @min(MAX_COLUMNS, @as(i32, @intCast(configured))));
-    if (count == 0) return clamped;
-    return @min(clamped, @as(i32, @intCast(count)));
+    if (row_count == 0) return clamped;
+    return @min(clamped, @as(i32, @intCast(row_count)));
 }
 
 /// The header's and right-hand slot's font size.
@@ -111,18 +111,18 @@ pub fn smallFontSize(font_size: i32) i32 {
 }
 
 /// The active row's background.
-pub fn activeTint(active: u32) u32 {
-    return color.mix(active, PANEL, ACTIVE_TINT_PERCENT);
+pub fn activeTint(active_color: u32) u32 {
+    return color.mix(active_color, PANEL, ACTIVE_TINT_PERCENT);
 }
 
 /// An alerting row's background, from its notification's colour.
-pub fn alertTint(alert: u32) u32 {
-    return color.mix(alert, PANEL, ALERT_TINT_PERCENT);
+pub fn alertTint(alert_color: u32) u32 {
+    return color.mix(alert_color, PANEL, ALERT_TINT_PERCENT);
 }
 
 /// The active row's name, for a character without a name colour of its own.
-pub fn activeNameColor(active: u32) u32 {
-    return color.lighten(active, ACTIVE_NAME_LIGHTEN_PERCENT);
+pub fn activeNameColor(active_color: u32) u32 {
+    return color.lighten(active_color, ACTIVE_NAME_LIGHTEN_PERCENT);
 }
 
 pub fn headerText(buffer: *[HEADER_TEXT_MAX]u8, count: usize) []const u8 {

@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 
-const slog = log.scoped("state");
+const slog = log.scoped("thumbnail_state");
 
 pub const VisibilityState = enum {
     visible,
@@ -33,7 +33,7 @@ pub const ThumbnailState = enum {
     dragging,
 };
 
-/// Returns error.InvalidVisibilityTransition if the transition isn't allowed.
+/// Logs and returns error.InvalidVisibilityTransition for a disallowed transition.
 pub fn transitionVisibility(
     current: VisibilityState,
     next: VisibilityState,
@@ -66,4 +66,10 @@ pub fn tryTransitionVisibility(
     context_name: []const u8,
 ) VisibilityState {
     return transitionVisibility(current, next, context_name) catch current;
+}
+
+test "a hidden thumbnail can be shown or switch to the other hidden state, but not re-enter its own" {
+    try std.testing.expect(VisibilityState.hidden_automatic.canTransitionTo(.visible));
+    try std.testing.expect(VisibilityState.hidden_automatic.canTransitionTo(.hidden_manual));
+    try std.testing.expect(!VisibilityState.hidden_manual.canTransitionTo(.hidden_manual));
 }

@@ -53,7 +53,17 @@ pub const CombatConfig = struct {
     pub const Wire = wire.Wire(CombatConfig);
 };
 
-pub const IskRateUnit = enum { minute, hour };
+pub const IskRateUnit = enum {
+    minute,
+    hour,
+
+    pub fn seconds(self: IskRateUnit) f32 {
+        return switch (self) {
+            .minute => 60.0,
+            .hour => 3600.0,
+        };
+    }
+};
 
 pub const MiningConfig = struct {
     enabled: bool = false,

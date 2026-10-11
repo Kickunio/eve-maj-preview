@@ -83,6 +83,7 @@ pub const MiningConfig = activity.MiningConfig;
 pub const BountyConfig = activity.BountyConfig;
 pub const ResourcesConfig = activity.ResourcesConfig;
 pub const TravelConfig = activity.TravelConfig;
+pub const IskRateUnit = activity.IskRateUnit;
 pub const NotificationTypeConfig = notifications.NotificationTypeConfig;
 pub const NotificationConfig = notifications.NotificationConfig;
 pub const WindowFilterConfig = window_filters.WindowFilterConfig;

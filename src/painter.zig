@@ -440,15 +440,15 @@ pub const Painter = struct {
         return self.hasThumbnail(foreground_hwnd);
     }
 
-    /// See ThumbnailWindow.system_name_event_ts and .travel for `event_ts` and `is_jump`.
+    /// See ThumbnailWindow.system_name_event_timestamp and .travel for `event_ts` and `is_jump`.
     pub fn updateSystemNameByHwnd(self: *Painter, source_hwnd: win32.HWND, system_name: []const u8, event_ts: u64, is_jump: bool) !void {
         const thumbnail = self.getThumbnailBySourceHwnd(source_hwnd) orelse {
             slog.debug("No thumbnail for window 0x{x} to show system {s}", .{ @intFromPtr(source_hwnd), system_name });
             return;
         };
 
-        if (event_ts != 0 and event_ts < thumbnail.system_name_event_ts) {
-            slog.debug("Ignoring stale system update for {s}: {s} (event_ts={} < current={})", .{ thumbnail.character_name, system_name, event_ts, thumbnail.system_name_event_ts });
+        if (event_ts != 0 and event_ts < thumbnail.system_name_event_timestamp) {
+            slog.debug("Ignoring stale system update for {s}: {s} (event_ts={} < current={})", .{ thumbnail.character_name, system_name, event_ts, thumbnail.system_name_event_timestamp });
             return;
         }
 
@@ -456,7 +456,7 @@ pub const Painter = struct {
         self.allocator.free(thumbnail.system_name);
 
         thumbnail.system_name = new_name;
-        thumbnail.system_name_event_ts = event_ts;
+        thumbnail.system_name_event_timestamp = event_ts;
         thumbnail.cached_system_color = self.auto_colors.systemNameColor(self.config, system_name);
         thumbnail.render_cache.system_name.dims = null;
         thumbnail.render_cache.settings = null;

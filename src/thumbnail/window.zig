@@ -108,7 +108,7 @@ pub const ThumbnailWindow = struct {
     /// Owned; Painter frees the old one on each system change.
     system_name: []const u8,
     /// In-game timestamp of the event that set system_name (YYYYMMDD*1000000+HHMMSS); 0 = untimestamped source (e.g. live tailing), which always applies.
-    system_name_event_ts: u64 = 0,
+    system_name_event_timestamp: u64 = 0,
     travel: travel_left_behind.LeftBehindState = .{},
     notifications: stack.NotificationStack = .{},
     last_click_time: win32.Ticks = .{},
@@ -129,10 +129,11 @@ pub const ThumbnailWindow = struct {
     /// Edge-detector so a minimize/restore with no accompanying focus change still marks this dirty for repaint; refreshed each tick by Painter.updateThumbnailStates, except while dragged.
     was_minimized: bool = false,
 
-    // Config-derived per-character values, set only by refreshConfigCache: resolved on character_name change or (re)creation rather than every tick (list_view.zig hashes these every ~50ms per thumbnail, createRenderSettings reads them per dirty thumbnail).
+    // Config-derived per-character values, set only by refreshConfigCache so hot paths don't re-resolve them.
     cached_system_color: u32 = 0,
     /// Auto-generated per-character name color; null when "Unique Character Name Colors" is disabled, and callers fall back to their own default.
     cached_character_color: ?u32 = null,
+    /// Borrows from config or character_name.
     cached_display_name: []const u8 = "",
     cached_border_colors: ?config_mod.CharacterBorderColorsConfig = null,
     cached_excluded_from_minimize: bool = false,
@@ -160,7 +161,6 @@ pub const ThumbnailWindow = struct {
         return now.elapsedSince(self.session_start) / std.time.ms_per_min;
     }
 
-    /// Whether this thumbnail's source_hwnd is the live "who's focused" pointer.
     pub fn isFocused(self: *const ThumbnailWindow, active_source_hwnd: ?win32.HWND) bool {
         return self.source_hwnd == active_source_hwnd;
     }
@@ -178,17 +178,11 @@ pub const ThumbnailWindow = struct {
     pub fn setVisibility(self: *ThumbnailWindow, new_visibility: state.VisibilityState) void {
         const blocks_hiding = !self.notifications.isEmpty() or thumbnail_drag.isDragging(self);
         if (new_visibility != .visible and blocks_hiding) {
-            slog.warn("Failed to hide '{s}': it's alerting or being dragged", .{self.character_name});
+            slog.debug("Kept '{s}' shown: it's alerting or being dragged", .{self.character_name});
             return;
         }
 
-        const transitioned_visibility = state.tryTransitionVisibility(
-            self.visibility_state,
-            new_visibility,
-            self.character_name,
-        );
-
-        self.visibility_state = transitioned_visibility;
+        self.visibility_state = state.tryTransitionVisibility(self.visibility_state, new_visibility, self.character_name);
     }
 
     pub fn isVisible(self: *const ThumbnailWindow) bool {
@@ -196,27 +190,27 @@ pub const ThumbnailWindow = struct {
     }
 
     pub fn show(self: *const ThumbnailWindow, shown: bool) void {
-        const cmd: c_int = if (shown) win32.SW_SHOW else win32.SW_HIDE;
-        _ = win32.ShowWindow(self.hwnd, cmd);
-        _ = win32.ShowWindow(self.text_hwnd, cmd);
+        const show_command: c_int = if (shown) win32.SW_SHOW else win32.SW_HIDE;
+        _ = win32.ShowWindow(self.hwnd, show_command);
+        _ = win32.ShowWindow(self.text_hwnd, show_command);
     }
 
     /// Moves (and, given a size, resizes) both windows, keeping the text overlay above the thumbnail.
     pub fn moveTo(self: *const ThumbnailWindow, x: i32, y: i32, size: ?Size) void {
-        const w = if (size) |s| s.width else 0;
-        const h = if (size) |s| s.height else 0;
+        const width = if (size) |s| s.width else 0;
+        const height = if (size) |s| s.height else 0;
         const size_flag: u32 = if (size == null) win32.SWP_NOSIZE else 0;
-        _ = win32.SetWindowPos(self.hwnd, win32.HWND_NOTOPMOST, x, y, w, h, size_flag | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE);
-        _ = win32.SetWindowPos(self.text_hwnd, win32.HWND_TOPMOST, x, y, w, h, size_flag | win32.SWP_NOACTIVATE);
+        _ = win32.SetWindowPos(self.hwnd, win32.HWND_NOTOPMOST, x, y, width, height, size_flag | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE);
+        _ = win32.SetWindowPos(self.text_hwnd, win32.HWND_TOPMOST, x, y, width, height, size_flag | win32.SWP_NOACTIVATE);
     }
 
     /// Queues moving (and, given a size, resizing) both windows; the DWM thumbnail's own rect is updated straight away, since DeferWindowPos won't.
     pub fn deferPlace(self: *const ThumbnailWindow, hdwp: win32.HDWP, x: i32, y: i32, size: ?Size) ?win32.HDWP {
-        const w = if (size) |s| s.width else 0;
-        const h = if (size) |s| s.height else 0;
+        const width = if (size) |s| s.width else 0;
+        const height = if (size) |s| s.height else 0;
         const size_flag: u32 = if (size == null) win32.SWP_NOSIZE else 0;
-        const after_thumb = win32.DeferWindowPos(hdwp, self.hwnd, win32.HWND_NOTOPMOST, x, y, w, h, size_flag | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE) orelse return null;
-        const after_text = win32.DeferWindowPos(after_thumb, self.text_hwnd, win32.HWND_TOPMOST, x, y, w, h, size_flag | win32.SWP_NOACTIVATE) orelse return null;
+        const after_thumbnail = win32.DeferWindowPos(hdwp, self.hwnd, win32.HWND_NOTOPMOST, x, y, width, height, size_flag | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE) orelse return null;
+        const after_text = win32.DeferWindowPos(after_thumbnail, self.text_hwnd, win32.HWND_TOPMOST, x, y, width, height, size_flag | win32.SWP_NOACTIVATE) orelse return null;
         if (size) |s| self.setThumbnailRect(s);
         return after_text;
     }
@@ -251,7 +245,11 @@ pub fn registerClasses(instance: win32.HINSTANCE) !void {
 
     // Black, not white COLOR_WINDOW: shows through whenever DWM has no live thumbnail frame to composite.
     const thumbnail_bg_brush = win32.CreateSolidBrush(0x00000000) orelse return error.CreateBrushFailed;
-    try gdi_overlay.registerWindowClass(instance, input.windowProc, WINDOW_CLASS_NAME, thumbnail_bg_brush);
+    // Owned by the class once registered.
+    gdi_overlay.registerWindowClass(instance, input.windowProc, WINDOW_CLASS_NAME, thumbnail_bg_brush) catch |err| {
+        _ = win32.DeleteObject(thumbnail_bg_brush);
+        return err;
+    };
     // No background brush for a layered window.
     try gdi_overlay.registerWindowClass(instance, input.textWindowProc, TEXT_WINDOW_CLASS_NAME, null);
     g_classes_registered = true;
@@ -281,17 +279,16 @@ pub fn create(allocator: std.mem.Allocator, instance: win32.HINSTANCE, source_hw
     ) orelse return error.CreateWindowFailed;
     errdefer _ = win32.DestroyWindow(hwnd);
 
-    _ = win32.SetLayeredWindowAttributes(hwnd, 0, opacity, win32.LWA_ALPHA);
+    if (!win32.toBool(win32.SetLayeredWindowAttributes(hwnd, 0, opacity, win32.LWA_ALPHA))) return error.SetLayeredWindowAttributesFailed;
 
     var thumbnail_id: win32.HTHUMBNAIL = undefined;
     if (win32.DwmRegisterThumbnail(hwnd, source_hwnd, &thumbnail_id) != 0) return error.DwmRegisterThumbnailFailed;
     errdefer _ = win32.DwmUnregisterThumbnail(thumbnail_id);
 
-    var client_rect: win32.RECT = undefined;
-    _ = win32.GetClientRect(hwnd, &client_rect);
-    const props = thumbnailProps(.{ .width = client_rect.right, .height = client_rect.bottom }, win32.DWM_TNP_VISIBLE | win32.DWM_TNP_RECTDESTINATION | win32.DWM_TNP_SOURCECLIENTAREAONLY);
+    const props = thumbnailProps(size, win32.DWM_TNP_VISIBLE | win32.DWM_TNP_RECTDESTINATION | win32.DWM_TNP_SOURCECLIENTAREAONLY);
     if (win32.DwmUpdateThumbnailProperties(thumbnail_id, &props) != 0) return error.DwmUpdateThumbnailPropertiesFailed;
 
+    // A name of its own, since the error is the log's only clue to which window failed.
     const text_hwnd = win32.CreateWindowExA(
         win32.WS_EX_LAYERED | win32.WS_EX_TOPMOST | win32.WS_EX_TOOLWINDOW | win32.WS_EX_NOACTIVATE | click_through_ex,
         TEXT_WINDOW_CLASS_NAME,
@@ -339,8 +336,8 @@ pub fn destroyHandles(handles: Handles) void {
 pub fn thumbnailProps(size: Size, flags: u32) win32.DWM_THUMBNAIL_PROPERTIES {
     return .{
         .dwFlags = flags,
-        .rcDestination = win32.RECT{ .left = 0, .top = 0, .right = size.width, .bottom = size.height },
-        .rcSource = win32.RECT{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+        .rcDestination = .{ .left = 0, .top = 0, .right = size.width, .bottom = size.height },
+        .rcSource = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
         .opacity = 255,
         .fVisible = win32.TRUE,
         .fSourceClientAreaOnly = win32.TRUE,
