@@ -234,7 +234,7 @@ pub const ChatlogMonitor = struct {
         defer starts.deinit(self.allocator);
         try self.session_starts.drain(&starts);
 
-        const now = std.Io.Timestamp.now(self.io, .real).toSeconds();
+        const now_seconds = std.Io.Timestamp.now(self.io, .real).toSeconds();
         for (starts.items) |*start| {
             defer start.deinit(self.allocator);
             const scout_ptr = scout.g_scout_ptr orelse continue;
@@ -242,7 +242,7 @@ pub const ChatlogMonitor = struct {
                 slog.debug("Dropped session start for '{s}': no window", .{start.character_name});
                 continue;
             };
-            const logged_in_at = scout_ptr.backdateLogin(hwnd, start.started_at, now) orelse continue;
+            const logged_in_at = scout_ptr.backdateLogin(hwnd, start.started_at, now_seconds) orelse continue;
             const painter_ptr = painter.g_painter_ptr orelse continue;
             painter_ptr.setSessionStart(hwnd, logged_in_at);
         }

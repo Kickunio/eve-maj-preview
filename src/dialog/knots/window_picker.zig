@@ -100,7 +100,7 @@ fn collectWindow(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win32.BOOL
     var class_buf: [64:0]u8 = undefined;
     const class = win32.getClassNameBuf(hwnd, &class_buf) orelse return win32.TRUE;
     var executable_buf: [260:0]u8 = undefined;
-    const executable = win32.windowExeName(hwnd, &executable_buf) orelse return win32.TRUE;
+    const executable = win32.windowExecutableName(hwnd, &executable_buf) orelse return win32.TRUE;
     if (executable.len == 0) return win32.TRUE;
 
     for (scan.windows.items) |existing| {

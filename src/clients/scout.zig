@@ -103,7 +103,7 @@ pub const Scout = struct {
         if (hooks.destroy == null) slog.warn("Failed to hook window destroys for pid {} - closed windows will be noticed within a second instead", .{process_id});
 
         self.process_hooks.put(process_id, hooks) catch |err| {
-            slog.err("Failed to record event hooks for pid {}: {}", .{ process_id, err });
+            slog.warn("Failed to record event hooks for pid {}, falling back to scans: {}", .{ process_id, err });
             hooks.unhook();
         };
     }
@@ -148,7 +148,7 @@ pub const Scout = struct {
         self.windows.deinit(self.allocator);
     }
 
-    fn freeWindow(self: *Scout, window: EveWindow) void {
+    fn freeWindow(self: *const Scout, window: EveWindow) void {
         self.allocator.free(window.character_name);
     }
 
@@ -200,7 +200,7 @@ pub const Scout = struct {
         if (!win32.toBool(win32.EnumWindows(enumWindowsCallback, win32.ptrToLparam(self)))) return error.EnumWindowsFailed;
     }
 
-    pub fn getWindows(self: *Scout) []const EveWindow {
+    pub fn getWindows(self: *const Scout) []const EveWindow {
         return self.windows.items;
     }
 
@@ -304,8 +304,8 @@ pub const Scout = struct {
         };
     }
 
-    /// `started_at` is UTC Unix seconds; null if it's outside the client's lifetime.
-    pub fn backdateLogin(self: *Scout, hwnd: win32.HWND, started_at: i64, now: i64) ?win32.Ticks {
+    /// Null if `started_at_seconds` (UTC Unix) is outside the client's lifetime.
+    pub fn backdateLogin(self: *Scout, hwnd: win32.HWND, started_at_seconds: i64, now_seconds: i64) ?win32.Ticks {
         const index = self.indexOf(hwnd) orelse return null;
         const eve_window = &self.windows.items[index];
         if (eve_window.logged_in_at.isZero() or eve_window.is_login_time_exact) return null;
@@ -315,12 +315,12 @@ pub const Scout = struct {
             return null;
         };
         // Log names are whole seconds.
-        if (started_at < process_started.toUnixSeconds() - 1 or started_at > now) {
+        if (started_at_seconds < process_started.toUnixSeconds() - 1 or started_at_seconds > now_seconds) {
             slog.debug("Ignoring gamelog session start for {s}: outside its client's lifetime", .{eve_window.character_name});
             return null;
         }
 
-        const session_ms: u64 = @intCast((now - started_at) * std.time.ms_per_s);
+        const session_ms: u64 = @intCast((now_seconds - started_at_seconds) * std.time.ms_per_s);
         const backdated: win32.Ticks = .{ .ms = win32.Ticks.now().ms -| session_ms };
         if (backdated.isZero() or backdated.ms >= eve_window.logged_in_at.ms) return null;
 
@@ -345,11 +345,11 @@ pub const Scout = struct {
         return null;
     }
 
-    /// First filter matching both class and executable; a null exe_path checks the class alone.
-    fn findMatchingFilter(self: *const Scout, class_name: []const u8, exe_path: ?[]const u8) ?*const config_mod.WindowFilterConfig {
+    /// First filter matching both class and executable; a null executable_path checks the class alone.
+    fn findMatchingFilter(self: *const Scout, class_name: []const u8, executable_path: ?[]const u8) ?*const config_mod.WindowFilterConfig {
         for (self.config.windowFilters.items) |*filter| {
             if (!filter.matchesClass(class_name)) continue;
-            if (exe_path) |path| {
+            if (executable_path) |path| {
                 if (!filter.matchesExecutable(path)) continue;
             }
             return filter;
@@ -361,10 +361,10 @@ pub const Scout = struct {
         var class_name_buf: [MAX_CLASS_NAME_LENGTH:0]u8 = undefined;
         const class_name = win32.getClassNameBuf(hwnd, &class_name_buf) orelse return null;
 
-        var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
-        const exe_path = win32.queryProcessExePath(process_id, &exe_path_buf) orelse return null;
+        var executable_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+        const executable_path = win32.queryProcessExecutablePath(process_id, &executable_path_buf) orelse return null;
 
-        return self.findMatchingFilter(class_name, exe_path);
+        return self.findMatchingFilter(class_name, executable_path);
     }
 
     /// Drops windows no filter matches any more, which scanning skips as already tracked, and renames non-EVE windows after a renamed filter; call after a reload, before recreating thumbnails.
@@ -383,7 +383,7 @@ pub const Scout = struct {
     }
 };
 
-/// Set by setGlobalInstance for the WinEvent callbacks and other modules; also main.zig's only handle.
+/// Set by setGlobalInstance, for the WinEvent callbacks and other modules.
 pub var g_scout_ptr: ?*Scout = null;
 
 pub fn isGenericCharacterName(name: []const u8) bool {
@@ -430,9 +430,9 @@ fn enumWindowsCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win3
     var process_id: win32.DWORD = 0;
     _ = win32.GetWindowThreadProcessId(hwnd, &process_id);
 
-    var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
-    const exe_path = win32.queryProcessExePath(process_id, &exe_path_buf) orelse return win32.TRUE;
-    const matching_filter = scout.findMatchingFilter(class_name, exe_path) orelse return win32.TRUE;
+    var executable_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+    const executable_path = win32.queryProcessExecutablePath(process_id, &executable_path_buf) orelse return win32.TRUE;
+    const matching_filter = scout.findMatchingFilter(class_name, executable_path) orelse return win32.TRUE;
 
     var title_buf: [MAX_TITLE_LENGTH]u8 = undefined;
     const title = win32.getWindowTitleBuf(hwnd, &title_buf) catch |err| switch (err) {
@@ -451,7 +451,7 @@ fn enumWindowsCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win3
         return win32.TRUE;
     };
 
-    const eve_window = EveWindow{
+    const eve_window: EveWindow = .{
         .hwnd = hwnd,
         .character_name = character_name,
         .process_id = process_id,

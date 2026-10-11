@@ -7,7 +7,7 @@ const slog = log.Scoped("run_on_startup");
 
 const STARTUP_RUN_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const STARTUP_RUN_VALUE_NAME = "EVE-Maj Preview";
-const EXE_NAME = "eve-maj-preview.exe";
+const EXECUTABLE_NAME = "eve-maj-preview.exe";
 
 /// Adds or removes this exe under the user's Run key; failures are logged.
 pub fn apply(is_enabled: bool) void {
@@ -27,14 +27,14 @@ pub fn apply(is_enabled: bool) void {
         return;
     }
 
-    var exe_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_dir = win32.selfExeDirPath(&exe_path_buf) catch |err| {
+    var executable_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const executable_dir = win32.selfExecutableDirPath(&executable_path_buf) catch |err| {
         slog.err("Failed to find the executable directory for startup registration: {}", .{err});
         return;
     };
     // Room for the two quotes, the separator and the sentinel.
-    var command_buf: [std.Io.Dir.max_path_bytes + EXE_NAME.len + 4]u8 = undefined;
-    const command = std.mem.printSentinel(&command_buf, "\"{s}\\" ++ EXE_NAME ++ "\"", .{exe_dir}, 0) catch unreachable;
+    var command_buf: [std.Io.Dir.max_path_bytes + EXECUTABLE_NAME.len + 4]u8 = undefined;
+    const command = std.mem.printSentinel(&command_buf, "\"{s}\\" ++ EXECUTABLE_NAME ++ "\"", .{executable_dir}, 0) catch unreachable;
 
     var key: win32.HKEY = undefined;
     var disposition: win32.DWORD = undefined;

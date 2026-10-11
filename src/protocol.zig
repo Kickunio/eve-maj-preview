@@ -191,8 +191,8 @@ pub fn isRegistered() bool {
 
 /// Logs the failing registry call before returning error.RegistryWriteFailed.
 fn register(allocator: std.mem.Allocator) !void {
-    var exe_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_path = try win32.selfExePath(&exe_path_buf);
+    var executable_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const executable_path = try win32.selfExecutablePath(&executable_path_buf);
 
     var key: win32.HKEY = undefined;
     var disposition: win32.DWORD = undefined;
@@ -266,7 +266,7 @@ fn register(allocator: std.mem.Allocator) !void {
     defer _ = win32.RegCloseKey(command_key);
 
     // \x00 is embedded in the format string itself, so command.len already covers the terminator (unlike description/url_protocol above, which need +1).
-    const command = try allocator.print("\"{s}\" --protocol \"%1\"\x00", .{exe_path});
+    const command = try allocator.print("\"{s}\" --protocol \"%1\"\x00", .{executable_path});
     defer allocator.free(command);
 
     result = win32.RegSetValueExA(
@@ -283,7 +283,7 @@ fn register(allocator: std.mem.Allocator) !void {
         return error.RegistryWriteFailed;
     }
 
-    slog.info("Protocol handler registered successfully: {s}", .{exe_path});
+    slog.info("Protocol handler registered successfully: {s}", .{executable_path});
 }
 
 fn urlDecode(allocator: std.mem.Allocator, encoded: []const u8) ![]const u8 {

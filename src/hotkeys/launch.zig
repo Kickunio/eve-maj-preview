@@ -93,9 +93,9 @@ fn findByExecutableCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c)
     const context: *FindByExecutableContext = win32.lparamToPtr(FindByExecutableContext, lParam);
     if (!win32.isWindowVisible(hwnd)) return win32.TRUE;
 
-    var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
-    const exe_name = win32.windowExeName(hwnd, &exe_path_buf) orelse return win32.TRUE;
-    if (!std.ascii.eqlIgnoreCase(exe_name, context.executable_name)) return win32.TRUE;
+    var executable_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+    const executable_name = win32.windowExecutableName(hwnd, &executable_path_buf) orelse return win32.TRUE;
+    if (!std.ascii.eqlIgnoreCase(executable_name, context.executable_name)) return win32.TRUE;
 
     context.found = hwnd;
     return win32.FALSE;
@@ -118,10 +118,10 @@ fn focusWindow(target: win32.HWND) void {
 /// The first App Hotkeys entry for the foreground window's executable, or null when it's none of them.
 fn foregroundAppIndex(apps: []const global_config.AppHotkeyConfig) ?usize {
     const foreground = win32.GetForegroundWindow() orelse return null;
-    var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
-    const exe_name = win32.windowExeName(foreground, &exe_path_buf) orelse return null;
+    var executable_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+    const executable_name = win32.windowExecutableName(foreground, &executable_path_buf) orelse return null;
     for (apps, 0..) |app, index| {
-        if (std.ascii.eqlIgnoreCase(app.executableName, exe_name)) return index;
+        if (std.ascii.eqlIgnoreCase(app.executableName, executable_name)) return index;
     }
     return null;
 }

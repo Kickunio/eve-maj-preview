@@ -1059,13 +1059,13 @@ pub fn getClassNameBuf(hwnd: HWND, buffer: []u8) ?[]const u8 {
 }
 
 /// Full executable path of process_id's owning process, or null if it can't be opened or queried.
-/// The returned slice borrows exe_path_buf.
-pub fn queryProcessExePath(process_id: DWORD, exe_path_buf: *[MAX_PATH:0]u8) ?[]const u8 {
+/// The returned slice borrows executable_path_buf.
+pub fn queryProcessExecutablePath(process_id: DWORD, executable_path_buf: *[MAX_PATH:0]u8) ?[]const u8 {
     const handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id) orelse return null;
     defer _ = CloseHandle(handle);
-    const path_len = GetModuleFileNameExA(handle, null, exe_path_buf, exe_path_buf.len);
+    const path_len = GetModuleFileNameExA(handle, null, executable_path_buf, executable_path_buf.len);
     if (path_len == 0) return null;
-    return exe_path_buf[0..@intCast(path_len)];
+    return executable_path_buf[0..@intCast(path_len)];
 }
 
 pub fn processStartTime(process_id: DWORD) ?FILETIME {
@@ -1077,12 +1077,12 @@ pub fn processStartTime(process_id: DWORD) ?FILETIME {
     return created;
 }
 
-/// File name of the executable owning hwnd, or null if its process can't be queried; the returned slice borrows exe_path_buf.
-pub fn windowExeName(hwnd: HWND, exe_path_buf: *[MAX_PATH:0]u8) ?[]const u8 {
+/// File name of the executable owning hwnd, or null if its process can't be queried; the returned slice borrows executable_path_buf.
+pub fn windowExecutableName(hwnd: HWND, executable_path_buf: *[MAX_PATH:0]u8) ?[]const u8 {
     var process_id: DWORD = 0;
     _ = GetWindowThreadProcessId(hwnd, &process_id);
     if (process_id == 0) return null;
-    const path = queryProcessExePath(process_id, exe_path_buf) orelse return null;
+    const path = queryProcessExecutablePath(process_id, executable_path_buf) orelse return null;
     return std.Io.Dir.path.basename(path);
 }
 
@@ -1115,24 +1115,24 @@ pub fn isExplorerOwned(hwnd: HWND) bool {
     _ = GetWindowThreadProcessId(hwnd, &process_id);
     if (process_id == 0) return false;
 
-    var exe_path_buf: [MAX_PATH:0]u8 = undefined;
-    const exe_path = queryProcessExePath(process_id, &exe_path_buf) orelse return false;
+    var executable_path_buf: [MAX_PATH:0]u8 = undefined;
+    const executable_path = queryProcessExecutablePath(process_id, &executable_path_buf) orelse return false;
     const suffix = "\\explorer.exe";
-    if (exe_path.len < suffix.len) return false;
-    return std.ascii.eqlIgnoreCase(exe_path[exe_path.len - suffix.len ..], suffix);
+    if (executable_path.len < suffix.len) return false;
+    return std.ascii.eqlIgnoreCase(executable_path[executable_path.len - suffix.len ..], suffix);
 }
 
-/// Full path of the current process's own executable. Replaces std.fs.selfExePath, removed in Zig 0.16.
-pub fn selfExePath(buf: []u8) ![]const u8 {
+/// Full path of the current process's own executable. Replaces std.fs.selfExecutablePath, removed in Zig 0.16.
+pub fn selfExecutablePath(buf: []u8) ![]const u8 {
     const len = GetModuleFileNameA(null, @ptrCast(buf.ptr), @intCast(buf.len));
     if (len == 0) return error.GetModuleFileNameFailed;
     if (len == buf.len) return error.NameTooLong;
     return buf[0..@intCast(len)];
 }
 
-/// Directory containing the current process's own executable. Replaces std.fs.selfExeDirPath, removed in Zig 0.16.
-pub fn selfExeDirPath(buf: []u8) ![]const u8 {
-    const full_path = try selfExePath(buf);
+/// Directory containing the current process's own executable. Replaces std.fs.selfExecutableDirPath, removed in Zig 0.16.
+pub fn selfExecutableDirPath(buf: []u8) ![]const u8 {
+    const full_path = try selfExecutablePath(buf);
     return std.Io.Dir.path.dirname(full_path) orelse return error.MissingDirname;
 }
 

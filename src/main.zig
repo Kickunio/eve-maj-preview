@@ -164,7 +164,7 @@ fn mainImpl(init: std.process.Init) !void {
     defer knots_host.deinit();
     g_trackers = .init(g_allocator, g_io);
 
-    setCwdToExeDir();
+    setCwdToExecutableDir();
     config.migrateLegacyLayout();
 
     // Handle protocol invocation before the mutex check, so commands work even when another instance is already running.
@@ -379,21 +379,21 @@ fn hasArgument(process_args: std.process.Args, flag: []const u8) !bool {
 }
 
 /// Run-key startup entries launch with an arbitrary working directory, not the exe's folder.
-fn setCwdToExeDir() void {
-    var exe_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_dir = win32.selfExeDirPath(&exe_dir_buf) catch |err| {
-        slog.warn("Failed to resolve exe directory: {}", .{err});
+fn setCwdToExecutableDir() void {
+    var executable_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const executable_dir = win32.selfExecutableDirPath(&executable_dir_buf) catch |err| {
+        slog.warn("Failed to resolve the executable directory: {}", .{err});
         return;
     };
 
     var dir_z_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
-    const exe_dir_z = std.mem.printSentinel(&dir_z_buf, "{s}", .{exe_dir}, 0) catch |err| {
-        slog.warn("Failed to null-terminate exe directory path: {}", .{err});
+    const executable_dir_z = std.mem.printSentinel(&dir_z_buf, "{s}", .{executable_dir}, 0) catch |err| {
+        slog.warn("Failed to null-terminate the executable directory path: {}", .{err});
         return;
     };
 
-    if (!win32.toBool(win32.SetCurrentDirectoryA(exe_dir_z))) {
-        slog.warn("Failed to set the working directory to '{s}': error {d}", .{ exe_dir, win32.GetLastError() });
+    if (!win32.toBool(win32.SetCurrentDirectoryA(executable_dir_z))) {
+        slog.warn("Failed to set the working directory to '{s}': error {d}", .{ executable_dir, win32.GetLastError() });
     }
 }
 
