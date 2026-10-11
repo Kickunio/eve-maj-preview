@@ -123,11 +123,11 @@ pub fn repositionAll(painter: *Painter) void {
     const scale = win32.dpiToScale(monitors.dpiForMonitor(if (monitor_placement) |mp| mp.monitor else null));
     const cells = layout.spaceCells(&assignment.counts);
 
-    for (painter.thumbnails.items, assignment.space_of, assignment.rank, 0..) |thumbnail, space_of, rank, index| {
+    for (painter.thumbnails.items, assignment.space_indices, assignment.rank, 0..) |thumbnail, assigned_space, rank, index| {
         if (!thumbnail.win32_enabled) continue;
         // Hidden before it moves, or it shows at its new place until the next render hides it.
         if (thumbnail.cached_hide_thumbnail) thumbnail.show(false);
-        if (space_of) |space_index| if (cells[space_index]) |cell| {
+        if (assigned_space) |space_index| if (cells[space_index]) |cell| {
             const position = cell.position(rank);
             hdwp = thumbnail.deferPlace(hdwp, position.x, position.y, cellSize(cell)) orelse return;
             continue;

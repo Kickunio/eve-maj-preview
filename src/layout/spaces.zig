@@ -17,13 +17,13 @@ pub const SpaceCounts = [MAX_SPACES]usize;
 /// Each thumbnail's space and cell for one layout pass.
 pub const Assignment = struct {
     /// Per name: index into thumbnailSpaces, or null when it's placed by hand or its thumbnail is hidden. Owned; freed in deinit.
-    space_of: []?usize,
+    space_indices: []?usize,
     /// Per name: its cell within its space; unused when placed by hand. Owned; freed in deinit.
     rank: []usize,
     counts: SpaceCounts = @splat(0),
 
     pub fn deinit(self: *Assignment, allocator: std.mem.Allocator) void {
-        allocator.free(self.space_of);
+        allocator.free(self.space_indices);
         allocator.free(self.rank);
     }
 };
@@ -118,14 +118,14 @@ pub fn groupSpaceIn(items: []const ThumbnailSpace, group_name: []const u8) ?usiz
 
 /// Caller frees with Assignment.deinit.
 pub fn assign(allocator: std.mem.Allocator, config: *const Config, names: []const []const u8) !Assignment {
-    const space_of = try allocator.alloc(?usize, names.len);
-    errdefer allocator.free(space_of);
+    const space_indices = try allocator.alloc(?usize, names.len);
+    errdefer allocator.free(space_indices);
     const rank = try allocator.alloc(usize, names.len);
     errdefer allocator.free(rank);
     @memset(rank, 0);
 
-    var assignment: Assignment = .{ .space_of = space_of, .rank = rank };
-    for (names, space_of) |name, *assigned_space| {
+    var assignment: Assignment = .{ .space_indices = space_indices, .rank = rank };
+    for (names, space_indices) |name, *assigned_space| {
         assigned_space.* = spaceFor(config, name);
         if (assigned_space.*) |space_index| assignment.counts[space_index] += 1;
     }
@@ -135,7 +135,7 @@ pub fn assign(allocator: std.mem.Allocator, config: *const Config, names: []cons
     for (listed(config), 0..) |*space, space_index| {
         if (assignment.counts[space_index] == 0) continue;
         var member_count: usize = 0;
-        for (space_of, 0..) |assigned_space, i| {
+        for (space_indices, 0..) |assigned_space, i| {
             if ((assigned_space orelse continue) != space_index) continue;
             members[member_count] = i;
             member_count += 1;
@@ -144,14 +144,14 @@ pub fn assign(allocator: std.mem.Allocator, config: *const Config, names: []cons
         defer order_map.deinit();
         const context: RankContext = .{ .config = config, .space = space, .names = names, .order_map = &order_map };
         std.sort.pdq(usize, members[0..member_count], context, RankContext.lessThan);
-        for (members[0..member_count], 0..) |name_index, cell| rank[name_index] = cell;
+        for (members[0..member_count], 0..) |name_index, cell_index| rank[name_index] = cell_index;
     }
     return assignment;
 }
 
-fn firstActiveWith(items: []const ThumbnailSpace, comptime flag: []const u8) ?usize {
+fn firstActiveWith(items: []const ThumbnailSpace, comptime flag_name: []const u8) ?usize {
     for (items, 0..) |*space, i| {
-        if (isActive(space) and @field(space, flag)) return i;
+        if (isActive(space) and @field(space, flag_name)) return i;
     }
     return null;
 }
@@ -322,7 +322,7 @@ test "a character whose thumbnail is hidden takes no cell in its space" {
     var assignment = try assign(testing.allocator, &config, &.{ "First", "Hidden", "Last" });
     defer assignment.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), assignment.counts[0]);
-    try testing.expectEqual(@as(?usize, null), assignment.space_of[1]);
+    try testing.expectEqual(@as(?usize, null), assignment.space_indices[1]);
     try testing.expectEqual(@as(usize, 0), assignment.rank[0]);
     try testing.expectEqual(@as(usize, 1), assignment.rank[2]);
 }
@@ -354,5 +354,5 @@ test "a character no space takes is left unassigned" {
     const config = testConfig(&.{}, &.{});
     var assignment = try assign(testing.allocator, &config, &.{"Pilot"});
     defer assignment.deinit(testing.allocator);
-    try testing.expectEqual(@as(?usize, null), assignment.space_of[0]);
+    try testing.expectEqual(@as(?usize, null), assignment.space_indices[0]);
 }
