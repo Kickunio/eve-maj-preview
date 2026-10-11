@@ -323,7 +323,6 @@ pub extern "user32" fn MessageBoxA(hWnd: ?HWND, lpText: [*:0]const u8, lpCaption
 pub extern "kernel32" fn CreateMutexW(lpMutexAttributes: ?*anyopaque, bInitialOwner: BOOL, lpName: [*:0]const u16) callconv(.c) ?HANDLE;
 pub extern "kernel32" fn GetLastError() callconv(.c) DWORD;
 
-// ContextRecord is left opaque - the arch-specific CONTEXT layout is never read here.
 pub const EXCEPTION_MAXIMUM_PARAMETERS = 15;
 pub const EXCEPTION_RECORD = extern struct {
     ExceptionCode: DWORD,
@@ -335,6 +334,7 @@ pub const EXCEPTION_RECORD = extern struct {
 };
 pub const EXCEPTION_POINTERS = extern struct {
     ExceptionRecord: ?*EXCEPTION_RECORD,
+    /// Opaque: the arch-specific CONTEXT layout is never read here.
     ContextRecord: ?*anyopaque,
 };
 pub const EXCEPTION_CONTINUE_SEARCH: LONG = 0;
@@ -566,7 +566,6 @@ pub extern "kernel32" fn CreateEventA(lpEventAttributes: ?*anyopaque, bManualRes
 pub extern "kernel32" fn SetEvent(hEvent: HANDLE) callconv(.c) BOOL;
 pub extern "kernel32" fn ResetEvent(hEvent: HANDLE) callconv(.c) BOOL;
 
-// Directory enumeration, filtered by name pattern (e.g. "Local_*.txt") at the OS level
 pub const MAX_PATH = 260;
 pub const FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
 
@@ -583,6 +582,7 @@ pub const WIN32_FIND_DATAW = extern struct {
     cAlternateFileName: [14]u16,
 };
 
+/// Lists a directory filtered by name pattern (e.g. "Local_*.txt") at the OS level.
 pub extern "kernel32" fn FindFirstFileW(lpFileName: [*:0]const u16, lpFindFileData: *WIN32_FIND_DATAW) callconv(.c) HANDLE;
 pub extern "kernel32" fn FindNextFileW(hFindFile: HANDLE, lpFindFileData: *WIN32_FIND_DATAW) callconv(.c) BOOL;
 pub extern "kernel32" fn FindClose(hFindFile: HANDLE) callconv(.c) BOOL;
@@ -1005,7 +1005,7 @@ pub extern "shcore" fn GetDpiForMonitor(hMonitor: HMONITOR, dpiType: c_int, dpiX
 pub extern "user32" fn GetDpiForWindow(hWnd: HWND) callconv(.c) UINT;
 pub extern "user32" fn GetDpiForSystem() callconv(.c) UINT;
 
-// Sentinel pointer value, not a real pointer, matching HWND_TOPMOST/HWND_NOTOPMOST below.
+// Sentinel pointer value, not a real pointer, like HWND_TOPMOST/HWND_NOTOPMOST.
 pub const DPI_AWARENESS_CONTEXT = *opaque {};
 pub const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: DPI_AWARENESS_CONTEXT = @ptrFromInt(@as(usize, @bitCast(@as(isize, -4))));
 pub extern "user32" fn SetProcessDpiAwarenessContext(value: DPI_AWARENESS_CONTEXT) callconv(.c) BOOL;
@@ -1057,8 +1057,8 @@ pub fn getClassNameBuf(hwnd: HWND, buffer: []u8) ?[]const u8 {
 }
 
 /// Full executable path of process_id's owning process, or null if it can't be opened or queried.
-/// exe_path_buf must be MAX_PATH-sized; the returned slice borrows it.
-pub fn queryProcessExePath(process_id: DWORD, exe_path_buf: *[260:0]u8) ?[]const u8 {
+/// The returned slice borrows exe_path_buf.
+pub fn queryProcessExePath(process_id: DWORD, exe_path_buf: *[MAX_PATH:0]u8) ?[]const u8 {
     const handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id) orelse return null;
     defer _ = CloseHandle(handle);
     const path_len = GetModuleFileNameExA(handle, null, exe_path_buf, exe_path_buf.len);
@@ -1076,7 +1076,7 @@ pub fn processStartTime(process_id: DWORD) ?FILETIME {
 }
 
 /// File name of the executable owning hwnd, or null if its process can't be queried; the returned slice borrows exe_path_buf.
-pub fn windowExeName(hwnd: HWND, exe_path_buf: *[260:0]u8) ?[]const u8 {
+pub fn windowExeName(hwnd: HWND, exe_path_buf: *[MAX_PATH:0]u8) ?[]const u8 {
     var process_id: DWORD = 0;
     _ = GetWindowThreadProcessId(hwnd, &process_id);
     if (process_id == 0) return null;
@@ -1085,9 +1085,9 @@ pub fn windowExeName(hwnd: HWND, exe_path_buf: *[260:0]u8) ?[]const u8 {
 }
 
 /// Toggles WS_EX_TRANSPARENT on an already-created window, so clickThrough can change live without recreating it.
-pub fn setClickThroughStyle(hwnd: HWND, enabled: bool) void {
+pub fn setClickThroughStyle(hwnd: HWND, is_click_through: bool) void {
     const current = GetWindowLongPtrA(hwnd, GWL_EXSTYLE);
-    const new_style = if (enabled) current | WS_EX_TRANSPARENT else current & ~@as(isize, WS_EX_TRANSPARENT);
+    const new_style = if (is_click_through) current | WS_EX_TRANSPARENT else current & ~@as(isize, WS_EX_TRANSPARENT);
     if (new_style != current) {
         _ = SetWindowLongPtrA(hwnd, GWL_EXSTYLE, new_style);
     }
@@ -1113,17 +1113,17 @@ pub fn isExplorerOwned(hwnd: HWND) bool {
     _ = GetWindowThreadProcessId(hwnd, &process_id);
     if (process_id == 0) return false;
 
-    var exe_path: [260:0]u8 = undefined;
-    const path_slice = queryProcessExePath(process_id, &exe_path) orelse return false;
+    var exe_path_buf: [MAX_PATH:0]u8 = undefined;
+    const exe_path = queryProcessExePath(process_id, &exe_path_buf) orelse return false;
     const suffix = "\\explorer.exe";
-    if (path_slice.len < suffix.len) return false;
-    return std.ascii.eqlIgnoreCase(path_slice[path_slice.len - suffix.len ..], suffix);
+    if (exe_path.len < suffix.len) return false;
+    return std.ascii.eqlIgnoreCase(exe_path[exe_path.len - suffix.len ..], suffix);
 }
 
 /// Full path of the current process's own executable. Replaces std.fs.selfExePath, removed in Zig 0.16.
 pub fn selfExePath(buf: []u8) ![]const u8 {
     const len = GetModuleFileNameA(null, @ptrCast(buf.ptr), @intCast(buf.len));
-    if (len == 0) return error.Unexpected;
+    if (len == 0) return error.GetModuleFileNameFailed;
     if (len == buf.len) return error.NameTooLong;
     return buf[0..@intCast(len)];
 }
@@ -1220,6 +1220,8 @@ const IID_IFileOpenDialog = GUID{
 const FOS_PICKFOLDERS: u32 = 0x00000020;
 const SIGDN_FILESYSPATH: u32 = 0x80058000;
 
+/// CoInitializeEx's "already initialized on this thread", which is fine.
+pub const S_FALSE: c_long = 0x1;
 pub const COINIT_MULTITHREADED: u32 = 0x0;
 pub const COINIT_APARTMENTTHREADED: u32 = 0x2;
 pub const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
@@ -1320,9 +1322,9 @@ const IShellItem = extern struct {
         _ = self.vtable.Release(self);
     }
 
-    fn getDisplayName(self: *IShellItem, sigdnName: u32) ?[*:0]u16 {
+    fn getDisplayName(self: *IShellItem, sigdn_name: u32) ?[*:0]u16 {
         var name: [*:0]u16 = undefined;
-        const hr = self.vtable.GetDisplayName(self, sigdnName, &name);
+        const hr = self.vtable.GetDisplayName(self, sigdn_name, &name);
         if (hr < 0) return null;
         return name;
     }
@@ -1331,76 +1333,24 @@ const IShellItem = extern struct {
 /// Shows the Win32 "Select Folder" dialog with `title`, returning the chosen path (caller frees) or null if cancelled.
 /// `owner`, when given, keeps the picker above a topmost owner window (an owned window always draws above its owner, even a HWND_TOPMOST one).
 pub fn showFolderPicker(allocator: std.mem.Allocator, title: []const u8, owner: ?HWND) !?[]const u8 {
-    const hr = CoInitializeEx(null, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    // 0x00000001 is S_FALSE (already initialized), which is OK.
-    if (hr < 0 and hr != 0x00000001) {
-        return error.ComInitFailed;
-    }
+    try initDialogCom();
     defer CoUninitialize();
-
-    var dialog_ptr: ?*anyopaque = null;
-    const create_hr = CoCreateInstance(
-        &CLSID_FileOpenDialog,
-        null,
-        CLSCTX_INPROC_SERVER,
-        &IID_IFileOpenDialog,
-        &dialog_ptr,
-    );
-
-    if (create_hr < 0 or dialog_ptr == null) {
-        return error.CreateDialogFailed;
-    }
-
-    const dialog: *IFileOpenDialog = @ptrCast(@alignCast(dialog_ptr.?));
+    const dialog = try createFileOpenDialog();
     defer dialog.release();
 
     _ = dialog.setOptions(FOS_PICKFOLDERS);
-
     const title_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, title);
     defer allocator.free(title_w);
     _ = dialog.setTitle(title_w.ptr);
 
-    const show_hr = dialog.show(owner);
-    if (show_hr < 0) {
-        return null;
-    }
-
-    const result_item = dialog.getResult() orelse return null;
-    defer result_item.release();
-
-    const path_w = result_item.getDisplayName(SIGDN_FILESYSPATH) orelse return null;
-    defer CoTaskMemFree(path_w);
-
-    const path_len = std.mem.findSentinel(u16, 0, path_w);
-    const path_slice = path_w[0..path_len :0];
-    const path = try std.unicode.utf16LeToUtf8Alloc(allocator, path_slice);
-
-    return path;
+    return showAndGetPath(allocator, dialog, owner);
 }
 
 /// Shows the Win32 "Open File" dialog restricted to `filter_spec` (e.g. "*.wav;*.mp3"); see showFolderPicker for the rest.
 pub fn showFilePicker(allocator: std.mem.Allocator, title: []const u8, filter_name: []const u8, filter_spec: []const u8, owner: ?HWND) !?[]const u8 {
-    const hr = CoInitializeEx(null, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    // 0x00000001 is S_FALSE (already initialized), which is OK.
-    if (hr < 0 and hr != 0x00000001) {
-        return error.ComInitFailed;
-    }
+    try initDialogCom();
     defer CoUninitialize();
-
-    var dialog_ptr: ?*anyopaque = null;
-    const create_hr = CoCreateInstance(
-        &CLSID_FileOpenDialog,
-        null,
-        CLSCTX_INPROC_SERVER,
-        &IID_IFileOpenDialog,
-        &dialog_ptr,
-    );
-
-    if (create_hr < 0 or dialog_ptr == null) {
-        return error.CreateDialogFailed;
-    }
-
-    const dialog: *IFileOpenDialog = @ptrCast(@alignCast(dialog_ptr.?));
+    const dialog = try createFileOpenDialog();
     defer dialog.release();
 
     const title_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, title);
@@ -1414,20 +1364,32 @@ pub fn showFilePicker(allocator: std.mem.Allocator, title: []const u8, filter_na
     const specs = [_]COMDLG_FILTERSPEC{.{ .pszName = filter_name_w.ptr, .pszSpec = filter_spec_w.ptr }};
     _ = dialog.setFileTypes(&specs);
 
-    const show_hr = dialog.show(owner);
-    if (show_hr < 0) {
-        return null;
-    }
+    return showAndGetPath(allocator, dialog, owner);
+}
 
+/// Starts COM on this thread for a file dialog; the caller pairs it with CoUninitialize.
+fn initDialogCom() !void {
+    const hr = CoInitializeEx(null, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (hr < 0 and hr != S_FALSE) return error.ComInitFailed;
+}
+
+/// Caller releases it.
+fn createFileOpenDialog() !*IFileOpenDialog {
+    var dialog_ptr: ?*anyopaque = null;
+    if (CoCreateInstance(&CLSID_FileOpenDialog, null, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, &dialog_ptr) < 0) return error.CreateDialogFailed;
+    const created = dialog_ptr orelse return error.CreateDialogFailed;
+    return @ptrCast(@alignCast(created));
+}
+
+/// Shows `dialog` and returns the picked file-system path (caller frees), or null if cancelled.
+fn showAndGetPath(allocator: std.mem.Allocator, dialog: *IFileOpenDialog, owner: ?HWND) !?[]const u8 {
+    if (dialog.show(owner) < 0) return null;
     const result_item = dialog.getResult() orelse return null;
     defer result_item.release();
 
     const path_w = result_item.getDisplayName(SIGDN_FILESYSPATH) orelse return null;
     defer CoTaskMemFree(path_w);
-
-    const path_len = std.mem.findSentinel(u16, 0, path_w);
-    const path_slice = path_w[0..path_len :0];
-    return try std.unicode.utf16LeToUtf8Alloc(allocator, path_slice);
+    return try std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.span(path_w));
 }
 
 extern "shell32" fn SHGetKnownFolderPath(
@@ -1513,27 +1475,27 @@ pub fn linkedWindow(hwnd: HWND) ?HWND {
 }
 
 /// GET_X_LPARAM: signed, since coordinates left of the primary monitor are negative.
-pub inline fn lparamX(lparam: LPARAM) i32 {
-    return @as(i16, @truncate(lparam));
+pub inline fn lparamX(lParam: LPARAM) i32 {
+    return @as(i16, @truncate(lParam));
 }
 
 /// GET_Y_LPARAM: signed, since coordinates above the primary monitor are negative.
-pub inline fn lparamY(lparam: LPARAM) i32 {
-    return @as(i16, @truncate(lparam >> 16));
+pub inline fn lparamY(lParam: LPARAM) i32 {
+    return @as(i16, @truncate(lParam >> 16));
 }
 
 pub inline fn ptrToLparam(ptr: anytype) LPARAM {
     return @as(LPARAM, @bitCast(@intFromPtr(ptr)));
 }
 
-pub inline fn lparamToPtr(comptime T: type, lparam: LPARAM) *T {
-    return @ptrFromInt(@as(usize, @bitCast(lparam)));
+pub inline fn lparamToPtr(comptime T: type, lParam: LPARAM) *T {
+    return @ptrFromInt(@as(usize, @bitCast(lParam)));
 }
 
 /// Extract the triggering virtual-key code from a WM_HOTKEY message's lParam.
 /// Per MSDN: LOWORD(lParam) holds the modifier flags, HIWORD(lParam) the vk code.
-pub inline fn hotkeyVkFromLparam(lparam: LPARAM) u32 {
-    const bits: u32 = @truncate(@as(usize, @bitCast(lparam)));
+pub inline fn hotkeyVkFromLparam(lParam: LPARAM) u32 {
+    const bits: u32 = @truncate(@as(usize, @bitCast(lParam)));
     return bits >> 16;
 }
 

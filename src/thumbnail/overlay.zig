@@ -12,6 +12,7 @@ const draw = @import("draw.zig");
 const font_cache_mod = @import("font_cache.zig");
 const window = @import("window.zig");
 const spaces = @import("../layout/spaces.zig");
+const pixel_buffer = @import("../util/pixel_buffer.zig");
 const log = @import("../log.zig");
 
 const ThumbnailWindow = window.ThumbnailWindow;
@@ -181,7 +182,7 @@ pub const RenderCache = struct {
     }
 
     pub fn deinit(self: *const RenderCache) void {
-        if (self.bitmap) |bitmap| bitmap.destroy();
+        if (self.bitmap) |bitmap| bitmap.deinit();
     }
 };
 
@@ -377,10 +378,10 @@ pub fn renderOverlay(font_cache: *FontCache, cache: *RenderCache, target_hwnd: w
 
     // Bounded to where text was drawn instead of scanning the whole overlay.
     for (lines) |line| {
-        gdi_overlay.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, line.background_origin.x, line.background_origin.y, line.bg_dims.width, line.bg_dims.height);
+        pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, line.background_origin.x, line.background_origin.y, line.bg_dims.width, line.bg_dims.height);
     }
     if (notifications) |block| {
-        gdi_overlay.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, block.origin.x, block.origin.y, block.dims.width, block.dims.height);
+        pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, block.origin.x, block.origin.y, block.dims.width, block.dims.height);
     }
 
     gdi_overlay.presentLayered(target_hwnd, overlay, settings.overlay_alpha);

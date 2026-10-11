@@ -19,10 +19,10 @@ pub var g_focus_switch_requested = false;
 pub fn install(hwnd: win32.HWND) void {
     g_focus_grant_hwnd = hwnd;
     for (0..FOCUS_GRANT_COMBO_COUNT) |i| {
-        const mods: win32.UINT = @intCast(i);
+        const modifiers: win32.UINT = @intCast(i);
         const id = FOCUS_GRANT_ID_BASE + @as(c_int, @intCast(i));
-        if (!win32.toBool(win32.RegisterHotKey(hwnd, id, mods, FOCUS_GRANT_VK))) {
-            slog.err("Failed to register foreground-grant conduit hotkey {} (mods=0x{X})", .{ id, mods });
+        if (!win32.toBool(win32.RegisterHotKey(hwnd, id, modifiers, FOCUS_GRANT_VK))) {
+            slog.err("Failed to register foreground-grant conduit hotkey {} (modifiers=0x{X})", .{ id, modifiers });
         }
     }
 }

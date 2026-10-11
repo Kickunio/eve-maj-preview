@@ -65,75 +65,75 @@ pub const MOD_ALT: u32 = 0x0001;
 pub const MOD_CONTROL: u32 = 0x0002;
 pub const MOD_SHIFT: u32 = 0x0004;
 pub const MOD_WIN: u32 = 0x0008;
-const MOD_SHIFT_AMOUNT: u5 = 8;
+const MODIFIER_BIT_OFFSET: u5 = 8;
 
 const VK_MASK: u32 = 0xFF;
 const MOD_MASK: u32 = 0x0F;
 
-pub const KeyName = struct { vk: u32, name: []const u8 };
+pub const KeyName = struct { vk_code: u32, name: []const u8 };
 
 /// Every key a binding can use, in the spelling it's shown and typed in; the config dialog's recorder offers exactly these.
 pub const KEY_NAMES: []const KeyName = blk: {
     @setEvalBranchQuota(10_000);
     var list: []const KeyName = &.{};
-    for (1..25) |n| list = list ++ &[_]KeyName{.{ .vk = VK_F1 + @as(u32, @intCast(n)) - 1, .name = std.fmt.comptimePrint("F{d}", .{n}) }};
-    for ('A'..'Z' + 1) |c| list = list ++ &[_]KeyName{.{ .vk = @intCast(c), .name = &[_]u8{@intCast(c)} }};
-    for ('0'..'9' + 1) |c| list = list ++ &[_]KeyName{.{ .vk = @intCast(c), .name = &[_]u8{@intCast(c)} }};
-    for (0..10) |n| list = list ++ &[_]KeyName{.{ .vk = VK_NUMPAD0 + @as(u32, @intCast(n)), .name = std.fmt.comptimePrint("Numpad{d}", .{n}) }};
+    for (1..25) |n| list = list ++ &[_]KeyName{.{ .vk_code = VK_F1 + @as(u32, @intCast(n)) - 1, .name = std.fmt.comptimePrint("F{d}", .{n}) }};
+    for ('A'..'Z' + 1) |c| list = list ++ &[_]KeyName{.{ .vk_code = @intCast(c), .name = &[_]u8{@intCast(c)} }};
+    for ('0'..'9' + 1) |c| list = list ++ &[_]KeyName{.{ .vk_code = @intCast(c), .name = &[_]u8{@intCast(c)} }};
+    for (0..10) |n| list = list ++ &[_]KeyName{.{ .vk_code = VK_NUMPAD0 + @as(u32, @intCast(n)), .name = std.fmt.comptimePrint("Numpad{d}", .{n}) }};
     list = list ++ &[_]KeyName{
         // A bare modifier as the trigger key itself, e.g. plain "Shift", or "Ctrl+Shift" with Shift as the trigger.
-        .{ .vk = VK_CONTROL, .name = "Ctrl" },
-        .{ .vk = VK_MENU, .name = "Alt" },
-        .{ .vk = VK_SHIFT, .name = "Shift" },
-        .{ .vk = VK_LWIN, .name = "Win" },
-        .{ .vk = VK_TAB, .name = "Tab" },
-        .{ .vk = VK_RETURN, .name = "Enter" },
-        .{ .vk = VK_BACK, .name = "Backspace" },
-        .{ .vk = VK_PAUSE, .name = "Pause" },
-        .{ .vk = VK_CAPITAL, .name = "CapsLock" },
-        .{ .vk = VK_NUMLOCK, .name = "NumLock" },
-        .{ .vk = VK_SCROLL, .name = "ScrollLock" },
-        .{ .vk = VK_SNAPSHOT, .name = "PrintScreen" },
-        .{ .vk = VK_APPS, .name = "Menu" },
-        .{ .vk = VK_SPACE, .name = "Space" },
-        .{ .vk = VK_PRIOR, .name = "PageUp" },
-        .{ .vk = VK_NEXT, .name = "PageDown" },
-        .{ .vk = VK_END, .name = "End" },
-        .{ .vk = VK_HOME, .name = "Home" },
-        .{ .vk = VK_LEFT, .name = "Left" },
-        .{ .vk = VK_UP, .name = "Up" },
-        .{ .vk = VK_RIGHT, .name = "Right" },
-        .{ .vk = VK_DOWN, .name = "Down" },
-        .{ .vk = VK_INSERT, .name = "Insert" },
-        .{ .vk = VK_DELETE, .name = "Delete" },
-        .{ .vk = VK_MULTIPLY, .name = "NumpadMultiply" },
-        .{ .vk = VK_ADD, .name = "NumpadAdd" },
-        .{ .vk = VK_SUBTRACT, .name = "NumpadSubtract" },
-        .{ .vk = VK_DECIMAL, .name = "NumpadDecimal" },
-        .{ .vk = VK_DIVIDE, .name = "NumpadDivide" },
-        .{ .vk = VK_VOLUME_MUTE, .name = "VolumeMute" },
-        .{ .vk = VK_VOLUME_DOWN, .name = "VolumeDown" },
-        .{ .vk = VK_VOLUME_UP, .name = "VolumeUp" },
-        .{ .vk = VK_MEDIA_NEXT_TRACK, .name = "MediaNext" },
-        .{ .vk = VK_MEDIA_PREV_TRACK, .name = "MediaPrevious" },
-        .{ .vk = VK_MEDIA_STOP, .name = "MediaStop" },
-        .{ .vk = VK_MEDIA_PLAY_PAUSE, .name = "MediaPlayPause" },
-        .{ .vk = VK_MBUTTON, .name = "MButton" },
-        .{ .vk = VK_XBUTTON1, .name = "XButton1" },
-        .{ .vk = VK_XBUTTON2, .name = "XButton2" },
-        .{ .vk = VK_WHEELUP, .name = "WheelUp" },
-        .{ .vk = VK_WHEELDOWN, .name = "WheelDown" },
-        .{ .vk = VK_OEM_1, .name = ";" },
-        .{ .vk = VK_OEM_PLUS, .name = "=" },
-        .{ .vk = VK_OEM_COMMA, .name = "," },
-        .{ .vk = VK_OEM_MINUS, .name = "-" },
-        .{ .vk = VK_OEM_PERIOD, .name = "." },
-        .{ .vk = VK_OEM_2, .name = "/" },
-        .{ .vk = VK_OEM_3, .name = "`" },
-        .{ .vk = VK_OEM_4, .name = "[" },
-        .{ .vk = VK_OEM_5, .name = "\\" },
-        .{ .vk = VK_OEM_6, .name = "]" },
-        .{ .vk = VK_OEM_7, .name = "'" },
+        .{ .vk_code = VK_CONTROL, .name = "Ctrl" },
+        .{ .vk_code = VK_MENU, .name = "Alt" },
+        .{ .vk_code = VK_SHIFT, .name = "Shift" },
+        .{ .vk_code = VK_LWIN, .name = "Win" },
+        .{ .vk_code = VK_TAB, .name = "Tab" },
+        .{ .vk_code = VK_RETURN, .name = "Enter" },
+        .{ .vk_code = VK_BACK, .name = "Backspace" },
+        .{ .vk_code = VK_PAUSE, .name = "Pause" },
+        .{ .vk_code = VK_CAPITAL, .name = "CapsLock" },
+        .{ .vk_code = VK_NUMLOCK, .name = "NumLock" },
+        .{ .vk_code = VK_SCROLL, .name = "ScrollLock" },
+        .{ .vk_code = VK_SNAPSHOT, .name = "PrintScreen" },
+        .{ .vk_code = VK_APPS, .name = "Menu" },
+        .{ .vk_code = VK_SPACE, .name = "Space" },
+        .{ .vk_code = VK_PRIOR, .name = "PageUp" },
+        .{ .vk_code = VK_NEXT, .name = "PageDown" },
+        .{ .vk_code = VK_END, .name = "End" },
+        .{ .vk_code = VK_HOME, .name = "Home" },
+        .{ .vk_code = VK_LEFT, .name = "Left" },
+        .{ .vk_code = VK_UP, .name = "Up" },
+        .{ .vk_code = VK_RIGHT, .name = "Right" },
+        .{ .vk_code = VK_DOWN, .name = "Down" },
+        .{ .vk_code = VK_INSERT, .name = "Insert" },
+        .{ .vk_code = VK_DELETE, .name = "Delete" },
+        .{ .vk_code = VK_MULTIPLY, .name = "NumpadMultiply" },
+        .{ .vk_code = VK_ADD, .name = "NumpadAdd" },
+        .{ .vk_code = VK_SUBTRACT, .name = "NumpadSubtract" },
+        .{ .vk_code = VK_DECIMAL, .name = "NumpadDecimal" },
+        .{ .vk_code = VK_DIVIDE, .name = "NumpadDivide" },
+        .{ .vk_code = VK_VOLUME_MUTE, .name = "VolumeMute" },
+        .{ .vk_code = VK_VOLUME_DOWN, .name = "VolumeDown" },
+        .{ .vk_code = VK_VOLUME_UP, .name = "VolumeUp" },
+        .{ .vk_code = VK_MEDIA_NEXT_TRACK, .name = "MediaNext" },
+        .{ .vk_code = VK_MEDIA_PREV_TRACK, .name = "MediaPrevious" },
+        .{ .vk_code = VK_MEDIA_STOP, .name = "MediaStop" },
+        .{ .vk_code = VK_MEDIA_PLAY_PAUSE, .name = "MediaPlayPause" },
+        .{ .vk_code = VK_MBUTTON, .name = "MButton" },
+        .{ .vk_code = VK_XBUTTON1, .name = "XButton1" },
+        .{ .vk_code = VK_XBUTTON2, .name = "XButton2" },
+        .{ .vk_code = VK_WHEELUP, .name = "WheelUp" },
+        .{ .vk_code = VK_WHEELDOWN, .name = "WheelDown" },
+        .{ .vk_code = VK_OEM_1, .name = ";" },
+        .{ .vk_code = VK_OEM_PLUS, .name = "=" },
+        .{ .vk_code = VK_OEM_COMMA, .name = "," },
+        .{ .vk_code = VK_OEM_MINUS, .name = "-" },
+        .{ .vk_code = VK_OEM_PERIOD, .name = "." },
+        .{ .vk_code = VK_OEM_2, .name = "/" },
+        .{ .vk_code = VK_OEM_3, .name = "`" },
+        .{ .vk_code = VK_OEM_4, .name = "[" },
+        .{ .vk_code = VK_OEM_5, .name = "\\" },
+        .{ .vk_code = VK_OEM_6, .name = "]" },
+        .{ .vk_code = VK_OEM_7, .name = "'" },
     };
     break :blk list;
 };
@@ -151,12 +151,12 @@ pub fn extractVk(combined: u32) u32 {
 }
 
 pub fn extractModifiers(combined: u32) u32 {
-    return (combined >> MOD_SHIFT_AMOUNT) & MOD_MASK;
+    return (combined >> MODIFIER_BIT_OFFSET) & MOD_MASK;
 }
 
 /// The base key in the low byte and MOD_* flags in bits 8-11; the form every hotkey is stored in.
 pub fn combineKey(vk_code: u32, modifiers: u32) u32 {
-    return (vk_code & VK_MASK) | ((modifiers & MOD_MASK) << MOD_SHIFT_AMOUNT);
+    return (vk_code & VK_MASK) | ((modifiers & MOD_MASK) << MODIFIER_BIT_OFFSET);
 }
 
 /// Whether vk_code is a mouse button or wheel direction, bound via mouse_hook.zig instead of keyboard_hook.zig.
@@ -166,17 +166,17 @@ pub fn isMouseHookVk(vk_code: u32) bool {
 
 /// Currently-held modifier keys, read via GetAsyncKeyState; shared by mouse_hook.zig and keyboard_hook.zig.
 pub fn currentModifiers() u32 {
-    var mods: u32 = 0;
-    if (win32.isCtrlPressed()) mods |= MOD_CONTROL;
-    if (win32.isAltPressed()) mods |= MOD_ALT;
-    if (win32.isShiftPressed()) mods |= MOD_SHIFT;
-    if (win32.isWinPressed()) mods |= MOD_WIN;
-    return mods;
+    var modifiers: u32 = 0;
+    if (win32.isCtrlPressed()) modifiers |= MOD_CONTROL;
+    if (win32.isAltPressed()) modifiers |= MOD_ALT;
+    if (win32.isShiftPressed()) modifiers |= MOD_SHIFT;
+    if (win32.isWinPressed()) modifiers |= MOD_WIN;
+    return modifiers;
 }
 
 pub fn keyName(vk_code: u32) ?[]const u8 {
     for (KEY_NAMES) |key| {
-        if (key.vk == vk_code) return key.name;
+        if (key.vk_code == vk_code) return key.name;
     }
     return null;
 }
@@ -206,7 +206,7 @@ fn parseModifierToken(token: []const u8) ?u32 {
 /// A name from KEY_NAMES, or one of the aliases hand-edited profiles may use (a shifted OEM character, "Control", "LWin", "RWin").
 fn parseBaseKey(key_text: []const u8) ?u32 {
     for (KEY_NAMES) |key| {
-        if (std.ascii.eqlIgnoreCase(key.name, key_text)) return key.vk;
+        if (std.ascii.eqlIgnoreCase(key.name, key_text)) return key.vk_code;
     }
 
     if (key_text.len == 1) {
@@ -233,7 +233,7 @@ fn parseBaseKey(key_text: []const u8) ?u32 {
 }
 
 /// A combined value (see combineKey) from "F9", "Ctrl+Alt+F9", or the hex form older profiles saved ("0x0278").
-/// Null for anything that isn't a bindable key; the caller logs it, with the setting it came from.
+/// Null for anything that isn't a bindable key; the caller logs it, with the setting it came from, except a modifier used as its own key, which is logged here with why.
 pub fn parseVirtualKey(key_text: []const u8) ?u32 {
     if (key_text.len == 0) return null;
 
@@ -252,24 +252,24 @@ pub fn parseVirtualKey(key_text: []const u8) ?u32 {
         const key_part = std.mem.trim(u8, key_text[last_plus + 1 ..], " ");
         var modifiers: u32 = 0;
         var it = std.mem.splitScalar(u8, key_text[0..last_plus], '+');
-        while (it.next()) |tok| {
-            const mod_name = std.mem.trim(u8, tok, " ");
-            if (mod_name.len == 0) continue;
-            const mod_bit = parseModifierToken(mod_name) orelse return null;
-            modifiers |= mod_bit;
+        while (it.next()) |token| {
+            const modifier_name = std.mem.trim(u8, token, " ");
+            if (modifier_name.len == 0) continue;
+            const modifier_bit = parseModifierToken(modifier_name) orelse return null;
+            modifiers |= modifier_bit;
         }
 
         const vk_code = parseBaseKey(key_part) orelse return null;
 
         // e.g. "Shift+Shift" would otherwise parse into a binding that can never fire (its own bit is always excluded from the match).
-        const self_referential = switch (vk_code) {
+        const is_self_referential = switch (vk_code) {
             VK_CONTROL => modifiers & MOD_CONTROL != 0,
             VK_MENU => modifiers & MOD_ALT != 0,
             VK_SHIFT => modifiers & MOD_SHIFT != 0,
             VK_LWIN => modifiers & MOD_WIN != 0,
             else => false,
         };
-        if (self_referential) {
+        if (is_self_referential) {
             slog.warn("Failed to parse hotkey '{s}': '{s}' is already its modifier", .{ key_text, key_part });
             return null;
         }

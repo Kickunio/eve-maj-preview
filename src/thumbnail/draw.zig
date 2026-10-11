@@ -3,6 +3,7 @@ const win32 = @import("../platform/win32.zig");
 const gdi_overlay = @import("../platform/gdi_overlay.zig");
 const types = @import("../config/types.zig");
 const color_mod = @import("../util/color.zig");
+const pixel_buffer = @import("../util/pixel_buffer.zig");
 
 const TextPosition = types.TextPosition;
 const BorderStyle = types.BorderStyle;
@@ -96,7 +97,7 @@ pub fn fillTextBackground(pixels: [*]u32, width: usize, height: usize, x: i32, y
     const end_x = @min(start_x + text_width, width);
     if (end_x <= start_x or end_y <= start_y) return;
     // Premultiplied, or fixTextAlphaRect would take a transparent non-black background for unfixed GDI text and make it opaque.
-    gdi_overlay.fillRect(pixels, width, height, start_x, start_y, end_x - start_x, end_y - start_y, color_mod.premultiplyAlpha(color));
+    pixel_buffer.fillRect(pixels, width, height, start_x, start_y, end_x - start_x, end_y - start_y, color_mod.premultiplyAlpha(color));
 }
 
 /// Draws the exclusion overlay onto an already-cleared buffer.
@@ -252,17 +253,17 @@ pub fn drawBorder(pixels: [*]u32, width: usize, height: usize, border_width: usi
             const arm_length = @min(border_width * 4, @min(width, height) / 3);
 
             // Top-left
-            gdi_overlay.fillRect(pixels, width, height, 0, 0, arm_length, border_width, color);
-            gdi_overlay.fillRect(pixels, width, height, 0, 0, border_width, arm_length, color);
+            pixel_buffer.fillRect(pixels, width, height, 0, 0, arm_length, border_width, color);
+            pixel_buffer.fillRect(pixels, width, height, 0, 0, border_width, arm_length, color);
             // Top-right
-            gdi_overlay.fillRect(pixels, width, height, width - arm_length, 0, arm_length, border_width, color);
-            gdi_overlay.fillRect(pixels, width, height, width - border_width, 0, border_width, arm_length, color);
+            pixel_buffer.fillRect(pixels, width, height, width - arm_length, 0, arm_length, border_width, color);
+            pixel_buffer.fillRect(pixels, width, height, width - border_width, 0, border_width, arm_length, color);
             // Bottom-left
-            gdi_overlay.fillRect(pixels, width, height, 0, height - border_width, arm_length, border_width, color);
-            gdi_overlay.fillRect(pixels, width, height, 0, height - arm_length, border_width, arm_length, color);
+            pixel_buffer.fillRect(pixels, width, height, 0, height - border_width, arm_length, border_width, color);
+            pixel_buffer.fillRect(pixels, width, height, 0, height - arm_length, border_width, arm_length, color);
             // Bottom-right
-            gdi_overlay.fillRect(pixels, width, height, width - arm_length, height - border_width, arm_length, border_width, color);
-            gdi_overlay.fillRect(pixels, width, height, width - border_width, height - arm_length, border_width, arm_length, color);
+            pixel_buffer.fillRect(pixels, width, height, width - arm_length, height - border_width, arm_length, border_width, color);
+            pixel_buffer.fillRect(pixels, width, height, width - border_width, height - arm_length, border_width, arm_length, color);
         },
     }
 }

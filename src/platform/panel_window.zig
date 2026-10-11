@@ -8,7 +8,7 @@ pub const PanelWindow = struct {
     hwnd: win32.HWND,
     allocator: std.mem.Allocator,
     font: ?win32.HFONT = null,
-    // The settings `font` was made from; owns its name, since the config frees its own on a rename.
+    /// The settings `font` was made from; owns its name, since the config frees its own on a rename.
     font_name: []const u8 = "",
     font_size: i32 = 0,
     font_weight: fonts.FontWeight = .Regular,
@@ -26,7 +26,7 @@ pub const PanelWindow = struct {
     /// Where the settings last put the panel, so a drag isn't undone by followPosition until the settings change.
     placed: win32.POINT = .{ .x = 0, .y = 0 },
 
-    pub fn create(allocator: std.mem.Allocator, instance: win32.HINSTANCE, class_name: [*:0]const u8, title: [*:0]const u8, rect: win32.RECT) !PanelWindow {
+    pub fn init(allocator: std.mem.Allocator, instance: win32.HINSTANCE, class_name: [*:0]const u8, title: [*:0]const u8, rect: win32.RECT) !PanelWindow {
         const hwnd = win32.CreateWindowExA(
             win32.WS_EX_TOPMOST | win32.WS_EX_TOOLWINDOW | win32.WS_EX_NOACTIVATE | win32.WS_EX_LAYERED,
             class_name,
@@ -52,7 +52,7 @@ pub const PanelWindow = struct {
     }
 
     pub fn deinit(self: *PanelWindow) void {
-        if (self.bitmap) |bitmap| bitmap.destroy();
+        if (self.bitmap) |bitmap| bitmap.deinit();
         if (self.font) |font| _ = win32.DeleteObject(font);
         self.allocator.free(self.font_name);
         if (self.small_font) |font| _ = win32.DeleteObject(font);
@@ -71,7 +71,7 @@ pub const PanelWindow = struct {
     }
 
     /// Whether `signature` matches the last frame shown, so there's nothing to redraw; keeps the window shown either way.
-    pub fn isUnchanged(self: *PanelWindow, signature: u64) bool {
+    pub fn isUnchanged(self: *const PanelWindow, signature: u64) bool {
         if (self.bitmap == null or self.last_signature != signature) return false;
         _ = win32.ShowWindow(self.hwnd, win32.SW_SHOWNOACTIVATE);
         return true;

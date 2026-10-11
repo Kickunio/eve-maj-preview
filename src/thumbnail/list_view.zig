@@ -11,6 +11,7 @@ const ThumbnailWindow = @import("window.zig").ThumbnailWindow;
 const input = @import("input.zig");
 const drag_panel = @import("../drag/panel.zig");
 const template = @import("../notifications/template.zig");
+const pixel_buffer = @import("../util/pixel_buffer.zig");
 
 const TEXT_BUF: usize = 256;
 /// Kept clear for the right-hand slot when a long name is cut short.
@@ -41,7 +42,7 @@ pub const ListWindow = struct {
         const x = config.display.startX;
         const y = config.display.startY;
         const sizes = list_look.metrics(&config.display);
-        const panel = try PanelWindow.create(allocator, instance, LIST_WINDOW_CLASS, "EVE Client List", .{ .left = x, .top = y, .right = x + sizes.column_width, .bottom = y + sizes.header_height });
+        const panel = try PanelWindow.init(allocator, instance, LIST_WINDOW_CLASS, "EVE Client List", .{ .left = x, .top = y, .right = x + sizes.column_width, .bottom = y + sizes.header_height });
         win32.setClickThroughStyle(panel.hwnd, config.interaction.clickThrough);
         return .{ .panel = panel, .store = store, .config = config };
     }
@@ -257,8 +258,8 @@ pub const ListWindow = struct {
         const height: usize = bitmap.height;
         const dc = bitmap.mem_dc;
 
-        gdi_overlay.fillRect(bitmap.pixels, width, height, 0, 0, width, height, list_look.PANEL);
-        gdi_overlay.fillRect(bitmap.pixels, width, height, 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
+        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, 0, width, height, list_look.PANEL);
+        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
 
         var row_text: ?RowText = null;
         var old_font: ?win32.HANDLE = null;
@@ -279,8 +280,8 @@ pub const ListWindow = struct {
 
         for (self.rows.items, 0..) |thumb_index, i| self.drawRow(bitmap, &thumbnails[thumb_index], i, columns, sizes, row_text, active_source_hwnd);
 
-        gdi_overlay.fixTextAlpha(bitmap.pixels, width, height);
-        gdi_overlay.drawRoundedFrame(bitmap, list_look.CORNER_RADIUS, list_look.BORDER);
+        pixel_buffer.fixTextAlpha(bitmap.pixels, width, height);
+        pixel_buffer.drawRoundedFrame(bitmap.pixels, bitmap.width, bitmap.height, list_look.CORNER_RADIUS, list_look.BORDER);
 
         self.panel.present(display.listViewOpacity, signature);
     }
@@ -307,7 +308,7 @@ pub const ListWindow = struct {
             list_look.activeTint(active_color)
         else
             null;
-        if (tint) |row_bg| gdi_overlay.fillRect(bitmap.pixels, width, height, @intCast(column_left), @intCast(row_top), @intCast(sizes.column_width), @intCast(sizes.row_height), row_bg);
+        if (tint) |row_bg| pixel_buffer.fillRect(bitmap.pixels, width, height, @intCast(column_left), @intCast(row_top), @intCast(sizes.column_width), @intCast(sizes.row_height), row_bg);
 
         const badge_color: u32 = if (is_excluded)
             list_look.BADGE_EXCLUDED
@@ -423,7 +424,7 @@ fn drawIndicator(bitmap: *const gdi_overlay.OverlayBitmap, style: types.ListIndi
     const cy = row_top + @divTrunc(row_height, 2);
     switch (style) {
         .Dot => drawDot(bitmap.pixels, width, height, cx, cy, radius, argb),
-        .Square => gdi_overlay.fillRect(bitmap.pixels, width, height, @intCast(cx - radius), @intCast(cy - radius), @intCast(radius * 2), @intCast(radius * 2), argb),
+        .Square => pixel_buffer.fillRect(bitmap.pixels, width, height, @intCast(cx - radius), @intCast(cy - radius), @intCast(radius * 2), @intCast(radius * 2), argb),
         .None => {},
     }
 }

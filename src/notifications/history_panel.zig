@@ -11,6 +11,7 @@ const history_look = @import("history_look.zig");
 const painter_mod = @import("../painter.zig");
 const activation = @import("../clients/activation.zig");
 const drag_panel = @import("../drag/panel.zig");
+const pixel_buffer = @import("../util/pixel_buffer.zig");
 const log = @import("../log.zig");
 
 const PanelWindow = panel_window.PanelWindow;
@@ -129,7 +130,7 @@ pub const HistoryPanelWindow = struct {
     pub fn init(allocator: std.mem.Allocator, store: *config_mod.ProfileStore, instance: win32.HINSTANCE) !HistoryPanelWindow {
         const display = &store.live.display;
         try registerWindowClass(instance);
-        const panel = try PanelWindow.create(allocator, instance, HISTORY_PANEL_WINDOW_CLASS, "EVE Notification History", .{
+        const panel = try PanelWindow.init(allocator, instance, HISTORY_PANEL_WINDOW_CLASS, "EVE Notification History", .{
             .left = display.notifInfoPanelX,
             .top = display.notifInfoPanelY,
             .right = display.notifInfoPanelX + display.notifInfoPanelWidth,
@@ -254,14 +255,14 @@ pub const HistoryPanelWindow = struct {
         // A large font can leave no room below the header.
         const footer_top = @max(sizes.header_height, panel_height - sizes.footer_height);
 
-        gdi_overlay.fillRect(bitmap.pixels, width, height, 0, 0, width, height, list_look.PANEL);
-        gdi_overlay.fillRect(bitmap.pixels, width, height, 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
+        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, 0, width, height, list_look.PANEL);
+        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
         if (sizes.footer_height > 0) {
-            gdi_overlay.fillRect(bitmap.pixels, width, height, 0, @intCast(footer_top), width, 1, list_look.DIVIDER);
+            pixel_buffer.fillRect(bitmap.pixels, width, height, 0, @intCast(footer_top), width, 1, list_look.DIVIDER);
             for (history_look.CATEGORY_ORDER, 0..) |category, index| {
                 if (!history_look.isCategoryEnabled(display, category)) continue;
                 const span = history_look.filterSpan(panel_width, index);
-                gdi_overlay.fillRoundedRect(bitmap.pixels, width, height, @intCast(span.left), @intCast(footer_top + history_look.FILTER_GAP), @intCast(span.right - span.left), @intCast(sizes.header_height), history_look.FILTER_RADIUS, history_look.FILTER_ON);
+                pixel_buffer.fillRoundedRect(bitmap.pixels, width, height, @intCast(span.left), @intCast(footer_top + history_look.FILTER_GAP), @intCast(span.right - span.left), @intCast(sizes.header_height), history_look.FILTER_RADIUS, history_look.FILTER_ON);
             }
         }
 
@@ -279,8 +280,8 @@ pub const HistoryPanelWindow = struct {
             }
         }
 
-        gdi_overlay.fixTextAlpha(bitmap.pixels, width, height);
-        gdi_overlay.drawRoundedFrame(bitmap, list_look.CORNER_RADIUS, list_look.BORDER);
+        pixel_buffer.fixTextAlpha(bitmap.pixels, width, height);
+        pixel_buffer.drawRoundedFrame(bitmap.pixels, bitmap.width, bitmap.height, list_look.CORNER_RADIUS, list_look.BORDER);
         self.panel.present(display.notifInfoPanelOpacity, signature);
     }
 

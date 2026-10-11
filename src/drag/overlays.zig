@@ -7,6 +7,7 @@ const painter_mod = @import("../painter.zig");
 const draw = @import("../thumbnail/draw.zig");
 const monitors = @import("../layout/monitors.zig");
 const spaces = @import("../layout/spaces.zig");
+const pixel_buffer = @import("../util/pixel_buffer.zig");
 const log = @import("../log.zig");
 
 const Painter = painter_mod.Painter;
@@ -35,7 +36,7 @@ pub const GhostOverlay = struct {
 
     pub fn deinit(self: *GhostOverlay) void {
         self.clearGroups();
-        if (self.bitmap) |bitmap| bitmap.destroy();
+        if (self.bitmap) |bitmap| bitmap.deinit();
         if (self.hwnd) |hwnd| _ = win32.DestroyWindow(hwnd);
     }
 
@@ -140,11 +141,11 @@ pub const GhostOverlay = struct {
             const rect_width: usize = @intCast(group.rect.right - group.rect.left);
             const rect_height: usize = @intCast(group.rect.bottom - group.rect.top);
 
-            gdi_overlay.drawRectOutline(overlay.pixels, overlay.width, overlay.height, local_x, local_y, rect_width, rect_height, OUTLINE_THICKNESS, outline_color);
+            pixel_buffer.drawRectOutline(overlay.pixels, overlay.width, overlay.height, local_x, local_y, rect_width, rect_height, OUTLINE_THICKNESS, outline_color);
 
             const dims = draw.measureText(overlay.mem_dc, group.names);
             draw.renderText(overlay.mem_dc, group.names, local_x, local_y, text_color);
-            gdi_overlay.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, local_x, local_y, dims.width, dims.height);
+            pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, local_x, local_y, dims.width, dims.height);
         }
 
         gdi_overlay.presentLayered(hwnd, overlay, 255);

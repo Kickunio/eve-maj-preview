@@ -4,6 +4,7 @@ const win32 = @import("../../platform/win32.zig");
 const gdi_overlay = @import("../../platform/gdi_overlay.zig");
 const color = @import("../../util/color.zig");
 const region_math = @import("region_math.zig");
+const pixel_buffer = @import("../../util/pixel_buffer.zig");
 const log = @import("../../log.zig");
 
 const slog = log.scoped("region_select");
@@ -278,10 +279,10 @@ fn drawRegion(bitmap: *const gdi_overlay.OverlayBitmap, rect: win32.RECT, fill: 
     const local_y = visible.top - g_virtual_screen.top;
     const width: usize = @intCast(signed_width);
     const height: usize = @intCast(signed_height);
-    gdi_overlay.fillRect(bitmap.pixels, bitmap.width, bitmap.height, @intCast(local_x), @intCast(local_y), width, height, fill);
+    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, @intCast(local_x), @intCast(local_y), width, height, fill);
     switch (outline) {
-        .solid => gdi_overlay.drawRectOutline(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, width, height, BORDER_THICKNESS, border),
-        .dashed => gdi_overlay.drawDashedRectOutline(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, width, height, BORDER_THICKNESS, OTHER_REGION_DASH, border),
+        .solid => pixel_buffer.drawRectOutline(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, width, height, BORDER_THICKNESS, border),
+        .dashed => pixel_buffer.drawDashedRectOutline(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, width, height, BORDER_THICKNESS, OTHER_REGION_DASH, border),
     }
 }
 
@@ -331,7 +332,7 @@ fn drawSizeLabel(bitmap: *const gdi_overlay.OverlayBitmap, selection: win32.RECT
 
     const local_x: usize = @intCast(x - g_virtual_screen.left);
     const local_y: usize = @intCast(y - g_virtual_screen.top);
-    gdi_overlay.fillRect(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, @intCast(label_width), @intCast(label_height), gdi_overlay.HINT_BG_COLOR);
+    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, @intCast(label_width), @intCast(label_height), gdi_overlay.HINT_BACKGROUND_COLOR);
     gdi_overlay.drawText(text_buf.len, bitmap.mem_dc, @intCast(local_x + LABEL_PADDING_X), @intCast(local_y + LABEL_PADDING_Y), text, g_label_style.color);
 }
 
@@ -417,7 +418,7 @@ fn drawHandle(bitmap: *const gdi_overlay.OverlayBitmap, center_x: i32, center_y:
     const x = std.math.clamp(center_x - @divTrunc(HANDLE_SIZE, 2), g_bounds.left, g_bounds.right - HANDLE_SIZE);
     const y = std.math.clamp(center_y - @divTrunc(HANDLE_SIZE, 2), g_bounds.top, g_bounds.bottom - HANDLE_SIZE);
     const size: usize = @intCast(HANDLE_SIZE);
-    gdi_overlay.fillRect(bitmap.pixels, bitmap.width, bitmap.height, @intCast(x - g_virtual_screen.left), @intCast(y - g_virtual_screen.top), size, size, HANDLE_COLOR);
+    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, @intCast(x - g_virtual_screen.left), @intCast(y - g_virtual_screen.top), size, size, HANDLE_COLOR);
 }
 
 fn drawEditHandles(bitmap: *const gdi_overlay.OverlayBitmap, rect: win32.RECT) void {
@@ -638,7 +639,7 @@ fn redraw() void {
     const hwnd = g_hwnd orelse return;
     const bitmap = if (g_bitmap) |*overlay| overlay else return;
 
-    gdi_overlay.fillRect(bitmap.pixels, bitmap.width, bitmap.height, 0, 0, bitmap.width, bitmap.height, DIM_COLOR);
+    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, 0, 0, bitmap.width, bitmap.height, DIM_COLOR);
     for (g_other_regions[0..g_other_region_count]) |other| drawRegion(bitmap, other, OTHER_REGION_FILL, OTHER_REGION_BORDER, .dashed);
 
     if (g_is_edit_mode) {
@@ -678,7 +679,7 @@ fn finish(cancelled: bool) void {
     if (g_hwnd) |hwnd| _ = win32.ShowWindow(hwnd, win32.SW_HIDE);
     g_is_dragging = false;
 
-    if (g_bitmap) |bitmap| bitmap.destroy();
+    if (g_bitmap) |bitmap| bitmap.deinit();
     g_bitmap = null;
 
     if (g_on_finished) |callback| callback();
