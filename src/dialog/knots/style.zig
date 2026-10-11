@@ -1,5 +1,6 @@
 //! The configuration window's look: colours, sizes and every component's style.
 const ui = @import("ui");
+const glyphs = @import("glyphs.zig");
 
 const Color = ui.Color;
 const Style = ui.Style;
@@ -36,7 +37,6 @@ pub const ERROR = color("#e05a4e");
 pub const PURPLE = color("#a988d1");
 pub const SKY = color("#7fb3d9");
 
-/// Font sizes, smallest first: labels, body text (the default, `sm`), headings, then two larger steps.
 pub const theme = ui.Theme.parse(.{
     .primary = .{ .hex = "#d9a441" },
     .secondary = .{ .hex = "#a988d1" },
@@ -61,6 +61,7 @@ pub const theme = ui.Theme.parse(.{
     .toned = .{ .hex = "#6b6e75" },
     .dimmed = .{ .hex = "#8b8f96" },
     .radius = 6,
+    // Smallest first: labels, body text (the default, `sm`), headings, then two larger steps.
     .font_size = .{ 11, 12, 14, 16, 20 },
     .scrollbar_thickness = SCROLLBAR_THICKNESS,
     .scrollbar_min_thumb = 24,
@@ -133,7 +134,7 @@ pub const tab_category: Style = .{ .width = .grow(), .padding = .init(14, 10, 4,
 pub const tab_category_text: Style = .{ .font = FONT_SEMIBOLD, .font_size = .{ .px = 10 }, .foreground = .{ .color = MUTED } };
 pub const tab_label: Style = .{ .font = FONT_SEMIBOLD, .foreground = .{ .color = MUTED } };
 pub const tab_label_lit: Style = .{ .font = FONT_SEMIBOLD, .foreground = .{ .color = TEXT } };
-pub const tab_glyph: Style = .{ .width = .fixed(14), .height = .fixed(14) };
+pub const tab_glyph: Style = .{ .width = .fixed(glyphs.TAB_SIZE), .height = .fixed(glyphs.TAB_SIZE) };
 
 /// The tab's content when it scrolls. Vertical padding is on the column, so the pane's height compares straight against it.
 pub const content_scroll: ScrollPane = .{

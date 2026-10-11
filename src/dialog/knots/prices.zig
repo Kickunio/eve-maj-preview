@@ -20,7 +20,7 @@ pub const Fetched = struct {
     arena: std.heap.ArenaAllocator,
     /// Borrows from `arena`; empty when the fetch failed.
     prices: []const esi_prices.Price,
-    failed: bool,
+    has_failed: bool,
 
     pub fn deinit(self: *Fetched) void {
         var arena = self.arena;
@@ -31,22 +31,22 @@ pub const Fetched = struct {
 
 var g_allocator: std.mem.Allocator = undefined;
 /// Set while a fetch runs, so a second click doesn't start another. Main thread sets it; the fetch's thread clears it.
-var g_busy: std.atomic.Value(bool) = .init(false);
+var g_is_busy: std.atomic.Value(bool) = .init(false);
 
 pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
 }
 
 pub fn isFetching() bool {
-    return g_busy.load(.acquire);
+    return g_is_busy.load(.acquire);
 }
 
-/// `timer` receives `command` with the result; returns false if a fetch is already running or couldn't start.
-pub fn fetch(timer: win32.HWND, command: usize) bool {
-    if (g_busy.swap(true, .acq_rel)) return false;
-    const thread = std.Thread.spawn(.{}, fetchThread, .{ timer, command }) catch |err| {
+/// `timer_hwnd` receives `command` with the result; returns false if a fetch is already running or couldn't start.
+pub fn fetch(timer_hwnd: win32.HWND, command: usize) bool {
+    if (g_is_busy.swap(true, .acq_rel)) return false;
+    const thread = std.Thread.spawn(.{}, fetchThread, .{ timer_hwnd, command }) catch |err| {
         slog.err("Failed to fetch ore prices: {}", .{err});
-        g_busy.store(false, .release);
+        g_is_busy.store(false, .release);
         return false;
     };
     thread.detach();
@@ -54,20 +54,20 @@ pub fn fetch(timer: win32.HWND, command: usize) bool {
 }
 
 /// The fetch's thread; touches nothing of the main thread's but the allocator and the posted message.
-fn fetchThread(timer: win32.HWND, command: usize) void {
-    defer g_busy.store(false, .release);
+fn fetchThread(timer_hwnd: win32.HWND, command: usize) void {
+    defer g_is_busy.store(false, .release);
     const fetched = g_allocator.create(Fetched) catch |err| {
         slog.err("Failed to fetch ore prices: {}", .{err});
         return;
     };
-    fetched.* = .{ .arena = .init(g_allocator), .prices = &.{}, .failed = false };
+    fetched.* = .{ .arena = .init(g_allocator), .prices = &.{}, .has_failed = false };
     if (esi_prices.fetchOrePrices(g_allocator, fetched.arena.allocator(), files.g_io, &NAMES)) |prices| {
         fetched.prices = prices.items;
     } else |err| {
         slog.err("Failed to fetch ore prices: {}", .{err});
-        fetched.failed = true;
+        fetched.has_failed = true;
     }
-    if (!win32.toBool(win32.PostMessageA(timer, win32.WM_KNOTS_COMMAND, command, @bitCast(@intFromPtr(fetched))))) {
+    if (!win32.toBool(win32.PostMessageA(timer_hwnd, win32.WM_KNOTS_COMMAND, command, @bitCast(@intFromPtr(fetched))))) {
         slog.err("Failed to pass on the fetched ore prices: error {d}", .{win32.GetLastError()});
         fetched.deinit();
     }

@@ -15,8 +15,6 @@ const log = @import("log.zig");
 
 const slog = log.Scoped("tray");
 
-/// IDI_ICON1 in app.rc: the icon built into the exe.
-const APP_ICON_ID = 101;
 /// Keeps profile item IDs inside their range above IDM_PROFILE_BASE.
 const MAX_PROFILE_ITEMS = 1000;
 
@@ -42,7 +40,7 @@ pub const TrayIcon = struct {
         tray.nid.uFlags = win32.NIF_MESSAGE | win32.NIF_ICON | win32.NIF_TIP;
         tray.nid.uCallbackMessage = win32.WM_TRAYICON;
 
-        const app_icon = win32.LoadImageA(win32.GetModuleHandleA(null), @ptrFromInt(APP_ICON_ID), win32.IMAGE_ICON, 16, 16, 0);
+        const app_icon = win32.LoadImageA(win32.GetModuleHandleA(null), @ptrFromInt(win32.APP_ICON_ID), win32.IMAGE_ICON, 16, 16, 0);
         tray.nid.hIcon = if (app_icon) |icon| blk: {
             tray.owns_icon = true;
             break :blk @ptrCast(icon);

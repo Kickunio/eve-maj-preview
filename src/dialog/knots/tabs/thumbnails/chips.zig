@@ -13,7 +13,7 @@ const Fields = overlay_text.Fields;
 
 const STYLE_ROWS = [_]PopoverField{ .font, .background };
 const WINDOW_HINT = "The rolling look-back period the rate is averaged over, not how often the number updates.";
-const UPDATE_INTERVAL = PopoverField{ .number = .{ .field = "update_interval_ms", .label = "Update Interval", .unit = "s", .ms_as_seconds = true } };
+const UPDATE_INTERVAL = PopoverField{ .number = .{ .field = "update_interval_ms", .label = "Update Interval", .unit = "s", .shows_seconds = true } };
 const RATE_WINDOW = PopoverField{ .number = .{ .field = "window_seconds", .label = "Window", .unit = "s", .hint = WINDOW_HINT } };
 
 pub const CHIPS = [_]Chip{
@@ -181,7 +181,7 @@ pub const Section = enum { thumbnail, notifications, combat, mining, bounty, res
 pub const PopoverField = union(enum) {
     /// A setting of the chip's section; `disables_color` greys out the text colour while it's on.
     toggle: struct { field: []const u8, label: []const u8, disables_color: bool = false, hint: ?[]const u8 = null },
-    number: struct { field: []const u8, label: []const u8, unit: []const u8, ms_as_seconds: bool = false, hint: ?[]const u8 = null },
+    number: struct { field: []const u8, label: []const u8, unit: []const u8, shows_seconds: bool = false, hint: ?[]const u8 = null },
     choice: struct { field: []const u8, label: []const u8 },
     text: struct { field: []const u8, label: []const u8, placeholder: []const u8, hint: ?[]const u8 = null },
     /// The chip's text colour.
@@ -313,7 +313,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
                 }
             },
             .number => |number| if (is_advanced) {
-                try bind.number(context, ref, number.field, number.label, .{ .unit = number.unit, .ms_as_seconds = number.ms_as_seconds });
+                try bind.number(context, ref, number.field, number.label, .{ .unit = number.unit, .shows_seconds = number.shows_seconds });
                 if (number.hint) |hint| try widgets.paragraph(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ number.field), hint);
             },
             .choice => |choice| if (is_advanced) try bind.choice(context, ref, choice.field, choice.label),

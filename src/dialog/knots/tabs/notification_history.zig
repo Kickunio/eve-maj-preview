@@ -182,7 +182,7 @@ fn panel(context: *ui.Frame, profile: *const config.Config, look: Look) !void {
     };
     const header = Rect{ .key = .src(@src()), .style = header_style };
     _ = try header.open(context);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = history_look.HEADER_TEXT, .style = try textStyle(arena, list_look.MUTED, look.small_size, false) });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = history_look.HEADER_TEXT, .style = try widgets.textStyle(arena, list_look.MUTED, look.small_size, .{}) });
     try header.close(context);
 
     try rows(context, profile, look);
@@ -221,19 +221,19 @@ fn rows(context: *ui.Frame, profile: *const config.Config, look: Look) !void {
         _ = try row.open(context);
         const is_merged = display.notifInfoPanelMergeEnabled and sample.merged_count > 1;
         const name = if (is_merged) history_look.countText(try arena.create([history_look.COUNT_TEXT_MAX]u8), sample.merged_count) else sample.name;
-        try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = name, .style = try textStyle(arena, if (is_merged) list_look.MUTED else look.name_color, look.name_size, false) });
+        try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = name, .style = try widgets.textStyle(arena, if (is_merged) list_look.MUTED else look.name_color, look.name_size, .{}) });
         const message_color = history_look.messageColor(&profile.thumbnail.notifications, sample.notification_type);
-        try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = sample.text, .style = try textStyle(arena, message_color, look.name_size, true) });
+        try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = sample.text, .style = try widgets.textStyle(arena, message_color, look.name_size, .{ .is_grown = true }) });
         if (display.notifInfoPanelShowTimestamp) {
             const time_text = history_look.relativeTime(try arena.create([history_look.TIME_TEXT_MAX]u8), sample.age_ms);
-            try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = time_text, .style = try textStyle(arena, list_look.MUTED, look.small_size, false) });
+            try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = time_text, .style = try widgets.textStyle(arena, list_look.MUTED, look.small_size, .{}) });
         }
         try row.close(context);
     }
     if (shown_count == 0 and capacity > 0) {
         const row = Rect{ .key = .src(@src()), .style = row_style };
         _ = try row.open(context);
-        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "All notifications filtered", .style = try textStyle(arena, list_look.MUTED, look.name_size, false) });
+        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "All notifications filtered", .style = try widgets.textStyle(arena, list_look.MUTED, look.name_size, .{}) });
         try row.close(context);
     }
     try body.close(context);
@@ -270,15 +270,8 @@ fn footer(context: *ui.Frame, display: *const config.DisplayConfig, look: Look) 
         const key = FILTER_KEY.indexed(index);
         const button = Rect{ .key = key, .style = button_style };
         _ = try button.open(context);
-        try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = history_look.categoryLabel(category), .style = try textStyle(arena, if (is_enabled) list_look.NAME else list_look.MUTED, look.small_size, false) });
+        try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = history_look.categoryLabel(category), .style = try widgets.textStyle(arena, if (is_enabled) list_look.NAME else list_look.MUTED, look.small_size, .{}) });
         try button.close(context);
     }
     try bar.close(context);
-}
-
-fn textStyle(arena: std.mem.Allocator, color: u32, size: f32, is_grown: bool) !*const ui.Style {
-    const text_style = try arena.create(ui.Style);
-    text_style.* = .{ .foreground = widgets.solidColor(color), .font_size = .{ .px = size } };
-    if (is_grown) text_style.width = .grow();
-    return text_style;
 }

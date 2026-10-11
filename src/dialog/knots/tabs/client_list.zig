@@ -167,7 +167,7 @@ fn visibility(context: *ui.Frame, display: DisplayRef) !void {
     try bind.toggle(context, display, "listViewHideWhenNoEveFocus", "Hide When No EVE Focus");
     try widgets.hintText(context, .src(@src()), "Hides the list while no EVE client window has focus.");
     const delay = try widgets.openGroup(context, .src(@src()), display.get("listViewHideWhenNoEveFocus"));
-    try bind.number(context, display, "listViewHideDebounceMs", "Hide Delay", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, display, "listViewHideDebounceMs", "Hide Delay", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "Delay before hiding, so switching briefly doesn't flicker.");
     try delay.close(context);
     try section.close(context);
@@ -205,7 +205,7 @@ fn preview(context: *ui.Frame, display: *const config.DisplayConfig, look: Look)
     const header = Rect{ .key = .src(@src()), .style = header_style };
     _ = try header.open(context);
     const header_text = list_look.headerText(try arena.create([list_look.HEADER_TEXT_MAX]u8), SAMPLES.len);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = header_text, .style = try textStyle(arena, list_look.MUTED, look.small_size, .{}) });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = header_text, .style = try widgets.textStyle(arena, list_look.MUTED, look.small_size, .{}) });
     try header.close(context);
 
     // Row by row across the columns, as the panel lays its rows out; a short last line keeps its cells' width.
@@ -250,15 +250,15 @@ fn sampleRow(context: *ui.Frame, sample: Sample, index: usize, look: Look) !void
             const row = Button{ .key = partKey(.active), .style = button_style };
             if (try openPart(context, row, .active)) select(context, .active);
             try indicator(context, key.indexed(1), look.active_color, look);
-            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = sample.name, .style = try textStyle(arena, look.active_name_color, look.name_size, .{ .is_grown = true }) });
-            try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = sample.system, .style = try textStyle(arena, look.system_color, look.small_size, .{ .is_shown = look.shows_systems }) });
+            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = sample.name, .style = try widgets.textStyle(arena, look.active_name_color, look.name_size, .{ .is_grown = true }) });
+            try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = sample.system, .style = try widgets.textStyle(arena, look.system_color, look.small_size, .{ .is_shown = look.shows_systems }) });
             try row.close(context);
         },
         .inactive => {
             const row = Rect{ .key = key, .style = row_style };
             _ = try row.open(context);
             try indicator(context, key.indexed(1), list_look.BADGE_INACTIVE, look);
-            const name = Text{ .selectable = false, .key = key.indexed(2), .content = sample.name, .style = try textStyle(arena, look.name_color, look.name_size, .{ .is_grown = !sample.is_name_part }) };
+            const name = Text{ .selectable = false, .key = key.indexed(2), .content = sample.name, .style = try widgets.textStyle(arena, look.name_color, look.name_size, .{ .is_grown = !sample.is_name_part }) };
             if (sample.is_name_part) {
                 const part = Button{ .key = partKey(.names), .style = try partStyle(arena, look, .{ .width = .grow() }, list_look.PANEL, .names) };
                 if (try openPart(context, part, .names)) select(context, .names);
@@ -274,8 +274,8 @@ fn sampleRow(context: *ui.Frame, sample: Sample, index: usize, look: Look) !void
             const row = Rect{ .key = key, .style = row_style };
             _ = try row.open(context);
             try indicator(context, key.indexed(1), list_look.BADGE_EXCLUDED, look);
-            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = sample.name, .style = try textStyle(arena, list_look.MUTED, look.name_size, .{ .is_grown = true }) });
-            try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = "Excluded", .style = try textStyle(arena, list_look.MUTED, look.small_size, .{}) });
+            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = sample.name, .style = try widgets.textStyle(arena, list_look.MUTED, look.name_size, .{ .is_grown = true }) });
+            try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = "Excluded", .style = try widgets.textStyle(arena, list_look.MUTED, look.small_size, .{}) });
             try row.close(context);
         },
     }
@@ -285,14 +285,14 @@ fn sampleRow(context: *ui.Frame, sample: Sample, index: usize, look: Look) !void
 fn rightPart(context: *ui.Frame, sample: Sample, key: ui.Key, look: Look) !void {
     const arena = context.arena();
     switch (sample.right) {
-        .system => try textPart(context, .systems, key, sample.system, try textStyle(arena, look.system_color, look.small_size, .{ .is_shown = look.shows_systems }), look),
-        .notification => try textPart(context, .notifications, key, SAMPLE_NOTIFICATION, try textStyle(arena, look.notification_color, look.small_size, .{ .is_shown = look.shows_notifications }), look),
+        .system => try textPart(context, .systems, key, sample.system, try widgets.textStyle(arena, look.system_color, look.small_size, .{ .is_shown = look.shows_systems }), look),
+        .notification => try textPart(context, .notifications, key, SAMPLE_NOTIFICATION, try widgets.textStyle(arena, look.notification_color, look.small_size, .{ .is_shown = look.shows_notifications }), look),
         .stats => |stats| {
             const group = Rect{ .key = key, .style = &STATS_GROUP };
             _ = try group.open(context);
             for (stats, 1..) |stat, index| {
                 const label = look.stat_labels[@backingInt(stat)];
-                try textPart(context, .ofStat(stat), key.indexed(index), label.text, try textStyle(arena, label.color, look.small_size, .{ .is_shown = label.is_shown }), look);
+                try textPart(context, .ofStat(stat), key.indexed(index), label.text, try widgets.textStyle(arena, label.color, look.small_size, .{ .is_shown = label.is_shown }), look);
             }
             try group.close(context);
         },
@@ -390,20 +390,6 @@ fn indicator(context: *ui.Frame, key: ui.Key, color: u32, look: Look) !void {
     const indicator_shape = try context.arena().create(ui.Style);
     indicator_shape.* = shape.with(.{ .background = widgets.solidColor(color) });
     try context.e(Rect{ .key = key, .style = indicator_shape });
-}
-
-/// A text that isn't shown is faded rather than hidden, so a part whose text is turned off can still be clicked to turn it back on.
-const TextOptions = struct { is_grown: bool = false, is_shown: bool = true };
-
-fn textStyle(arena: std.mem.Allocator, color: u32, size: f32, options: TextOptions) !*const ui.Style {
-    const text_style = try arena.create(ui.Style);
-    text_style.* = .{
-        .foreground = widgets.solidColor(color),
-        .font_size = .{ .px = size },
-        .opacity = if (options.is_shown) 1 else style.OFF_TEXT_OPACITY,
-    };
-    if (options.is_grown) text_style.width = .grow();
-    return text_style;
 }
 
 /// Beside the clicked part; a click on another part moves it there.

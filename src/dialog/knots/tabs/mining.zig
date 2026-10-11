@@ -24,7 +24,7 @@ pub fn show(context: *ui.Frame) !void {
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
     try bind.number(context, ref, "window_seconds", "Window", .{ .unit = "s" });
     try widgets.hintText(context, .src(@src()), "The rolling look-back period the m3/min rate is averaged over, not how often the number updates.");
-    try bind.number(context, ref, "update_interval_ms", "Update Interval", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, ref, "update_interval_ms", "Update Interval", .{ .shows_seconds = true, .unit = "s" });
     try bind.toggle(context, ref, "show_isk_rate", "Show ISK Rate");
     try widgets.hintText(context, .src(@src()), "Valued using the prices set in Ore / Ice / Gas Prices below - fetch or fill those in first, or this reads 0.");
     const isk_rate = try widgets.openGroup(context, .src(@src()), ref.get("show_isk_rate"));

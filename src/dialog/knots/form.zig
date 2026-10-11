@@ -45,8 +45,8 @@ const Category = enum {
     alerts,
     overlays,
 
-    fn label(category: Category) []const u8 {
-        return switch (category) {
+    fn label(self: Category) []const u8 {
+        return switch (self) {
             .app => "APP",
             .clients => "CLIENTS",
             .display => "DISPLAY",
@@ -74,8 +74,8 @@ const Tab = enum {
     chatlog,
     mining,
 
-    fn label(tab: Tab) []const u8 {
-        return switch (tab) {
+    fn label(self: Tab) []const u8 {
+        return switch (self) {
             .characters => "Characters",
             .hotkey_groups => "Hotkey Groups",
             .appearance => "Appearance",
@@ -93,8 +93,8 @@ const Tab = enum {
         };
     }
 
-    fn category(tab: Tab) Category {
-        return switch (tab) {
+    fn category(self: Tab) Category {
+        return switch (self) {
             .characters, .hotkey_groups => .clients,
             .appearance, .placement => .display,
             .hotkeys, .behavior => .input,
@@ -104,8 +104,8 @@ const Tab = enum {
         };
     }
 
-    fn glyph(tab: Tab) glyphs.Glyph {
-        return switch (tab) {
+    fn glyph(self: Tab) glyphs.Glyph {
+        return switch (self) {
             .characters => .list,
             .hotkey_groups => .split_square,
             .appearance => .thumbnail,
@@ -124,24 +124,24 @@ const Tab = enum {
     }
 
     /// Shown only in Advanced Mode.
-    fn isAdvanced(tab: Tab) bool {
-        return switch (tab) {
+    fn isAdvanced(self: Tab) bool {
+        return switch (self) {
             .mining => true,
             .characters, .hotkey_groups, .appearance, .placement, .hotkeys, .behavior, .notifications, .event_alerts, .notification_history, .chatlog, .general, .about, .backups => false,
         };
     }
 
     /// Shown only while clients are shown as thumbnails.
-    fn needsThumbnails(tab: Tab) bool {
-        return switch (tab) {
+    fn needsThumbnails(self: Tab) bool {
+        return switch (self) {
             .placement => true,
             .characters, .hotkey_groups, .appearance, .hotkeys, .behavior, .notifications, .event_alerts, .notification_history, .chatlog, .mining, .general, .about, .backups => false,
         };
     }
 
     /// Fills the content area itself instead of scrolling in it.
-    fn fills(tab: Tab) bool {
-        return switch (tab) {
+    fn fills(self: Tab) bool {
+        return switch (self) {
             .characters, .hotkey_groups, .event_alerts => true,
             .placement => placement.fillsWindow(),
             .appearance, .hotkeys, .behavior, .notifications, .notification_history, .chatlog, .mining, .general, .about, .backups => false,
@@ -162,19 +162,19 @@ const Offered = struct {
     is_advanced_mode: bool,
     shows_thumbnails: bool,
 
-    fn has(offered: Offered, tab: Tab) bool {
-        if (!offered.is_advanced_mode and tab.isAdvanced()) return false;
-        if (!offered.shows_thumbnails and tab.needsThumbnails()) return false;
+    fn has(self: Offered, tab: Tab) bool {
+        if (!self.is_advanced_mode and tab.isAdvanced()) return false;
+        if (!self.shows_thumbnails and tab.needsThumbnails()) return false;
         return true;
     }
 };
 
 var g_tab: Tab = .about;
-var g_confirm_close: bool = false;
+var g_is_close_prompt_open: bool = false;
 
 /// The window's close button was pressed with unsaved changes.
 pub fn confirmClose() void {
-    g_confirm_close = true;
+    g_is_close_prompt_open = true;
 }
 
 pub fn frame(_: *knots.View, context: *ui.Frame) !void {
@@ -373,8 +373,8 @@ fn searchBox(context: *ui.Frame) !void {
 }
 
 fn unsavedPrompt(context: *ui.Frame) !void {
-    if (!g_confirm_close) return;
-    const dialog = widgets.modal(.src(@src()), &g_confirm_close, &style.modal);
+    if (!g_is_close_prompt_open) return;
+    const dialog = widgets.modal(.src(@src()), &g_is_close_prompt_open, &style.modal);
     _ = try dialog.open(context);
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Unsaved Changes", .style = &style.heading });
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "You have unsaved changes. Save them before closing, or close without saving?", .style = &style.modal_text });
@@ -382,15 +382,15 @@ fn unsavedPrompt(context: *ui.Frame) !void {
     _ = try actions.open(context);
     // Furthest from Save, so the destructive choice isn't beside the default one.
     if ((try context.interact(Button{ .key = .src(@src()), .label = "Discard", .style = &style.danger_button })).clicked) {
-        g_confirm_close = false;
+        g_is_close_prompt_open = false;
         host.postCommand(.discard_and_close);
     }
     if ((try context.interact(Button{ .key = .src(@src()), .label = "Cancel", .style = &style.outline_button })).clicked) {
-        g_confirm_close = false;
+        g_is_close_prompt_open = false;
         context.requestRedraw();
     }
     if ((try context.interact(Button{ .key = .src(@src()), .label = "Save", .style = &style.primary_button })).clicked) {
-        g_confirm_close = false;
+        g_is_close_prompt_open = false;
         host.postCommand(.save_and_close);
     }
     try actions.close(context);

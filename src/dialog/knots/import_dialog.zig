@@ -29,7 +29,7 @@ const Section = struct {
     id: []const u8,
     title: []const u8,
     hint: []const u8,
-    available: bool,
+    is_available: bool,
     is_chosen: bool,
 };
 
@@ -55,7 +55,7 @@ var g_file_name: []const u8 = "";
 /// Under the Browse button: reading, what was detected, or why it failed.
 var g_file_status: []const u8 = "";
 var g_analysis: ?Analysis = null;
-var g_into_new: bool = false;
+var g_imports_into_new: bool = false;
 /// Owned; freed in reset.
 var g_new_name: std.ArrayList(u8) = .empty;
 var g_new_accent: ui.Color = undefined;
@@ -77,7 +77,7 @@ pub fn reset() void {
 
 pub fn open() void {
     clearArena();
-    g_into_new = false;
+    g_imports_into_new = false;
     g_new_name.clearRetainingCapacity();
     g_new_accent = widgets.colorFromArgb(header.DEFAULT_ACCENT);
     g_is_open = true;
@@ -145,11 +145,11 @@ fn optionsStep(context: *ui.Frame, analysis: *Analysis) !void {
 
     try widgets.subheading(context, .src(@src()), "Import into");
     const editing = profiles.displayName(session.profile().ptr.profile_name);
-    var into_current = !g_into_new;
-    if (try widgets.checkbox(context, .src(@src()), try std.fmt.allocPrint(context.arena(), "Current profile ({s})", .{editing}), &into_current)) g_into_new = false;
-    var into_new = g_into_new;
-    if (try widgets.checkbox(context, .src(@src()), "New profile", &into_new)) g_into_new = true;
-    if (g_into_new) {
+    var imports_into_current = !g_imports_into_new;
+    if (try widgets.checkbox(context, .src(@src()), try std.fmt.allocPrint(context.arena(), "Current profile ({s})", .{editing}), &imports_into_current)) g_imports_into_new = false;
+    var imports_into_new = g_imports_into_new;
+    if (try widgets.checkbox(context, .src(@src()), "New profile", &imports_into_new)) g_imports_into_new = true;
+    if (g_imports_into_new) {
         const row = Rect{ .key = .src(@src()), .style = &style.inline_row };
         _ = try row.open(context);
         try context.e(TextInput{ .key = .str("knots.import.new_name"), .buf = &g_new_name, .style = &style.text_input, .placeholder = "New profile name" });
@@ -159,12 +159,11 @@ fn optionsStep(context: *ui.Frame, analysis: *Analysis) !void {
 
     try widgets.subheading(context, .src(@src()), "Sections to import");
     for (analysis.sections, 0..) |*section, index| {
-        // knots has no tooltips, so the hint sits beside the title.
-        const item = try widgets.openGroup(context, ui.Key.str("knots.import.section").indexed(index), section.available);
+        const item = try widgets.openGroup(context, ui.Key.str("knots.import.section").indexed(index), section.is_available);
         const row = Rect{ .key = ui.Key.str("knots.import.section.row").indexed(index), .style = &style.inline_row };
         _ = try row.open(context);
         _ = try widgets.checkbox(context, ui.Key.str("knots.import.section.check").indexed(index), section.title, &section.is_chosen);
-        const hint = if (section.available) section.hint else "Nothing to import for this section";
+        const hint = if (section.is_available) section.hint else "Nothing to import for this section";
         try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.import.section.hint").indexed(index), .content = hint, .style = &style.hint_inline });
         try row.close(context);
         try item.close(context);
@@ -202,7 +201,7 @@ fn buttons(context: *ui.Frame) !void {
 
 /// Into the profile being edited now, or into a new one once the header's profile action has created it and switched the window to it.
 fn runImport() void {
-    if (!g_into_new) {
+    if (!g_imports_into_new) {
         applyImport();
         return;
     }
@@ -227,7 +226,7 @@ fn applyChosen() !void {
     const analysis = g_analysis orelse return;
     var chosen: std.ArrayList([]const u8) = .empty;
     for (analysis.sections) |section| {
-        if (section.available and section.is_chosen) try chosen.append(arena(), section.id);
+        if (section.is_available and section.is_chosen) try chosen.append(arena(), section.id);
     }
     const source: ?[]const u8 = if (analysis.profiles.len > 0) analysis.profiles[analysis.source_index] else null;
     const built = try importer.build(arena(), text, source, chosen.items, "Cycle Group {n}", session.profile().ptr);
@@ -250,8 +249,8 @@ fn analyzeFile(source_profile: ?[]const u8) !void {
     const text = g_file_text orelse return;
     const allocator = arena();
     var out: std.Io.Writer.Allocating = .init(allocator);
-    var jw: std.json.Stringify = .{ .writer = &out.writer };
-    try importer.analyze(&jw, allocator, text, g_file_name, source_profile);
+    var json_writer: std.json.Stringify = .{ .writer = &out.writer };
+    try importer.analyze(&json_writer, allocator, text, g_file_name, source_profile);
     const root = try std.json.parseFromSliceLeaky(std.json.Value, allocator, out.written(), .{});
     const format = stringAt(root, "format") orelse {
         g_file_status = "Unrecognized settings file.";
@@ -271,14 +270,14 @@ fn analyzeFile(source_profile: ?[]const u8) !void {
     var sections: std.ArrayList(Section) = .empty;
     if (root.object.get("sections")) |list| {
         if (list == .array) for (list.array.items) |item| {
-            const available = if (item.object.get("available")) |flag| flag == .bool and flag.bool else false;
+            const is_available = if (item.object.get("available")) |flag| flag == .bool and flag.bool else false;
             const title = stringAt(item, "title") orelse "";
             try sections.append(allocator, .{
                 .id = stringAt(item, "id") orelse continue,
                 .title = lang.text(title, title),
                 .hint = if (item.object.get("hint")) |hint| try translateValue(allocator, hint) else "",
-                .available = available,
-                .is_chosen = available,
+                .is_available = is_available,
+                .is_chosen = is_available,
             });
         };
     }

@@ -44,16 +44,16 @@ const Entry = struct {
 
 /// Read by the load threads too; set before any starts.
 var g_allocator: std.mem.Allocator = undefined;
-var g_timer: ?win32.HWND = null;
+var g_timer_hwnd: ?win32.HWND = null;
 var g_command: usize = 0;
 /// Keyed by character ID. Keys and images owned; freed in deinit.
 var g_entries: std.StringHashMapUnmanaged(Entry) = .empty;
 var g_next_serial: usize = 0;
 
-/// Each time the window opens: `timer` receives `command` with each *Loaded, and portraits that failed are tried again.
-pub fn init(allocator: std.mem.Allocator, timer: ?win32.HWND, command: usize) void {
+/// Each time the window opens: `timer_hwnd` receives `command` with each *Loaded, and portraits that failed are tried again.
+pub fn init(allocator: std.mem.Allocator, timer_hwnd: ?win32.HWND, command: usize) void {
     g_allocator = allocator;
-    g_timer = timer;
+    g_timer_hwnd = timer_hwnd;
     g_command = command;
     var it = g_entries.iterator();
     while (it.next()) |entry| {
@@ -145,15 +145,15 @@ fn addEntry(id: []const u8) !*Entry {
 }
 
 fn startLoad(id: []const u8) !void {
-    const timer = g_timer orelse return error.MissingTimerWindow;
-    const thread_id = try g_allocator.dupe(u8, id);
-    errdefer g_allocator.free(thread_id);
-    const thread = try std.Thread.spawn(.{}, loadThread, .{ timer, g_command, thread_id });
+    const timer_hwnd = g_timer_hwnd orelse return error.MissingTimerWindow;
+    const owned_id = try g_allocator.dupe(u8, id);
+    errdefer g_allocator.free(owned_id);
+    const thread = try std.Thread.spawn(.{}, loadThread, .{ timer_hwnd, g_command, owned_id });
     thread.detach();
 }
 
 /// The load's thread; takes ownership of `id`, and touches nothing of the main thread's but the allocator and the posted message.
-fn loadThread(timer: win32.HWND, command: usize, id: []const u8) void {
+fn loadThread(timer_hwnd: win32.HWND, command: usize, id: []const u8) void {
     const loaded = g_allocator.create(Loaded) catch |err| {
         slog.warn("Failed to load the portrait of character '{s}': {}", .{ id, err });
         g_allocator.free(id);
@@ -163,7 +163,7 @@ fn loadThread(timer: win32.HWND, command: usize, id: []const u8) void {
         slog.warn("Failed to load the portrait of character '{s}': {}", .{ id, err });
         break :blk null;
     } };
-    if (!win32.toBool(win32.PostMessageA(timer, win32.WM_KNOTS_COMMAND, command, @bitCast(@intFromPtr(loaded))))) {
+    if (!win32.toBool(win32.PostMessageA(timer_hwnd, win32.WM_KNOTS_COMMAND, command, @bitCast(@intFromPtr(loaded))))) {
         slog.warn("Failed to pass on the portrait of character '{s}': error {d}", .{ id, win32.GetLastError() });
         loaded.deinit();
     }

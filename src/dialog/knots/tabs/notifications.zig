@@ -21,7 +21,7 @@ fn system(context: *ui.Frame) !void {
     try bind.toggle(context, ref, "enabled", "Enable Notifications");
     // Its placement and font are edited from its text on the Appearance tab's thumbnail preview.
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
-    try bind.number(context, ref, "suppress_click_duration_ms", "Click Suppress Duration", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, ref, "suppress_click_duration_ms", "Click Suppress Duration", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "Suppresses further notifications on a thumbnail for this long after you click it.");
     try bind.number(context, ref, "notified_cycle_retention_seconds", "Recently-Notified Cycle Retention", .{ .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How long a character stays in the \"recently notified\" cycle group after its last alert.");

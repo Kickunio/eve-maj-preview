@@ -46,7 +46,7 @@ fn directory(context: *ui.Frame, chatlog: ChatlogRef, comptime field: []const u8
 fn polling(context: *ui.Frame, chatlog: ChatlogRef) !void {
     const section = try widgets.openSection(context, "Polling & Performance", "", &style.section);
     const options = try widgets.openGroup(context, .src(@src()), chatlog.get("enabled"));
-    try bind.number(context, chatlog, "pollIntervalMs", "Poll Interval", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, chatlog, "pollIntervalMs", "Poll Interval", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How often each log file is checked for new lines, before any idle backoff kicks in.");
     try bind.number(context, chatlog, "idlePollThreshold", "Idle Threshold (polls)", .{});
     try widgets.hintText(context, .src(@src()), "Consecutive empty polls of a log file before its interval starts backing off.");

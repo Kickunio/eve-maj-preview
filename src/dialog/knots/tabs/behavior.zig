@@ -124,7 +124,7 @@ fn autoMinimize(context: *ui.Frame) !void {
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
     try bind.toggle(context, ref, "exemptLastActiveOnFocusLoss", "Keep Last-Active Client Visible");
     try widgets.hintText(context, .src(@src()), "Exempts whichever client you focused most recently, even past the delay.");
-    try bind.number(context, ref, "delayMs", "Delay", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, ref, "delayMs", "Delay", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How long a client can sit unfocused before it's minimized.");
     try options.close(context);
     try bind.toggle(context, ref, "startMinimized", "Start Clients Minimized");
@@ -160,7 +160,7 @@ fn windowPosition(context: *ui.Frame) !void {
     try widgets.hintText(context, .src(@src()), "Moves a client to its saved position when its character logs in.");
     try bind.toggle(context, ref, "moveOnStartup", "Restore Saved Position on App Startup");
     try widgets.hintText(context, .src(@src()), "Moves clients already logged in when the app launches.");
-    try bind.number(context, ref, "verifyIntervalMs", "Re-check Interval", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, ref, "verifyIntervalMs", "Re-check Interval", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How often a moved client's position is re-checked; EVE can shift its own window while loading.");
     try bind.number(context, ref, "verifyCount", "Re-check Count", .{});
     try widgets.hintText(context, .src(@src()), "How many times to re-check and re-apply the position after a move. 0 disables re-checking.");

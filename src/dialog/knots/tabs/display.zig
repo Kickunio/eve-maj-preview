@@ -156,7 +156,7 @@ fn visibility(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     try bind.toggle(context, thumbnail, "hideWhenNoEveFocus", "Hide When No EVE Focus");
     try widgets.hintText(context, .src(@src()), "Hides all thumbnails while no EVE client window has focus.");
     const delay = try widgets.openGroup(context, .src(@src()), thumbnail.get("hideWhenNoEveFocus"));
-    try bind.number(context, thumbnail, "hideDebounceMs", "Hide Delay", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, thumbnail, "hideDebounceMs", "Hide Delay", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "Delay before hiding, so switching briefly doesn't flicker.");
     try delay.close(context);
     try section.close(context);

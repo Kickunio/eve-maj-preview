@@ -15,7 +15,7 @@ const slog = log.Scoped("dialog_knots");
 
 var g_allocator: std.mem.Allocator = undefined;
 /// The id of the space a running selection fills, so a reorder or removal meanwhile can't redirect it; null when none is running.
-var g_target: ?u32 = null;
+var g_target_space_id: ?u32 = null;
 /// The thumbnail windows a selection hid, to show again once it ends.
 var g_hidden: std.ArrayList(win32.HWND) = .empty;
 
@@ -23,13 +23,13 @@ pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
 }
 
-/// Starts the overlay for the space with id `space_id`; `edit` adjusts its current rectangle instead of dragging a new one.
-pub fn start(space_id: u32, edit: bool) void {
+/// Starts the overlay for the space with id `space_id`; `is_editing` adjusts its current rectangle instead of dragging a new one.
+pub fn start(space_id: u32, is_editing: bool) void {
     const painter = painter_mod.g_painter_ptr orelse return;
     const current = rect(space_id);
-    if (edit and current == null) return;
-    const hide = session.profile().ptr.display.hideThumbnailsDuringRegionSelect;
-    const edit_region: ?win32.RECT = if (edit) current else null;
+    if (is_editing and current == null) return;
+    const should_hide = session.profile().ptr.display.hideThumbnailsDuringRegionSelect;
+    const edit_region: ?win32.RECT = if (is_editing) current else null;
     const labels = region_select.Labels{};
     comptime std.debug.assert(region_select.MAX_OTHER_REGIONS >= spaces.MAX_SPACES);
     var others: [region_select.MAX_OTHER_REGIONS]win32.RECT = undefined;
@@ -40,7 +40,7 @@ pub fn start(space_id: u32, edit: bool) void {
         other_count += 1;
     }
 
-    if (hide) painter.hideVisibleThumbnails(g_allocator, &g_hidden);
+    if (should_hide) painter.hideVisibleThumbnails(g_allocator, &g_hidden);
     const cursor = monitors.cursorMonitorBounds();
     const text_color = painter.config.thumbnail.characterNameColor | 0xFF000000;
     const label_font = painter.font_cache.characterNameFont(&painter.config.thumbnail, monitors.dpiForMonitor(cursor.monitor)) catch |err| blk: {
@@ -53,7 +53,7 @@ pub fn start(space_id: u32, edit: bool) void {
         status.show(.failure, "Failed to start region selection: {}", .{err});
         return;
     };
-    g_target = space_id;
+    g_target_space_id = space_id;
     if (label_font) |font| {
         const line1 = region_select.labelText(if (edit_region != null) &labels.hint_edit else &labels.hint_new);
         painter.hint_box.show(painter.instance, font, text_color, line1, region_select.labelText(&labels.hint_confirm), cursor.bounds);
@@ -62,13 +62,13 @@ pub fn start(space_id: u32, edit: bool) void {
 
 /// Once the window has closed, so a selection still running doesn't write to the next session.
 pub fn cancel() void {
-    g_target = null;
+    g_target_space_id = null;
 }
 
 /// From the overlay once it closes.
 fn onSelected(result: region_select.Status, selected: win32.RECT) void {
-    const space_id = g_target orelse return;
-    g_target = null;
+    const space_id = g_target_space_id orelse return;
+    g_target_space_id = null;
     defer host.redraw();
     switch (result) {
         .cancelled => return,

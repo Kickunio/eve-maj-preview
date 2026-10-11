@@ -1,4 +1,4 @@
-//! Form controls bound to one setting each: they read it every frame and write it through `Ref.set`; main thread only.
+//! Form controls bound to one setting each, whose `ref` is always a session.Ref: they read it every frame and write it through `Ref.set`; main thread only.
 const std = @import("std");
 const ui = @import("ui");
 const style = @import("style.zig");
@@ -28,7 +28,7 @@ pub const NumberOptions = struct {
     /// Shown after the box, e.g. "ms".
     unit: ?[]const u8 = null,
     /// The setting is in milliseconds but shown, and typed, in seconds.
-    ms_as_seconds: bool = false,
+    shows_seconds: bool = false,
     /// Shown in an empty box: an optional setting that's unset, e.g. "auto".
     placeholder: []const u8 = "",
 };
@@ -240,13 +240,6 @@ pub fn slider(context: *ui.Frame, ref: anytype, comptime field: []const u8, labe
     try row.close(context);
 }
 
-/// An ARGB `u32` setting.
-pub fn color(context: *ui.Frame, ref: anytype, comptime field: []const u8, label: []const u8) !void {
-    const row = try widgets.openBinding(context, fieldKey(ref, field), label);
-    try colorBox(context, ref, field);
-    try row.close(context);
-}
-
 /// Just the picker, whose Reset restores the field's default; aligned, it's a bare swatch that saves RGB only, so a colour with alpha comes out opaque.
 pub fn colorBox(context: *ui.Frame, ref: anytype, comptime field: []const u8) !void {
     const is_aligned = widgets.isAligned();
@@ -388,7 +381,7 @@ fn styledNumberBox(context: *ui.Frame, ref: anytype, comptime field: []const u8,
     const F = FieldOf(@TypeOf(ref), field);
     const is_optional = @typeInfo(F) == .optional;
     const N = if (is_optional) @typeInfo(F).optional.child else F;
-    const scale: f64 = if (options.ms_as_seconds) 1000 else 1;
+    const scale: f64 = if (options.shows_seconds) 1000 else 1;
     const key = fieldKey(ref, field).indexed(2);
     const state = try textState(key);
     if (context.ui().focused(key.hash())) {

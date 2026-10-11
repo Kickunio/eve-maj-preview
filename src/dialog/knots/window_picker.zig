@@ -12,12 +12,12 @@ const slog = log.Scoped("dialog_knots");
 const PROMPT = "-- Select a running window --";
 
 /// A visible top-level window, one per class and executable.
-pub const RunningWindow = struct { class: []const u8, exe: []const u8, title: []const u8 };
+pub const RunningWindow = struct { class: []const u8, executable: []const u8, title: []const u8 };
 
 const WindowScan = struct {
     arena: std.mem.Allocator,
     windows: std.ArrayList(RunningWindow) = .empty,
-    failed: ?anyerror = null,
+    scan_error: ?anyerror = null,
 };
 
 /// One list's open picker, for the item at `index`.
@@ -61,7 +61,7 @@ pub fn select(context: *ui.Frame, picker: *const ?Picker, key: ui.Key, index: us
     labels[0] = PROMPT;
     values[0] = 0;
     for (open_picker.windows, 1..) |window, option| {
-        labels[option] = try std.fmt.allocPrint(arena, "{s} \u{2014} {s}", .{ window.title, window.exe });
+        labels[option] = try std.fmt.allocPrint(arena, "{s} \u{2014} {s}", .{ window.title, window.executable });
         values[option] = @intCast(option);
     }
     const response = try context.interact(SelectInput(u32){
@@ -81,34 +81,34 @@ pub fn select(context: *ui.Frame, picker: *const ?Picker, key: ui.Key, index: us
 fn runningWindows(arena: std.mem.Allocator) ![]const RunningWindow {
     var scan = WindowScan{ .arena = arena };
     _ = win32.EnumWindows(collectWindow, win32.ptrToLparam(&scan));
-    if (scan.failed) |err| return err;
+    if (scan.scan_error) |err| return err;
     std.sort.pdq(RunningWindow, scan.windows.items, {}, struct {
         fn lessThan(_: void, a: RunningWindow, b: RunningWindow) bool {
-            return std.mem.lessThan(u8, a.exe, b.exe);
+            return std.mem.lessThan(u8, a.executable, b.executable);
         }
     }.lessThan);
     return scan.windows.items;
 }
 
-fn collectWindow(window: win32.HWND, lParam: win32.LPARAM) callconv(.c) win32.BOOL {
+fn collectWindow(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win32.BOOL {
     const scan: *WindowScan = win32.lparamToPtr(WindowScan, lParam);
-    if (!win32.toBool(win32.IsWindowVisible(window))) return win32.TRUE;
+    if (!win32.toBool(win32.IsWindowVisible(hwnd))) return win32.TRUE;
 
     var title_buf: [win32.WINDOW_TITLE_MAX_UNITS * 3]u8 = undefined;
     // UTF-8, since the dialog's text, picked labels included, must be.
-    const title = win32.getWindowTitleUtf8(window, &title_buf) orelse return win32.TRUE;
+    const title = win32.getWindowTitleUtf8(hwnd, &title_buf) orelse return win32.TRUE;
     var class_buf: [64:0]u8 = undefined;
-    const class = win32.getClassNameBuf(window, &class_buf) orelse return win32.TRUE;
-    var exe_buf: [260:0]u8 = undefined;
-    const exe = win32.windowExeName(window, &exe_buf) orelse return win32.TRUE;
-    if (exe.len == 0) return win32.TRUE;
+    const class = win32.getClassNameBuf(hwnd, &class_buf) orelse return win32.TRUE;
+    var executable_buf: [260:0]u8 = undefined;
+    const executable = win32.windowExeName(hwnd, &executable_buf) orelse return win32.TRUE;
+    if (executable.len == 0) return win32.TRUE;
 
     for (scan.windows.items) |existing| {
-        if (std.mem.eql(u8, existing.class, class) and std.ascii.eqlIgnoreCase(existing.exe, exe)) return win32.TRUE;
+        if (std.mem.eql(u8, existing.class, class) and std.ascii.eqlIgnoreCase(existing.executable, executable)) return win32.TRUE;
     }
-    const entry = RunningWindow{
+    const entry: RunningWindow = .{
         .class = scan.arena.dupe(u8, class) catch |err| return stopScan(scan, err),
-        .exe = scan.arena.dupe(u8, exe) catch |err| return stopScan(scan, err),
+        .executable = scan.arena.dupe(u8, executable) catch |err| return stopScan(scan, err),
         .title = scan.arena.dupe(u8, title) catch |err| return stopScan(scan, err),
     };
     scan.windows.append(scan.arena, entry) catch |err| return stopScan(scan, err);
@@ -116,6 +116,6 @@ fn collectWindow(window: win32.HWND, lParam: win32.LPARAM) callconv(.c) win32.BO
 }
 
 fn stopScan(scan: *WindowScan, err: anyerror) win32.BOOL {
-    scan.failed = err;
+    scan.scan_error = err;
     return win32.FALSE;
 }

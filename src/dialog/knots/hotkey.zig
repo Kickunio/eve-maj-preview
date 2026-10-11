@@ -29,6 +29,8 @@ const MODIFIER_ORDER = [_]struct { flag: u32, name: []const u8 }{
 
 const CLICK_TO_BIND = "Click to bind";
 const RECORDING_PROMPT = "Press keys...";
+/// Keycaps' keys start here, clear of the field's own indexed keys.
+const KEYCAP_KEY_BASE = 100;
 
 /// Bindings that may share a combo with their own kind, cycling through each other in order.
 const HolderKind = enum { other, character, group_forward, group_backward };
@@ -75,25 +77,25 @@ pub fn reset() void {
 /// From the window procedure while a field records; returns whether it consumed the message.
 pub fn onWindowMessage(msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPARAM) bool {
     _ = lParam;
-    const recording = &(g_recording orelse return false);
+    const recording = if (g_recording) |*active| active else return false;
     switch (msg) {
         win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN => {
-            const code: u32 = @truncate(wParam);
-            if (code == win32.VK_ESCAPE or recording.captured != null or modifierFlag(code) != null) return true;
+            const virtual_key: u32 = @truncate(wParam);
+            if (virtual_key == win32.VK_ESCAPE or recording.captured != null or modifierFlag(virtual_key) != null) return true;
             // Modifier state at keyup only reflects modifiers still held, so the main key is taken here.
-            if (vk.keyName(code) != null) capture(code, vk.currentModifiers());
+            if (vk.keyName(virtual_key) != null) capture(virtual_key, vk.currentModifiers());
             return true;
         },
         win32.WM_KEYUP, win32.WM_SYSKEYUP => {
-            const code: u32 = @truncate(wParam);
-            if (code == win32.VK_ESCAPE) {
+            const virtual_key: u32 = @truncate(wParam);
+            if (virtual_key == win32.VK_ESCAPE) {
                 stopRecording();
                 redraw();
                 return true;
             }
             // A modifier released alone is the key itself; the others still held are its modifiers.
             if (recording.captured == null) {
-                if (modifierFlag(code)) |own| capture(if (code == vk.VK_LWIN + 1) vk.VK_LWIN else code, vk.currentModifiers() & ~own);
+                if (modifierFlag(virtual_key)) |own| capture(if (virtual_key == vk.VK_RWIN) vk.VK_LWIN else virtual_key, vk.currentModifiers() & ~own);
             }
             return true;
         },
@@ -138,7 +140,7 @@ pub fn field(context: *ui.Frame, ref: anytype, comptime field_name: []const u8) 
     const width = widgets.hotkeyWidth();
     const row = Rect{ .key = key.indexed(1), .style = if (width != null) &style.inline_row_fit else &style.inline_row };
     _ = try row.open(context);
-    if (editing(id)) |edit| {
+    if (manualEditFor(id)) |edit| {
         try manualBox(context, edit, ref, field_name, key, width);
     } else {
         const is_recording = isRecordingField(id);
@@ -160,11 +162,11 @@ pub fn field(context: *ui.Frame, ref: anytype, comptime field_name: []const u8) 
     }
     if ((try context.interact(Button{ .key = key.indexed(3), .label = "\u{00D7}", .style = &style.icon_button_danger_text })).clicked) {
         if (isRecordingField(id)) stopRecording();
-        if (editing(id) != null) endManual();
+        if (manualEditFor(id) != null) endManual();
         ref.set(field_name, KeyList.empty);
     }
     if (session.global().get("advancedMode")) {
-        const is_editing = editing(id) != null;
+        const is_editing = manualEditFor(id) != null;
         if (try widgets.glyphButton(context, key.indexed(4), .pencil, "", if (is_editing) &style.hotkey_edit_on else &style.icon_button, false)) {
             if (is_editing) commitManual(ref, field_name) else try startManual(id, current);
         }
@@ -256,7 +258,7 @@ fn holdsKeys(comptime T: type) bool {
 
 /// A bare Win press, which Windows hands to the Start Menu before the window sees it, so the keyboard hook reports it.
 fn onWinKey(modifiers: u32) void {
-    const recording = &(g_recording orelse return);
+    const recording = if (g_recording) |*active| active else return;
     if (recording.captured == null) capture(vk.VK_LWIN, modifiers);
 }
 
@@ -265,19 +267,19 @@ fn keycaps(context: *ui.Frame, key: ui.Key, keys: KeyList) !void {
     var part_index: usize = 0;
     for (keys.slice(), 0..) |combo, combo_index| {
         if (combo_index > 0) {
-            try context.e(Text{ .selectable = false, .key = key.indexed(100 + part_index), .content = ",", .style = &style.keycap_separator });
+            try context.e(Text{ .selectable = false, .key = key.indexed(KEYCAP_KEY_BASE + part_index), .content = ",", .style = &style.keycap_separator });
             part_index += 1;
         }
         const modifiers = vk.extractModifiers(combo);
         for (MODIFIER_ORDER) |modifier| {
             if (modifiers & modifier.flag == 0) continue;
-            try cap(context, key.indexed(100 + part_index), modifier.name, true);
-            try context.e(Text{ .selectable = false, .key = key.indexed(100 + part_index + 1), .content = "+", .style = &style.keycap_plus });
+            try cap(context, key.indexed(KEYCAP_KEY_BASE + part_index), modifier.name, true);
+            try context.e(Text{ .selectable = false, .key = key.indexed(KEYCAP_KEY_BASE + part_index + 1), .content = "+", .style = &style.keycap_plus });
             part_index += 2;
         }
-        const code = vk.extractVk(combo);
-        const name = vk.keyName(code) orelse try std.fmt.allocPrint(arena, "VK{X}", .{code});
-        try cap(context, key.indexed(100 + part_index), name, false);
+        const virtual_key = vk.extractVk(combo);
+        const name = vk.keyName(virtual_key) orelse try std.fmt.allocPrint(arena, "VK{X}", .{virtual_key});
+        try cap(context, key.indexed(KEYCAP_KEY_BASE + part_index), name, false);
         part_index += 1;
     }
 }
@@ -315,8 +317,8 @@ fn isRecordingField(id: u64) bool {
 }
 
 /// The manual edit open on field `id`, if any.
-fn editing(id: u64) ?*ManualEdit {
-    const edit = &(g_manual orelse return null);
+fn manualEditFor(id: u64) ?*ManualEdit {
+    const edit = if (g_manual) |*open| open else return null;
     return if (edit.id == id) edit else null;
 }
 
@@ -367,13 +369,13 @@ fn stopRecording() void {
     if (g_recording == null) return;
     g_recording = null;
     const manager = hotkeys.g_hotkey_manager_ptr orelse return;
-    const timer = main.g_timer_hwnd orelse return;
-    manager.dialogResumeHotkeys(timer);
+    const timer_hwnd = main.g_timer_hwnd orelse return;
+    manager.dialogResumeHotkeys(timer_hwnd);
 }
 
-fn capture(code: u32, modifiers: u32) void {
-    const recording = &(g_recording orelse return);
-    recording.captured = vk.combineKey(code, modifiers);
+fn capture(virtual_key: u32, modifiers: u32) void {
+    const recording = if (g_recording) |*active| active else return;
+    recording.captured = vk.combineKey(virtual_key, modifiers);
     redraw();
 }
 
@@ -381,12 +383,12 @@ fn redraw() void {
     if (g_on_capture) |on_capture| on_capture();
 }
 
-fn modifierFlag(code: u32) ?u32 {
-    return switch (code) {
+fn modifierFlag(virtual_key: u32) ?u32 {
+    return switch (virtual_key) {
         vk.VK_CONTROL => vk.MOD_CONTROL,
         vk.VK_MENU => vk.MOD_ALT,
         vk.VK_SHIFT => vk.MOD_SHIFT,
-        vk.VK_LWIN, vk.VK_LWIN + 1 => vk.MOD_WIN,
+        vk.VK_LWIN, vk.VK_RWIN => vk.MOD_WIN,
         else => null,
     };
 }

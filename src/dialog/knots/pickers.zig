@@ -31,43 +31,43 @@ pub const Picked = struct {
 
 var g_allocator: std.mem.Allocator = undefined;
 /// Set while a picker is open, so a second click doesn't stack another. Main thread sets it; the picker's thread clears it.
-var g_busy: std.atomic.Value(bool) = .init(false);
+var g_is_busy: std.atomic.Value(bool) = .init(false);
 
 pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
 }
 
-/// `timer` receives `command` with the result, unless the user cancels.
-pub fn browse(target: Target, index: usize, title: []const u8, owner: ?win32.HWND, timer: win32.HWND, command: usize) void {
-    if (g_busy.swap(true, .acq_rel)) return;
-    const thread = std.Thread.spawn(.{}, pickerThread, .{ target, index, title, owner, timer, command }) catch |err| {
-        slog.err("Failed to open the folder picker: {}", .{err});
-        g_busy.store(false, .release);
+/// `timer_hwnd` receives `command` with the result, unless the user cancels.
+pub fn browse(target: Target, index: usize, title: []const u8, owner: ?win32.HWND, timer_hwnd: win32.HWND, command: usize) void {
+    if (g_is_busy.swap(true, .acq_rel)) return;
+    const thread = std.Thread.spawn(.{}, pickerThread, .{ target, index, title, owner, timer_hwnd, command }) catch |err| {
+        slog.err("Failed to open the picker: {}", .{err});
+        g_is_busy.store(false, .release);
         return;
     };
     thread.detach();
 }
 
 /// The picker's thread; touches nothing of the main thread's but the allocator and the posted message.
-fn pickerThread(target: Target, index: usize, title: []const u8, owner: ?win32.HWND, timer: win32.HWND, command: usize) void {
-    defer g_busy.store(false, .release);
+fn pickerThread(target: Target, index: usize, title: []const u8, owner: ?win32.HWND, timer_hwnd: win32.HWND, command: usize) void {
+    defer g_is_busy.store(false, .release);
     const shown = switch (target) {
         .chatlog_dir, .gamelog_dir => win32.showFolderPicker(g_allocator, title, owner),
         .sound_file => win32.showFilePicker(g_allocator, title, "Audio Files (*.wav, *.mp3)", "*.wav;*.mp3", owner),
         .import_file => win32.showFilePicker(g_allocator, title, "Settings Files (*.json, *.ini)", "*.json;*.ini", owner),
     };
     const path = shown catch |err| {
-        slog.err("Failed to open the folder picker: {}", .{err});
+        slog.err("Failed to open the picker: {}", .{err});
         return;
     } orelse return;
     const picked = g_allocator.create(Picked) catch |err| {
-        slog.err("Failed to pass on the picked folder: {}", .{err});
+        slog.err("Failed to pass on the picked path: {}", .{err});
         g_allocator.free(path);
         return;
     };
     picked.* = .{ .target = target, .index = index, .path = path };
-    if (!win32.toBool(win32.PostMessageA(timer, win32.WM_KNOTS_COMMAND, command, @bitCast(@intFromPtr(picked))))) {
-        slog.err("Failed to pass on the picked folder: error {d}", .{win32.GetLastError()});
+    if (!win32.toBool(win32.PostMessageA(timer_hwnd, win32.WM_KNOTS_COMMAND, command, @bitCast(@intFromPtr(picked))))) {
+        slog.err("Failed to pass on the picked path: error {d}", .{win32.GetLastError()});
         picked.deinit();
     }
 }

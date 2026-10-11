@@ -654,6 +654,8 @@ pub const MF_SEPARATOR = 0x00000800;
 pub const MF_POPUP = 0x00000010;
 pub const MF_CHECKED = 0x00000008;
 pub const MF_GRAYED = 0x00000001;
+/// IDI_ICON1 in app.rc: the icon built into the exe.
+pub const APP_ICON_ID = 101;
 pub const IDM_EXIT = 1001;
 pub const IDM_UPDATE = 1002;
 pub const IDM_TOGGLE_DRAGGING = 1003;

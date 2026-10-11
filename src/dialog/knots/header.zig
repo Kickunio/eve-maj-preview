@@ -25,6 +25,8 @@ const Color = ui.Color;
 const slog = log.Scoped("dialog_knots");
 
 const COPY_SUFFIX = " - Copy";
+/// What a profile name may hold, for the prompts that ask for one.
+pub const NAME_RULES = std.fmt.comptimePrint("letters, digits, spaces, '-' and '_', up to {d} characters", .{profile_files.MAX_NAME_LENGTH});
 /// A new profile's accent colour, Config's own default.
 pub const DEFAULT_ACCENT = blk: {
     const index = std.meta.fieldIndex(config.Config, "accentColor").?;
@@ -223,7 +225,7 @@ fn namePrompt(context: *ui.Frame) !void {
     try context.e(TextInput{ .key = .src(@src()), .buf = &g_name_text, .placeholder = "Profile name", .style = &style.text_input });
     _ = try context.interact(ColorPicker{ .key = .src(@src()), .value = &g_name_color, .style = &style.color_picker_swatch, .parts = .{ .swatch = &style.color_swatch_fill, .popup = &style.color_popup }, .show_hex = false, .show_alpha = false });
     try row.close(context);
-    try widgets.hintText(context, .src(@src()), "Letters, digits, spaces, '-' and '_', up to 16 characters. The colour tints this window while the profile is edited.");
+    try widgets.hintText(context, .src(@src()), "Use " ++ NAME_RULES ++ ". The colour tints this window while the profile is edited.");
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
     if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_is_name_open = false;
@@ -235,8 +237,8 @@ fn namePrompt(context: *ui.Frame) !void {
 fn submitName(prompt: NamePrompt) void {
     const typed = std.mem.trim(u8, g_name_text.items, " ");
     const file_name = config.profileFileName(g_allocator, typed) catch |err| {
-        slog.warn("Failed to name the profile '{s}': {}", .{ typed, err });
-        status.show(.failure, "'{s}' isn't a valid profile name: use letters, digits, spaces, '-' and '_', up to 16 characters", .{typed});
+        slog.info("Rejected profile name '{s}': {}", .{ typed, err });
+        status.show(.failure, "'{s}' isn't a valid profile name: use " ++ NAME_RULES, .{typed});
         return;
     };
     defer g_allocator.free(file_name);
@@ -316,9 +318,9 @@ fn confirmPrompt(context: *ui.Frame) !void {
 }
 
 fn modalButton(context: *ui.Frame, key: ui.Key, label: []const u8, button_style: *const ui.Style) !bool {
-    const clicked = (try context.interact(Button{ .key = key, .label = label, .style = button_style })).clicked;
-    if (clicked) context.requestRedraw();
-    return clicked;
+    const is_clicked = (try context.interact(Button{ .key = key, .label = label, .style = button_style })).clicked;
+    if (is_clicked) context.requestRedraw();
+    return is_clicked;
 }
 
 fn clearSwitchTarget() void {

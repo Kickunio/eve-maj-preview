@@ -15,6 +15,7 @@ pub const VK_CONTROL: u32 = win32.VK_CONTROL;
 pub const VK_FOCUS_GRANT: u32 = 0xE8;
 pub const VK_MENU: u32 = win32.VK_MENU;
 pub const VK_LWIN: u32 = win32.VK_LWIN;
+pub const VK_RWIN: u32 = win32.VK_RWIN;
 pub const VK_SPACE: u32 = 0x20;
 pub const VK_PRIOR: u32 = 0x21;
 pub const VK_NEXT: u32 = 0x22;

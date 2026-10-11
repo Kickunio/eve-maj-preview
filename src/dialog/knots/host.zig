@@ -3,6 +3,7 @@ const std = @import("std");
 const knots = @import("knots");
 const ui = @import("ui");
 const win32 = @import("../../platform/win32.zig");
+const gdi_overlay = @import("../../platform/gdi_overlay.zig");
 const main = @import("../../main.zig");
 const config = @import("../../config.zig");
 const session = @import("session.zig");
@@ -41,7 +42,6 @@ const WINDOW_TITLE = "EVE-Maj Preview Configuration";
 const DESIGN_WIDTH = 820;
 const DESIGN_HEIGHT = 900;
 const DEFAULT_POSITION: win32.POINT = .{ .x = 20, .y = 20 };
-const APP_ICON_ID = 101;
 
 /// Posted to the timer window as wParam of WM_KNOTS_COMMAND, so none runs inside a tray handler or a frame.
 pub const Command = enum(usize) {
@@ -71,9 +71,9 @@ var g_hwnd: ?win32.HWND = null;
 /// knots' window procedure, which the subclass forwards to.
 var g_knots_proc: isize = 0;
 /// knots' loop swallows WM_QUIT, so an exit while the window is open is posted once it has closed.
-var g_quit_after_close: bool = false;
+var g_should_quit_after_close: bool = false;
 /// Closes without asking about unsaved changes.
-var g_force_close: bool = false;
+var g_should_force_close: bool = false;
 var g_is_present_mode_chosen: bool = false;
 /// Where placeWindowHook puts the window knots creates, while App.init runs.
 var g_spawn_position: ?win32.POINT = null;
@@ -116,17 +116,17 @@ pub fn requestClose() void {
 /// Returns whether the exit waits for the window to close, which then posts the quit itself.
 pub fn closeForExit() bool {
     if (g_state != .open) return false;
-    g_quit_after_close = true;
+    g_should_quit_after_close = true;
     closeWithoutAsking();
     return true;
 }
 
 pub fn postCommand(command: Command) void {
-    const timer = main.g_timer_hwnd orelse {
+    const timer_hwnd = main.g_timer_hwnd orelse {
         slog.err("Failed to run a knots configuration window command: the timer window is missing", .{});
         return;
     };
-    if (!win32.toBool(win32.PostMessageA(timer, win32.WM_KNOTS_COMMAND, @backingInt(command), 0))) {
+    if (!win32.toBool(win32.PostMessageA(timer_hwnd, win32.WM_KNOTS_COMMAND, @backingInt(command), 0))) {
         slog.err("Failed to run a knots configuration window command: error {d}", .{win32.GetLastError()});
     }
 }
@@ -160,20 +160,20 @@ pub fn setAlwaysOnTop(is_enabled: bool) void {
 
 /// The picker owns its own modal loop on another thread; the result arrives as a `picked` command.
 pub fn browseFolder(target: pickers.Target, title: []const u8) void {
-    const timer = main.g_timer_hwnd orelse {
+    const timer_hwnd = main.g_timer_hwnd orelse {
         slog.err("Failed to open the folder picker: the timer window is missing", .{});
         return;
     };
-    pickers.browse(target, 0, title, g_hwnd, timer, @backingInt(Command.picked));
+    pickers.browse(target, 0, title, g_hwnd, timer_hwnd, @backingInt(Command.picked));
 }
 
 /// A settings file for the Import dialog, read once the picker closes.
 pub fn browseImportFile() void {
-    const timer = main.g_timer_hwnd orelse {
+    const timer_hwnd = main.g_timer_hwnd orelse {
         slog.err("Failed to open the import file picker: the timer window is missing", .{});
         return;
     };
-    pickers.browse(.import_file, 0, "Select Settings File", g_hwnd, timer, @backingInt(Command.picked));
+    pickers.browse(.import_file, 0, "Select Settings File", g_hwnd, timer_hwnd, @backingInt(Command.picked));
 }
 
 /// The header's name prompt names the restored profile; `backup` is copied.
@@ -184,8 +184,8 @@ pub fn restoreBackup(backup: []const u8, display_name: []const u8) void {
 /// `name` as typed; the profile is created between frames, then the import applied to it.
 pub fn importIntoNewProfile(name: []const u8, accent: u32) void {
     const file_name = config.profileFileName(g_allocator, name) catch |err| {
-        slog.warn("Failed to name the imported profile '{s}': {}", .{ name, err });
-        status.show(.failure, "'{s}' isn't a valid profile name: use letters, digits, spaces, '-' and '_', up to 16 characters", .{name});
+        slog.info("Rejected imported profile name '{s}': {}", .{ name, err });
+        status.show(.failure, "'{s}' isn't a valid profile name: use " ++ header.NAME_RULES, .{name});
         return;
     };
     defer g_allocator.free(file_name);
@@ -194,20 +194,20 @@ pub fn importIntoNewProfile(name: []const u8, accent: u32) void {
 
 /// A notification type's custom sound, set once the picker closes.
 pub fn browseSoundFile(type_index: usize) void {
-    const timer = main.g_timer_hwnd orelse {
+    const timer_hwnd = main.g_timer_hwnd orelse {
         slog.err("Failed to open the sound file picker: the timer window is missing", .{});
         return;
     };
-    pickers.browse(.sound_file, type_index, "Select Sound File", g_hwnd, timer, @backingInt(Command.picked));
+    pickers.browse(.sound_file, type_index, "Select Sound File", g_hwnd, timer_hwnd, @backingInt(Command.picked));
 }
 
 /// Starts fetching Jita ore prices; returns false if a fetch is already running or couldn't start.
 pub fn fetchPrices() bool {
-    const timer = main.g_timer_hwnd orelse {
+    const timer_hwnd = main.g_timer_hwnd orelse {
         slog.err("Failed to fetch ore prices: the timer window is missing", .{});
         return false;
     };
-    return prices.fetch(timer, @backingInt(Command.prices_fetched));
+    return prices.fetch(timer_hwnd, @backingInt(Command.prices_fetched));
 }
 
 /// Draws a frame soon, for a change made outside one, e.g. a region selection finishing.
@@ -333,8 +333,8 @@ fn removePlacement() void {
 }
 
 /// Places the first top-level window created while installed, which is knots' own, then stands aside.
-fn placeWindowHook(code: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
-    if (code == win32.HCBT_CREATEWND) {
+fn placeWindowHook(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
+    if (nCode == win32.HCBT_CREATEWND) {
         if (g_spawn_position) |position| {
             const create: *win32.CBT_CREATEWND = win32.lparamToPtr(win32.CBT_CREATEWND, lParam);
             if (create.lpcs.hwndParent == null) {
@@ -344,7 +344,7 @@ fn placeWindowHook(code: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) call
             }
         }
     }
-    return win32.CallNextHookEx(g_spawn_hook, code, wParam, lParam);
+    return win32.CallNextHookEx(g_spawn_hook, nCode, wParam, lParam);
 }
 
 fn frame(view: *knots.View, context: *ui.Frame) !void {
@@ -371,7 +371,7 @@ fn windowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: w
     // A hotkey field recording takes the keys and buttons it binds before knots sees them.
     if (hotkey.onWindowMessage(msg, wParam, lParam)) return 0;
     switch (msg) {
-        win32.WM_CLOSE => if (!g_force_close and session.isDirty()) {
+        win32.WM_CLOSE => if (!g_should_force_close and session.isDirty()) {
             form.confirmClose();
             requestFrame();
             return 0;
@@ -393,7 +393,7 @@ fn applyPrices(lParam: win32.LPARAM) void {
     defer fetched.deinit();
     // The window may have closed while the fetch ran.
     if (g_state != .open) return;
-    if (fetched.failed) {
+    if (fetched.has_failed) {
         status.show(.failure, "Failed to fetch prices from ESI.", .{});
         return;
     }
@@ -446,7 +446,7 @@ fn discard() bool {
 
 fn closeWithoutAsking() void {
     const window = g_hwnd orelse return;
-    g_force_close = true;
+    g_should_force_close = true;
     _ = win32.PostMessageA(window, win32.WM_CLOSE, 0, 0);
 }
 
@@ -454,9 +454,9 @@ fn onClosed() void {
     slog.info("Knots configuration window closed", .{});
     g_hwnd = null;
     g_state = .closed;
-    g_force_close = false;
-    if (g_quit_after_close) {
-        g_quit_after_close = false;
+    g_should_force_close = false;
+    if (g_should_quit_after_close) {
+        g_should_quit_after_close = false;
         win32.PostQuitMessage(0);
     }
 }
@@ -477,7 +477,7 @@ fn setIcon(window: win32.HWND) void {
         slog.warn("Failed to load the app icon for the configuration window: error {d}", .{win32.GetLastError()});
         return;
     };
-    const icon = win32.LoadIconA(instance, @ptrFromInt(APP_ICON_ID)) orelse {
+    const icon = win32.LoadIconA(instance, @ptrFromInt(win32.APP_ICON_ID)) orelse {
         slog.warn("Failed to load the app icon for the configuration window", .{});
         return;
     };
@@ -488,9 +488,9 @@ fn setIcon(window: win32.HWND) void {
 /// Colours the title bar like the header under it, so the two read as one bar.
 fn styleTitleBar(window: win32.HWND) void {
     setWindowAttribute(window, win32.DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
-    setWindowAttribute(window, win32.DWMWA_CAPTION_COLOR, colorRef(style.CHROME));
-    setWindowAttribute(window, win32.DWMWA_TEXT_COLOR, colorRef(style.MUTED));
-    setWindowAttribute(window, win32.DWMWA_BORDER_COLOR, colorRef(style.BORDER));
+    setWindowAttribute(window, win32.DWMWA_CAPTION_COLOR, toDwmColor(style.CHROME));
+    setWindowAttribute(window, win32.DWMWA_TEXT_COLOR, toDwmColor(style.MUTED));
+    setWindowAttribute(window, win32.DWMWA_BORDER_COLOR, toDwmColor(style.BORDER));
 }
 
 /// Every attribute set here is a DWORD-sized BOOL or COLORREF.
@@ -500,10 +500,9 @@ fn setWindowAttribute(window: win32.HWND, attribute: win32.DWORD, value: win32.D
     if (result < 0) slog.debug("Failed to set window attribute {d}: HRESULT 0x{x}", .{ attribute, @as(u32, @bitCast(result)) });
 }
 
-/// DWM's COLORREF: 0x00BBGGRR.
-fn colorRef(color: ui.Color) win32.DWORD {
-    const argb = widgets.argbFromColor(color);
-    return ((argb & 0xff) << 16) | (argb & 0xff00) | ((argb >> 16) & 0xff);
+/// DWM takes a COLORREF, 0x00BBGGRR.
+fn toDwmColor(color: ui.Color) win32.DWORD {
+    return gdi_overlay.toColorRef(widgets.argbFromColor(color));
 }
 
 fn savePosition(window: win32.HWND) void {

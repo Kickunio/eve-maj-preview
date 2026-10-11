@@ -68,7 +68,7 @@ fn logging(context: *ui.Frame) !void {
 
 fn scanning(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Scanning", "How often to check for new EVE windows.", &style.section);
-    try bind.number(context, session.profile().child("timer"), "scanIntervalMs", "Scan Interval", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, session.profile().child("timer"), "scanIntervalMs", "Scan Interval", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "Lower values pick up new or closed clients faster, at the cost of slightly more CPU usage.");
     try section.close(context);
 }
@@ -180,8 +180,8 @@ fn filterDetail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
 fn picker(context: *ui.Frame, profile: ProfileRef, filter: FilterRef) !void {
     const chosen = try window_picker.select(context, &g_picker, .str("knots.filter.picker"), filter.index) orelse return;
     filter.setStrings("class_names", &.{chosen.class});
-    filter.setStrings("executable_names", &.{chosen.exe});
-    const friendly = if (std.ascii.endsWithIgnoreCase(chosen.exe, ".exe")) chosen.exe[0 .. chosen.exe.len - ".exe".len] else chosen.exe;
+    filter.setStrings("executable_names", &.{chosen.executable});
+    const friendly = if (std.ascii.endsWithIgnoreCase(chosen.executable, ".exe")) chosen.executable[0 .. chosen.executable.len - ".exe".len] else chosen.executable;
     filter.set("name", friendly);
     addCharacterIfMissing(profile, friendly);
     window_picker.close(&g_picker);

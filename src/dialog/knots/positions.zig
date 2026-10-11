@@ -40,12 +40,12 @@ pub fn clear(name: []const u8) !void {
 }
 
 fn liveWindow(character_name: []const u8) !LiveWindow {
-    const scout = scout_mod.g_scout_ptr orelse return error.CharacterIsNotOpen;
-    const window = scout.getHwndByName(character_name) orelse return error.CharacterIsNotOpen;
+    const scout = scout_mod.g_scout_ptr orelse return error.MissingCharacterWindow;
+    const hwnd = scout.getHwndByName(character_name) orelse return error.MissingCharacterWindow;
     // A minimized window sits at the off-screen parking spot, not a real position.
-    if (win32.isWindowIconic(window)) return error.CharacterWindowIsMinimized;
+    if (win32.isWindowIconic(hwnd)) return error.CharacterWindowIsMinimized;
     var rect: win32.RECT = undefined;
-    if (!win32.toBool(win32.GetWindowRect(window, &rect))) return error.WindowPositionUnavailable;
+    if (!win32.toBool(win32.GetWindowRect(hwnd, &rect))) return error.GetWindowRectFailed;
     return .{ .position = .{ .x = rect.left, .y = rect.top }, .size = .{ .width = win32.rectWidth(rect), .height = win32.rectHeight(rect) } };
 }
 

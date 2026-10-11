@@ -188,7 +188,7 @@ fn appHotkeys(context: *ui.Frame) !void {
 /// Picking a window fills in its executable name.
 fn picker(context: *ui.Frame, entry: session.Ref(global_mod.AppHotkeyConfig)) !void {
     const chosen = try window_picker.select(context, &g_picker, .str("knots.hotkeys.app.picker"), entry.index) orelse return;
-    entry.set("executableName", chosen.exe);
+    entry.set("executableName", chosen.executable);
     window_picker.close(&g_picker);
 }
 

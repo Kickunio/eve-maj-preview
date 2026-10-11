@@ -157,9 +157,9 @@ fn typeDetail(context: *ui.Frame, notification_type: NotificationType) !void {
 
     const rest = try widgets.openGroup(context, .src(@src()), is_enabled);
     const timing = try widgets.openFieldGroup(context, .str("knots.events.timing"), "Timing");
-    try bind.number(context, ref, "duration_ms", "Duration", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, ref, "duration_ms", "Duration", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How long the alert stays on screen; 0 keeps it up until dismissed.");
-    try bind.number(context, ref, "throttle_ms", "Limit", .{ .ms_as_seconds = true, .unit = "s" });
+    try bind.number(context, ref, "throttle_ms", "Limit", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "Drops repeats of this alert that happen within this many seconds of the last one shown.");
     try timing.close(context);
     try widgets.separator(context, .str("knots.events.separator.timing"));

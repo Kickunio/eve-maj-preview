@@ -9,7 +9,7 @@ const EN_JSON = @embedFile("../../lang/en.json");
 var g_allocator: std.mem.Allocator = undefined;
 /// Parsed on first use. Owned; freed in deinit.
 var g_strings: ?std.json.Parsed(std.json.Value) = null;
-var g_failed: bool = false;
+var g_has_failed: bool = false;
 
 pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
@@ -19,7 +19,7 @@ pub fn init(allocator: std.mem.Allocator) void {
 pub fn deinit() void {
     if (g_strings) |*strings| strings.deinit();
     g_strings = null;
-    g_failed = false;
+    g_has_failed = false;
 }
 
 /// The string for `key`, or `fallback` when it's missing. Borrows from the parsed file until deinit.
@@ -39,10 +39,10 @@ pub fn textFmt(comptime fmt: []const u8, args: anytype, fallback: []const u8) []
 
 fn load() ?std.json.Value {
     if (g_strings) |strings| return strings.value;
-    if (g_failed) return null;
+    if (g_has_failed) return null;
     g_strings = std.json.parseFromSlice(std.json.Value, g_allocator, EN_JSON, .{}) catch |err| {
         slog.warn("Failed to read the English strings: {}", .{err});
-        g_failed = true;
+        g_has_failed = true;
         return null;
     };
     return g_strings.?.value;

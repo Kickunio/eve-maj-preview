@@ -179,6 +179,9 @@ pub const RosterAction = enum { none, add, add_open_clients };
 /// What useDetailRows replaced.
 pub const RowSettings = struct { is_aligned: bool, label_style: *const ui.Style };
 
+/// Shown faded rather than hidden, so a preview's text that's turned off can still be clicked to turn it back on.
+pub const TextOptions = struct { is_grown: bool = false, is_shown: bool = true };
+
 /// What an optional colour row changed to.
 pub const ColorChange = union(enum) { cleared, set: u32 };
 
@@ -251,6 +254,7 @@ var g_label_style: *const ui.Style = &style.label;
 var g_is_in_field_group: bool = false;
 /// Aligned rows drawn so far in the open section; every one after the first gets a divider above it.
 var g_section_row_count: usize = 0;
+/// This frame's sections with field hints.
 var g_hinted: SectionList = .{};
 /// Last frame's sections with field hints, which get a button to show them.
 var g_hinted_before: SectionList = .{};
@@ -258,8 +262,7 @@ var g_hinted_before: SectionList = .{};
 var g_hints_shown: SectionList = .{};
 var g_open_section: ?u64 = null;
 var g_confirm_key: ?u64 = null;
-/// The row being dragged to a new place in its list.
-/// `grab_y` is how far below the row's top it was picked up, and `row_height` its height then, for drawing it lifted.
+/// The row being dragged to a new place in its list; `grab_y` and `row_height` are where it was picked up and its height, for drawing it lifted.
 var g_reorder: ?struct { list: u64, from: usize, start_y: f64, grab_y: f32, row_height: f32, insert: usize, has_moved: bool = false } = null;
 var g_confirm_until_ms: i64 = 0;
 
@@ -446,9 +449,9 @@ pub fn addOpenClientsButton(context: *ui.Frame, key: ui.Key, button_style: *cons
     search.captureText(label);
     const tip = Tooltip{ .key = key, .content = label };
     _ = try tip.open(context);
-    const clicked = try glyphButton(context, key.indexed(3), .refresh, "", button_style, false);
+    const is_clicked = try glyphButton(context, key.indexed(3), .refresh, "", button_style, false);
     try tip.close(context);
-    return clicked;
+    return is_clicked;
 }
 
 /// A master list's row, showing the hand cursor while hovered; the caller closes it.
@@ -515,7 +518,7 @@ pub fn openScrollPane(context: *ui.Frame, key: ui.Key, styles: style.ScrollPane)
 pub fn segmented(context: *ui.Frame, key: ui.Key, options: []const []const u8, selected: usize) !?usize {
     const group = Rect{ .key = key, .style = &style.segmented };
     _ = try group.open(context);
-    var clicked: ?usize = null;
+    var clicked_index: ?usize = null;
     for (options, 0..) |option, index| {
         search.captureText(option);
         const is_selected = index == selected;
@@ -524,10 +527,10 @@ pub fn segmented(context: *ui.Frame, key: ui.Key, options: []const []const u8, s
             .label = option,
             .style = if (is_selected) &style.segment_selected else &style.segment,
             .parts = .{ .label = if (is_selected) &style.segment_label_selected else &style.segment_label },
-        })).clicked and !is_selected) clicked = index;
+        })).clicked and !is_selected) clicked_index = index;
     }
     try group.close(context);
-    return clicked;
+    return clicked_index;
 }
 
 /// The swatch, its popup and the popup's Reset button, as every colour setting draws them.
@@ -580,7 +583,7 @@ pub fn reorderRowByHandle(context: *ui.Frame, base: ui.Key, index: usize, handle
 
 /// Call once the rows are drawn: follows the drag, and returns the move once it's dropped somewhere new.
 pub fn reorderFinish(context: *ui.Frame, base: ui.Key, count: usize) ?Move {
-    const drag = &(g_reorder orelse return null);
+    const drag = if (g_reorder) |*active| active else return null;
     if (drag.list != base.hash()) return null;
     const ui_state = context.ui();
     const mouse_y = ui_state.input.mouse_pos[1];
@@ -630,12 +633,12 @@ pub fn confirmButton(context: *ui.Frame, key: ui.Key, label: []const u8, confirm
     const is_armed = g_confirm_key == id;
     // Nothing else redraws the window when the wait runs out.
     if (is_armed) context.requestRedraw();
-    const clicked = (try context.interact(Button{
+    const is_clicked = (try context.interact(Button{
         .key = key,
         .label = if (is_armed) confirm_label else label,
         .style = if (is_armed) armed_style else button_style,
     })).clicked;
-    if (!clicked) return false;
+    if (!is_clicked) return false;
     if (is_armed) {
         g_confirm_key = null;
         return true;
@@ -687,9 +690,9 @@ pub fn hintWithLink(context: *ui.Frame, key: ui.Key, content: []const u8, link_l
     const row = Rect{ .key = key, .style = &style.hint_row };
     _ = try row.open(context);
     try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = content, .style = &style.hint_inline });
-    const clicked = (try context.interact(Button{ .key = key.indexed(2), .label = link_label, .style = &style.link })).clicked;
+    const is_clicked = (try context.interact(Button{ .key = key.indexed(2), .label = link_label, .style = &style.link })).clicked;
     try row.close(context);
-    return clicked;
+    return is_clicked;
 }
 
 /// Text in the hint style that always shows.
@@ -750,55 +753,67 @@ pub fn valueText(context: *ui.Frame, key: ui.Key, content: []const u8) !void {
 }
 
 /// Returns whether the user toggled it this frame.
-pub fn checkbox(context: *ui.Frame, key: ui.Key, label: []const u8, checked: *bool) !bool {
+pub fn checkbox(context: *ui.Frame, key: ui.Key, label: []const u8, is_checked: *bool) !bool {
     search.captureText(label);
     if (!g_is_aligned) return (try context.interact(Checkbox{
         .key = key,
-        .checked = checked,
+        .checked = is_checked,
         .label = label,
         .style = &style.checkbox,
         .parts = .{ .box = &style.checkbox_box, .label = &style.checkbox_label },
     })).changed;
-    if (label.len == 0) return toggleSwitch(context, key, checked);
+    if (label.len == 0) return toggleSwitch(context, key, is_checked);
 
     const row = try openRow(context, key.indexed(9));
     try context.e(Text{ .selectable = false, .key = key.indexed(8), .content = label, .style = alignedLabelStyle() });
-    const is_flipped = try toggleSwitch(context, key, checked);
+    const is_flipped = try toggleSwitch(context, key, is_checked);
     try row.close(context);
     if (is_flipped) return true;
     if (!row.is_clicked) return false;
-    checked.* = !checked.*;
+    is_checked.* = !is_checked.*;
     return true;
 }
 
 /// A detail pane's lone setting: `label`, then a switch at the row's end that a click anywhere on the row flips; returns whether it was flipped.
-pub fn switchRow(context: *ui.Frame, key: ui.Key, label: []const u8, checked: *bool) !bool {
+pub fn switchRow(context: *ui.Frame, key: ui.Key, label: []const u8, is_checked: *bool) !bool {
     const row = try openBinding(context, key, label);
     try context.e(Rect{ .key = key.indexed(3), .style = &style.spacer });
-    const is_flipped = try toggleSwitch(context, key.indexed(4), checked);
+    const is_flipped = try toggleSwitch(context, key.indexed(4), is_checked);
     try row.close(context);
     if (is_flipped) return true;
     if (!row.is_clicked) return false;
-    checked.* = !checked.*;
+    is_checked.* = !is_checked.*;
     return true;
 }
 
 /// knots has no switch, so it's a pill button whose knob slides across; returns whether it was flipped this frame.
-pub fn toggleSwitch(context: *ui.Frame, key: ui.Key, checked: *bool) !bool {
+pub fn toggleSwitch(context: *ui.Frame, key: ui.Key, is_checked: *bool) !bool {
     // knots never animates layout, so the knob is pushed along by a spacer whose width is eased here.
-    const position = context.ui().anim(key.hash(), "knob", if (checked.*) 1 else 0, .{ .duration_ms = style.SWITCH_ANIMATION_MS });
+    const position = context.ui().anim(key.hash(), "knob", if (is_checked.*) 1 else 0, .{ .duration_ms = style.SWITCH_ANIMATION_MS });
     const spacer = try context.arena().create(ui.Style);
     spacer.* = .{ .width = .fixed(position * style.SWITCH_TRAVEL) };
     const on_style = if (context.ui().inert_depth > 0) &style.switch_on_inert else &style.switch_on;
-    const button = Button{ .key = key, .style = if (checked.*) on_style else &style.switch_off };
+    const button = Button{ .key = key, .style = if (is_checked.*) on_style else &style.switch_off };
     const response = try button.openResponse(context);
     try context.e(Rect{ .key = key.indexed(2), .style = spacer });
-    try context.e(Rect{ .key = key.indexed(1), .style = if (checked.*) &style.switch_knob_on else &style.switch_knob_off });
+    try context.e(Rect{ .key = key.indexed(1), .style = if (is_checked.*) &style.switch_knob_on else &style.switch_knob_off });
     try button.close(context);
     if (!response.clicked) return false;
-    checked.* = !checked.*;
+    is_checked.* = !is_checked.*;
     context.requestRedraw();
     return true;
+}
+
+/// A preview's text at `size` px in `color`, made in `arena`.
+pub fn textStyle(arena: std.mem.Allocator, color: u32, size: f32, options: TextOptions) !*const ui.Style {
+    const text_style = try arena.create(ui.Style);
+    text_style.* = .{
+        .foreground = solidColor(color),
+        .font_size = .{ .px = size },
+        .opacity = if (options.is_shown) 1 else style.OFF_TEXT_OPACITY,
+    };
+    if (options.is_grown) text_style.width = .grow();
+    return text_style;
 }
 
 /// `argb` as a style colour, fully opaque whatever its alpha.

@@ -16,6 +16,7 @@ pub const Doc = enum { profile, global };
 const Retired = struct { allocator: std.mem.Allocator, bytes: []const u8 };
 
 var g_allocator: std.mem.Allocator = undefined;
+/// Set while the window is open, from begin to end.
 var g_global_draft: ?GlobalConfig = null;
 /// Another profile than the running one, edited without previewing; its own allocations are freed in dropDraft.
 var g_profile_draft: ?Config = null;
@@ -23,9 +24,9 @@ var g_profile_draft: ?Config = null;
 var g_profile_draft_json: ?[]u8 = null;
 /// Replaced strings, freed at the start of the next frame since this one may still be drawing them. Owned.
 var g_retired: std.ArrayList(Retired) = .empty;
-var g_dirty_stale: bool = true;
-var g_profile_dirty: bool = false;
-var g_global_dirty: bool = false;
+var g_is_dirty_stale: bool = true;
+var g_is_profile_dirty: bool = false;
+var g_is_global_dirty: bool = false;
 /// Set by any edit, since one made after the widgets showing it were drawn needs another frame to appear.
 var g_edited_this_frame: bool = false;
 
@@ -202,7 +203,7 @@ pub fn Ref(comptime T: type) type {
 pub fn begin(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
     g_global_draft = try cloneGlobal(allocator, &main.g_global_settings);
-    g_dirty_stale = true;
+    g_is_dirty_stale = true;
 }
 
 /// Drops unsaved edits; called once the window has closed.
@@ -241,7 +242,7 @@ pub fn editsDraft() bool {
 pub fn editProfile(name: []const u8) !void {
     dropDraft();
     dropProfileEdits();
-    g_dirty_stale = true;
+    g_is_dirty_stale = true;
     if (std.mem.eql(u8, name, main.g_store.live.profile_name)) return;
     var draft = try config.loadProfile(g_allocator, name);
     errdefer draft.deinit();
@@ -256,22 +257,23 @@ pub fn liveGlobal() *const GlobalConfig {
     return &main.g_global_settings;
 }
 
+/// Only while the window is open.
 pub fn global() Ref(GlobalConfig) {
     return .{ .doc = .global, .ptr = &g_global_draft.?, .layout = .none };
 }
 
 pub fn isDirty() bool {
     refreshDirty();
-    return g_profile_dirty or g_global_dirty;
+    return g_is_profile_dirty or g_is_global_dirty;
 }
 
 /// Restarts subsystems, so only between frames. Saving a draft also makes it the running profile.
 pub fn save() !void {
     refreshDirty();
-    slog.info("Saving configuration (profile dirty: {}, global dirty: {})", .{ g_profile_dirty, g_global_dirty });
-    const global_draft: ?*GlobalConfig = if (g_global_dirty) &g_global_draft.? else null;
+    slog.info("Saving configuration (profile dirty: {}, global dirty: {})", .{ g_is_profile_dirty, g_is_global_dirty });
+    const global_draft: ?*GlobalConfig = if (g_is_global_dirty) &g_global_draft.? else null;
     if (g_profile_draft) |*draft| {
-        if (g_profile_dirty) {
+        if (g_is_profile_dirty) {
             var arena_state = std.heap.ArenaAllocator.init(g_allocator);
             defer arena_state.deinit();
             const arena = arena_state.allocator();
@@ -283,8 +285,8 @@ pub fn save() !void {
             try main.applySavedSettings(global_draft);
         }
     } else {
-        if (g_profile_dirty) try main.g_store.commit();
-        if (g_profile_dirty or global_draft != null) try main.applySavedSettings(global_draft);
+        if (g_is_profile_dirty) try main.g_store.commit();
+        if (g_is_profile_dirty or global_draft != null) try main.applySavedSettings(global_draft);
     }
     if (global_draft != null) {
         try resetGlobalDraft();
@@ -295,7 +297,7 @@ pub fn save() !void {
         run_on_startup.apply(settings.runOnStartup);
         if (settings.autoRegisterProtocol) protocol.ensureRegistered(g_allocator);
     }
-    g_dirty_stale = true;
+    g_is_dirty_stale = true;
 }
 
 /// Replaces the documents, so only between frames.
@@ -310,7 +312,7 @@ pub fn discard() !void {
     }
     try resetGlobalDraft();
     log.setLevel(main.g_global_settings.logLevel);
-    g_dirty_stale = true;
+    g_is_dirty_stale = true;
 }
 
 /// Edit ops (see config/patch.zig) on the profile being edited, e.g. an import's; `arena` holds what they allocate along the way.
@@ -338,7 +340,7 @@ pub fn takeEdited() bool {
 }
 
 fn edited(doc: Doc, field_layout: main.LiveLayout, ref_layout: main.LiveLayout) void {
-    g_dirty_stale = true;
+    g_is_dirty_stale = true;
     g_edited_this_frame = true;
     switch (doc) {
         .profile => if (g_profile_draft) |*draft| {
@@ -381,27 +383,27 @@ fn resetGlobalDraft() !void {
 
 /// Serializes both documents, so it runs at most once per frame that edited something.
 fn refreshDirty() void {
-    if (!g_dirty_stale) return;
-    g_dirty_stale = false;
-    g_profile_dirty = profileDirty() catch |err| blk: {
+    if (!g_is_dirty_stale) return;
+    g_is_dirty_stale = false;
+    g_is_profile_dirty = isProfileDirty() catch |err| blk: {
         slog.err("Failed to compare the edited profile with the saved one: {}", .{err});
         break :blk true;
     };
-    g_global_dirty = globalDirty() catch |err| blk: {
+    g_is_global_dirty = isGlobalDirty() catch |err| blk: {
         slog.err("Failed to compare the edited global settings with the saved ones: {}", .{err});
         break :blk true;
     };
 }
 
-fn profileDirty() !bool {
-    const draft = &(g_profile_draft orelse return main.g_store.isDirty());
+fn isProfileDirty() !bool {
+    const draft = if (g_profile_draft) |*open| open else return main.g_store.isDirty();
     var arena_state = std.heap.ArenaAllocator.init(g_allocator);
     defer arena_state.deinit();
     return !std.mem.eql(u8, try draft.toJsonString(arena_state.allocator()), g_profile_draft_json.?);
 }
 
-fn globalDirty() !bool {
-    const draft = &(g_global_draft orelse return false);
+fn isGlobalDirty() !bool {
+    const draft = if (g_global_draft) |*open| open else return false;
     var arena_state = std.heap.ArenaAllocator.init(g_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
