@@ -5,7 +5,7 @@ const fonts = @import("fonts.zig");
 const pixel_buffer = @import("../util/pixel_buffer.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("gdi_overlay");
+const slog = log.Scoped("gdi_overlay");
 
 /// Translucent black backing shared by the small hint boxes and labels drawn over the desktop.
 pub const HINT_BACKGROUND_COLOR: u32 = 0xC8000000;

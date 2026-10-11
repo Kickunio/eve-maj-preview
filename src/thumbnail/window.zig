@@ -14,7 +14,7 @@ const scout = @import("../clients/scout.zig");
 const log = @import("../log.zig");
 
 const ThumbnailState = state.ThumbnailState;
-const slog = log.scoped("thumbnail");
+const slog = log.Scoped("thumbnail");
 
 /// Shared with the hover zoom's windows.
 pub const WINDOW_CLASS_NAME = "EVE_THUMBNAIL_CLASS";

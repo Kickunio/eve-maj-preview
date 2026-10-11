@@ -22,7 +22,7 @@ const TextDimensions = draw.TextDimensions;
 const TextOrigin = draw.TextOrigin;
 const FontCache = font_cache_mod.FontCache;
 const scalePixels = win32.scalePixels;
-const slog = log.scoped("overlay");
+const slog = log.Scoped("overlay");
 
 const OVERLAY_ALPHA = 255;
 /// Custom text can split a notification over lines (see notifications/template.zig).

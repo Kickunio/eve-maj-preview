@@ -8,7 +8,7 @@ const POLL_MS: i64 = 50;
 /// `Command` has `deinit(Command)`, which frees whatever it owns once it has run or been dropped at shutdown.
 /// `description` names the feature in log messages, e.g. "text-to-speech".
 pub fn Worker(comptime Command: type, comptime Engine: type, comptime scope: []const u8, comptime description: []const u8) type {
-    const slog = log.scoped(scope);
+    const slog = log.Scoped(scope);
 
     return struct {
         /// Set once, before the first command.

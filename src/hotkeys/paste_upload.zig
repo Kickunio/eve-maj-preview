@@ -3,7 +3,7 @@ const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("paste_upload");
+const slog = log.Scoped("paste_upload");
 
 var g_io: std.Io = undefined;
 

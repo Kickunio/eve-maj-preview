@@ -7,7 +7,7 @@ const status = @import("status.zig");
 const import_dialog = @import("import_dialog.zig");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 pub const Action = enum {
     /// The app switches to the profile, and the window edits it.

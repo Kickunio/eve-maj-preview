@@ -7,7 +7,7 @@ const character_ids_mod = @import("character_ids.zig");
 const log = @import("../log.zig");
 
 const CharacterIds = character_ids_mod.CharacterIds;
-const slog = log.scoped("chatlog");
+const slog = log.Scoped("chatlog");
 
 /// Files checked by header when a character's ID isn't cached; a live character's log is always among the newest.
 const MAX_HEADER_CHECKS = 64;

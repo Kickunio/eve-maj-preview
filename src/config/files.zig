@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 pub const PROFILES_DIR = "profiles";
 pub const DEFAULT_PROFILE = "default.json";

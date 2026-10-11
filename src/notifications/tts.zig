@@ -4,7 +4,7 @@ const worker = @import("worker.zig");
 const log = @import("../log.zig");
 
 const windows = std.os.windows;
-const slog = log.scoped("tts");
+const slog = log.Scoped("tts");
 
 const IID_IDispatch = windows.GUID{
     .Data1 = 0x00020400,

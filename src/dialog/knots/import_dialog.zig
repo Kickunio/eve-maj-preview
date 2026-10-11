@@ -20,7 +20,7 @@ const Button = ui.component.Button;
 const TextInput = ui.component.TextInput;
 const SelectInput = ui.component.SelectInput;
 const ColorPicker = ui.component.ColorPicker;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const FILE_HINT = "Select an old EVE-X Preview (.json), EVE-O Preview (.json), or EVE-APM Preview (.ini) file, or an EVE-Maj Preview profile (.json) \u{2014} format is detected automatically. Nothing is saved until you review and click Save.";
 const MAX_FILE_SIZE = 4 * 1024 * 1024;

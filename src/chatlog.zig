@@ -3,7 +3,7 @@ const std = @import("std");
 const win32 = @import("platform/win32.zig");
 const notification_mod = @import("notifications/notification.zig");
 const gamelog_events = @import("notifications/gamelog_events.zig");
-const activity_mod = @import("activity/tracker.zig");
+const tracker_mod = @import("activity/tracker.zig");
 const activity_lines = @import("activity/lines.zig");
 const scout = @import("clients/scout.zig");
 const painter = @import("painter.zig");
@@ -17,7 +17,7 @@ const log = @import("log.zig");
 
 const CharacterIds = character_ids_mod.CharacterIds;
 const LogFile = tail.LogFile;
-const slog = log.scoped("chatlog");
+const slog = log.Scoped("chatlog");
 
 /// Shorter lines can't hold a timestamp and a message.
 const MIN_LINE_LENGTH = 25;
@@ -33,9 +33,10 @@ pub const ChatlogMonitor = struct {
     /// Borrowed; outlives the monitor.
     character_ids: ?*CharacterIds,
     // The worker reads these; set only while it's stopped (see activity/runtime.zig and applySettings).
-    combat_tracker: ?*activity_mod.CombatTracker = null,
-    mining_tracker: ?*activity_mod.MiningTracker = null,
-    bounty_tracker: ?*activity_mod.BountyTracker = null,
+    combat_tracker: ?*tracker_mod.CombatTracker = null,
+    mining_tracker: ?*tracker_mod.MiningTracker = null,
+    bounty_tracker: ?*tracker_mod.BountyTracker = null,
+    /// Owned; freed in deinit.
     damage_alert_excluded_weapons: []const u8 = "",
     idle_poll_threshold: u32 = 20,
     max_poll_multiplier: u8 = 8,
@@ -198,7 +199,7 @@ pub const ChatlogMonitor = struct {
             defer system_update.deinit(self.allocator);
             const scout_ptr = scout.g_scout_ptr orelse continue;
             const hwnd = scout_ptr.getHwndByName(system_update.character_name) orelse {
-                slog.warn("Failed to apply the system update for '{s}': no window found", .{system_update.character_name});
+                slog.debug("Dropped system update for '{s}': no window", .{system_update.character_name});
                 continue;
             };
             const painter_ptr = painter.g_painter_ptr orelse {
@@ -219,7 +220,10 @@ pub const ChatlogMonitor = struct {
         for (events.items) |*event| {
             defer event.deinit(self.allocator);
             const scout_ptr = scout.g_scout_ptr orelse continue;
-            const hwnd = scout_ptr.getHwndByName(event.character_name) orelse continue;
+            const hwnd = scout_ptr.getHwndByName(event.character_name) orelse {
+                slog.debug("Dropped {s} notification for '{s}': no window", .{ @tagName(event.notification.notification_type), event.character_name });
+                continue;
+            };
             const painter_ptr = painter.g_painter_ptr orelse continue;
             painter_ptr.notify(hwnd, event.notification);
         }
@@ -234,7 +238,10 @@ pub const ChatlogMonitor = struct {
         for (starts.items) |*start| {
             defer start.deinit(self.allocator);
             const scout_ptr = scout.g_scout_ptr orelse continue;
-            const hwnd = scout_ptr.getHwndByName(start.character_name) orelse continue;
+            const hwnd = scout_ptr.getHwndByName(start.character_name) orelse {
+                slog.debug("Dropped session start for '{s}': no window", .{start.character_name});
+                continue;
+            };
             const logged_in_at = scout_ptr.backdateLogin(hwnd, start.started_at, now) orelse continue;
             const painter_ptr = painter.g_painter_ptr orelse continue;
             painter_ptr.setSessionStart(hwnd, logged_in_at);
@@ -292,7 +299,7 @@ pub const ChatlogMonitor = struct {
         const path = self.finder.find(character_name, is_chatlog) orelse return;
         defer self.allocator.free(path);
         self.addLogFile(path, character_name, is_chatlog) catch |err| {
-            slog.err("Failed to follow {s} for '{s}': {}", .{ if (is_chatlog) "chatlog" else "gamelog", character_name, err });
+            slog.err("Failed to follow {s} '{s}' for '{s}': {}", .{ if (is_chatlog) "chatlog" else "gamelog", path, character_name, err });
         };
     }
 
@@ -364,11 +371,7 @@ pub const ChatlogMonitor = struct {
             try self.monitored_paths.put(key, {});
         }
 
-        const found = new_file.start(self.allocator, self.io) catch |err| {
-            slog.warn("Failed to open '{s}' for initial read: {}", .{ path, err });
-            return err;
-        };
-        if (found) |match| {
+        if (try new_file.start(self.allocator, self.io)) |match| {
             slog.debug("Initial system for {s}: {s} (event_timestamp={})", .{ character_name, match.system, match.event_timestamp });
             // Not a jump: it's where the character already was.
             self.queueSystemUpdate(character_name, match.system, match.event_timestamp, false);
@@ -392,10 +395,9 @@ pub const ChatlogMonitor = struct {
         self.rescan_names.clearRetainingCapacity();
     }
 
-    /// Once EVE creates files in a log folder, checks every wanted character for a newer log there, so new sessions
-    /// and logs created after login are followed; spread over several loops if it runs past RESCAN_BUDGET_NS.
+    /// Once EVE creates files in a log folder, checks every wanted character for a newer log there; spread over several loops past RESCAN_BUDGET_NS.
     fn rescanForNewLogs(self: *ChatlogMonitor) !void {
-        const start_time = std.Io.Timestamp.now(self.io, .awake).toNanoseconds();
+        const start_time_ns = std.Io.Timestamp.now(self.io, .awake).toNanoseconds();
 
         if (!self.rescan_changes.hasAny()) {
             const changes = self.finder.changes();
@@ -416,7 +418,7 @@ pub const ChatlogMonitor = struct {
 
         const names = self.rescan_names.items;
         while (self.rescan_index < names.len) : (self.rescan_index += 1) {
-            if (std.Io.Timestamp.now(self.io, .awake).toNanoseconds() - start_time > RESCAN_BUDGET_NS) {
+            if (std.Io.Timestamp.now(self.io, .awake).toNanoseconds() - start_time_ns > RESCAN_BUDGET_NS) {
                 slog.debug("Log file scan paused at character {}/{}, continuing next loop", .{ self.rescan_index, names.len });
                 return;
             }
@@ -491,16 +493,16 @@ pub const ChatlogMonitor = struct {
             if (trimmed.len > 0) self.monitor.parseLine(self.file, trimmed);
         }
 
-        pub fn onLongLine(self: LineHandler, len: usize) void {
-            warnLongLine(self.file, len);
+        pub fn onLongLine(self: LineHandler, line_length: usize) void {
+            warnLongLine(self.file, line_length);
         }
     };
 
     /// Only the first few and then every 100th, since a malformed log can produce thousands.
-    fn warnLongLine(file: *LogFile, len: usize) void {
+    fn warnLongLine(file: *LogFile, line_length: usize) void {
         file.long_line_warning_count += 1;
         if (file.long_line_warning_count <= 3 or file.long_line_warning_count % 100 == 0) {
-            slog.warn("Dropping line ({} bytes, over the {}-byte cap) for '{s}' (warning #{})", .{ len, lines.MAX_LINE_LENGTH, file.character_name, file.long_line_warning_count });
+            slog.warn("Dropping line ({} bytes, over the {}-byte cap) for '{s}' (warning #{})", .{ line_length, lines.MAX_LINE_LENGTH, file.character_name, file.long_line_warning_count });
         }
     }
 
@@ -549,7 +551,7 @@ pub const ChatlogMonitor = struct {
             if (activity_lines.parseCombatLine(stripped_text)) |parsed| {
                 // Filtered weapons still count toward DPS but mustn't retrigger Taking Damage.
                 const counts_for_alert = !activity_lines.isWeaponExcluded(parsed.weapon, self.damage_alert_excluded_weapons);
-                const hit: activity_mod.CombatWindow.Hit = .{ .amount = parsed.amount, .timestamp_ms = trackerNowMs(), .is_incoming = parsed.is_incoming, .counts_for_alert = counts_for_alert };
+                const hit: tracker_mod.CombatWindow.Hit = .{ .amount = parsed.amount, .timestamp_ms = trackerNowMs(), .is_incoming = parsed.is_incoming, .counts_for_alert = counts_for_alert };
                 tracker.addEntry(file.character_name, .{hit}) catch |err| {
                     slog.warn("Failed to record combat entry for '{s}': {}", .{ file.character_name, err });
                 };
@@ -567,7 +569,7 @@ pub const ChatlogMonitor = struct {
         const parsed = activity_lines.parseMiningLine(event_text) orelse return;
         const global_settings = self.global_settings orelse return;
         const volume_per_unit = global_settings.oreVolume(parsed.name()) orelse {
-            slog.warn("Unknown ore, ice or gas '{s}' in mining line, dropping yield", .{parsed.name()});
+            slog.warn("Failed to record mining yield: unknown ore, ice or gas '{s}'", .{parsed.name()});
             return;
         };
         const price_per_unit = global_settings.orePrice(parsed.name()) orelse 0;

@@ -6,7 +6,7 @@ const files = @import("files.zig");
 const config_mod = @import("../config.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 const AUTO_COLORS_FILE = files.AUTO_COLORS_FILE;
 

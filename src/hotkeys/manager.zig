@@ -24,7 +24,7 @@ const log = @import("../log.zig");
 
 const HotkeyAction = bindings.HotkeyAction;
 const KeyList = config_mod.KeyList;
-const slog = log.scoped("hotkeys");
+const slog = log.Scoped("hotkeys");
 
 /// The characters or hotkey groups bound to one key combo, in config order.
 const ComboSharers = struct {

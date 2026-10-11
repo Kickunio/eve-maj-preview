@@ -10,7 +10,7 @@ const window = @import("window.zig");
 const log = @import("../log.zig");
 
 const ThumbnailWindow = window.ThumbnailWindow;
-const slog = log.scoped("input");
+const slog = log.Scoped("input");
 
 /// A left press waiting for its release when clicks trigger on mouse-up; right-click drags instead.
 const ClickState = struct {

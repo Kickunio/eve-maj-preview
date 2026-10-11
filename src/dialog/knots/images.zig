@@ -4,7 +4,7 @@ const ui = @import("ui");
 const log = @import("../../log.zig");
 
 const Image = ui.component.Image;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// An SVG asset rendered at twice its displayed size, as zlib-compressed RGBA.
 pub const PackedImage = struct {

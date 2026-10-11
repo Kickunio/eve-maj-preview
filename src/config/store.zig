@@ -8,7 +8,7 @@ const strings = @import("../util/strings.zig");
 const log = @import("../log.zig");
 
 const Config = config_mod.Config;
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 pub const ProfileStore = struct {
     live: Config,
@@ -55,7 +55,7 @@ pub const ProfileStore = struct {
     }
 
     fn setPosition(config: *Config, entry: CharacterPosition) !void {
-        const character = try config.getOrCreateCharacter(config.allocator, entry.name);
+        const character = try config.getOrCreateCharacter(entry.name);
         character.position = entry.position;
     }
 
@@ -133,7 +133,7 @@ pub const ProfileStore = struct {
 pub fn applyWindowPosition(config: *Config, character_name: ?[]const u8, position: ?config_mod.Position, size: ?config_mod.WindowSize) !void {
     if (character_name) |name| {
         if (position == null and config.findCharacter(name) == null) return;
-        const character = try config.getOrCreateCharacter(config.allocator, name);
+        const character = try config.getOrCreateCharacter(name);
         character.windowPosition = position;
         character.windowSize = size;
     } else {

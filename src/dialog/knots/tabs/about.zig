@@ -10,7 +10,7 @@ const log = @import("../../../log.zig");
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const REPOSITORY_URL = "https://github.com/mrmjstc/eve-maj-preview";
 const DISCORD_URL = "https://discord.com/users/159459744170508288";

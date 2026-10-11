@@ -5,7 +5,7 @@ const painter_mod = @import("../painter.zig");
 const animation = @import("animation.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("activation");
+const slog = log.Scoped("activation");
 
 /// Restores the client first if it's minimized.
 pub fn activate(source_hwnd: win32.HWND) void {

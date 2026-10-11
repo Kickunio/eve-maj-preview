@@ -3,7 +3,7 @@ const std = @import("std");
 const win32 = @import("../../platform/win32.zig");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// What a picked path is for.
 pub const Target = enum {

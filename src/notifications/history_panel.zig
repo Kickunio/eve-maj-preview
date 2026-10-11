@@ -15,7 +15,7 @@ const pixel_buffer = @import("../util/pixel_buffer.zig");
 const log = @import("../log.zig");
 
 const PanelWindow = panel_window.PanelWindow;
-const slog = log.scoped("history_panel");
+const slog = log.Scoped("history_panel");
 
 const MAX_TEXT_LENGTH: usize = 160;
 

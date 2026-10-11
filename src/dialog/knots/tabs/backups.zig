@@ -10,7 +10,7 @@ const log = @import("../../../log.zig");
 
 const Text = ui.component.Text;
 const Button = ui.component.Button;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const ROW_KEY: ui.Key = .str("knots.backups.row");
 

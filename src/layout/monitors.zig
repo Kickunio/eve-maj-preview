@@ -4,7 +4,7 @@ const win32 = @import("../platform/win32.zig");
 const config = @import("../config.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("monitors");
+const slog = log.Scoped("monitors");
 
 const MonitorEnumData = struct {
     target_index: u32,

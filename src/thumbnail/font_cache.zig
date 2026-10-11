@@ -5,7 +5,7 @@ const types = @import("../config/types.zig");
 const config = @import("../config.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("font_cache");
+const slog = log.Scoped("font_cache");
 
 /// `combat` is incoming DPS's slot; outgoing DPS has its own.
 pub const FontSlot = enum(u4) { main, combat, mining, bounty, system_name, group_badge, notification, combat_outgoing, resources, session_timer };

@@ -14,7 +14,7 @@ const RegionFitGrid = region_grid.RegionFitGrid;
 const RegionFitCap = region_grid.RegionFitCap;
 const scalePixels = win32.scalePixels;
 const dpiToScale = win32.dpiToScale;
-const slog = log.scoped("layout");
+const slog = log.Scoped("layout");
 
 /// One active space's grid for a layout pass; sizes are physical pixels.
 pub const SpaceCell = struct {

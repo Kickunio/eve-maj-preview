@@ -8,7 +8,7 @@ const cycling = @import("cycling.zig");
 const paste_upload = @import("paste_upload.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("hotkeys");
+const slog = log.Scoped("hotkeys");
 
 const FindByExecutableContext = struct {
     executable_name: []const u8,

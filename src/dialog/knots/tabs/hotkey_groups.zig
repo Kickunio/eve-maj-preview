@@ -18,7 +18,7 @@ const Button = ui.component.Button;
 const TextInput = ui.component.TextInput;
 const ProfileRef = session.Ref(config.Config);
 const GroupRef = session.Ref(config.HotkeyGroupConfig);
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const GROUP_ROW_KEY: ui.Key = .str("knots.groups.row");
 const MEMBER_ROW_KEY: ui.Key = .str("knots.groups.member");

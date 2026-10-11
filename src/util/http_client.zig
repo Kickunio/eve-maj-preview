@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 
-const slog = log.scoped("http_client");
+const slog = log.Scoped("http_client");
 
 pub const FetchOptions = struct {
     content_type: ?[]const u8 = null,

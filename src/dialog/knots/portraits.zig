@@ -10,7 +10,7 @@ const rgba = @import("../../util/rgba.zig");
 const log = @import("../../log.zig");
 
 const Image = ui.component.Image;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// The image server's smallest size, still sharp for a 16px portrait at 200% scale.
 const FETCH_SIZE = 32;

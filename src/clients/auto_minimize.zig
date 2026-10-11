@@ -10,7 +10,7 @@ const log = @import("../log.zig");
 
 const Config = config_mod.Config;
 const Painter = painter_mod.Painter;
-const slog = log.scoped("auto_minimize");
+const slog = log.Scoped("auto_minimize");
 
 /// Per-thumbnail auto-minimize state; only AutoMinimizer.check writes it after creation.
 pub const AutoMinimizeState = struct {

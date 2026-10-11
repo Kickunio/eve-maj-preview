@@ -7,7 +7,7 @@ const region_math = @import("region_math.zig");
 const pixel_buffer = @import("../../util/pixel_buffer.zig");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("region_select");
+const slog = log.Scoped("region_select");
 
 const WINDOW_CLASS_NAME = "EVE_REGION_SELECT_CLASS";
 const REDRAW_THROTTLE_MS: u64 = 16;

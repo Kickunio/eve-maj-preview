@@ -2,7 +2,7 @@
 const win32 = @import("win32.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("fonts");
+const slog = log.Scoped("fonts");
 
 // SemiBold is a separate face because GDI won't embolden Cascadia Code's variable-font weights (see dialog/tools/region_select.zig).
 const BUNDLED_FONTS = [_]BundledFont{

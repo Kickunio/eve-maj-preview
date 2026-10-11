@@ -5,7 +5,7 @@ const config_mod = @import("../config.zig");
 const actions = @import("actions.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("auto_move");
+const slog = log.Scoped("auto_move");
 
 const PendingAutoMove = struct {
     hwnd: win32.HWND,

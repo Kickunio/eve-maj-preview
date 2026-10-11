@@ -3,7 +3,7 @@ const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("run_on_startup");
+const slog = log.Scoped("run_on_startup");
 
 const STARTUP_RUN_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const STARTUP_RUN_VALUE_NAME = "EVE-Maj Preview";

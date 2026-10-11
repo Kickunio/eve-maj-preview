@@ -5,17 +5,17 @@ const key_list = @import("config/key_list.zig");
 const ranges = @import("config/ranges.zig");
 const files = @import("config/files.zig");
 const global = @import("config/global.zig");
-const characters = @import("config/characters.zig");
+const characters_mod = @import("config/characters.zig");
 const system_colors = @import("config/system_colors.zig");
-const hotkeys = @import("config/hotkeys.zig");
+const hotkeys_mod = @import("config/hotkeys.zig");
 const spaces = @import("config/spaces.zig");
 const migrate = @import("config/migrate.zig");
-const chatlog = @import("config/chatlog.zig");
+const chatlog_mod = @import("config/chatlog.zig");
 const activity = @import("config/activity.zig");
 const notifications = @import("config/notifications.zig");
 const window_filters = @import("config/window_filters.zig");
-const thumbnail = @import("config/thumbnail.zig");
-const display = @import("config/display.zig");
+const thumbnail_mod = @import("config/thumbnail.zig");
+const display_mod = @import("config/display.zig");
 const behavior = @import("config/behavior.zig");
 const auto_colors = @import("config/auto_colors.zig");
 const profiles = @import("config/profiles.zig");
@@ -23,7 +23,7 @@ const store = @import("config/store.zig");
 const strings = @import("util/strings.zig");
 const log = @import("log.zig");
 
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 pub const setIo = files.setIo;
 pub const setEnvironMap = files.setEnvironMap;
@@ -50,15 +50,7 @@ pub const parseBackupName = profiles.parseBackupName;
 pub const profileFileName = profiles.fileNameFor;
 pub const ProfileStore = store.ProfileStore;
 pub const applyWindowPosition = store.applyWindowPosition;
-
-/// Independent of the release version; bump PROFILE_FORMAT_VERSION only for schema changes that need a migration.
-pub const PROFILE_FORMAT_IDENTIFIER = "eve-maj-preview";
-/// v2: character positions saved while this app was DPI-unaware are migrated to physical pixels on load - see Config.fromWire.
-/// v3: the fit region and not-logged-in space became thumbnailSpaces - see config/migrate.zig.
-pub const PROFILE_FORMAT_VERSION: u32 = migrate.SPACES_VERSION;
-
 pub const clampValue = ranges.clampValue;
-
 pub const Argb = wire.Argb;
 pub const KeyList = key_list.KeyList;
 pub const parseHexColor = wire.parseHexColor;
@@ -66,18 +58,18 @@ pub const parseHexColor = wire.parseHexColor;
 pub const OrePriceConfig = global.OrePriceConfig;
 pub const DEFAULT_ORE_TABLE = global.DEFAULT_ORE_TABLE;
 pub const GlobalConfig = global.GlobalConfig;
-pub const Position = characters.Position;
-pub const WindowSize = characters.WindowSize;
-pub const CharacterBorderColorsConfig = characters.CharacterBorderColorsConfig;
-pub const CharacterThumbnailSizeConfig = characters.CharacterThumbnailSizeConfig;
-pub const CharacterConfig = characters.CharacterConfig;
-pub const buildCharacterOrderMap = characters.buildCharacterOrderMap;
-pub const orderMapLessThan = characters.orderMapLessThan;
+pub const Position = characters_mod.Position;
+pub const WindowSize = characters_mod.WindowSize;
+pub const CharacterBorderColorsConfig = characters_mod.CharacterBorderColorsConfig;
+pub const CharacterThumbnailSizeConfig = characters_mod.CharacterThumbnailSizeConfig;
+pub const CharacterConfig = characters_mod.CharacterConfig;
+pub const buildCharacterOrderMap = characters_mod.buildCharacterOrderMap;
+pub const orderMapLessThan = characters_mod.orderMapLessThan;
 pub const SystemColorConfig = system_colors.SystemColorConfig;
-pub const HotkeyGroupConfig = hotkeys.HotkeyGroupConfig;
+pub const HotkeyGroupConfig = hotkeys_mod.HotkeyGroupConfig;
 pub const ThumbnailSpace = spaces.ThumbnailSpace;
 pub const migrateProfileJson = migrate.profile;
-pub const ChatlogConfig = chatlog.ChatlogConfig;
+pub const ChatlogConfig = chatlog_mod.ChatlogConfig;
 pub const CombatConfig = activity.CombatConfig;
 pub const MiningConfig = activity.MiningConfig;
 pub const BountyConfig = activity.BountyConfig;
@@ -87,9 +79,9 @@ pub const IskRateUnit = activity.IskRateUnit;
 pub const NotificationTypeConfig = notifications.NotificationTypeConfig;
 pub const NotificationConfig = notifications.NotificationConfig;
 pub const WindowFilterConfig = window_filters.WindowFilterConfig;
-pub const StateVisualConfig = thumbnail.StateVisualConfig;
-pub const ThumbnailConfig = thumbnail.ThumbnailConfig;
-pub const DisplayConfig = display.DisplayConfig;
+pub const StateVisualConfig = thumbnail_mod.StateVisualConfig;
+pub const ThumbnailConfig = thumbnail_mod.ThumbnailConfig;
+pub const DisplayConfig = display_mod.DisplayConfig;
 pub const TimerConfig = behavior.TimerConfig;
 pub const SnappingConfig = behavior.SnappingConfig;
 pub const InteractionConfig = behavior.InteractionConfig;
@@ -97,8 +89,12 @@ pub const AutoMinimizeConfig = behavior.AutoMinimizeConfig;
 pub const AutoMovePositionConfig = behavior.AutoMovePositionConfig;
 pub const ExclusionConfig = behavior.ExclusionConfig;
 pub const CloseAllConfig = behavior.CloseAllConfig;
-pub const HotkeysConfig = hotkeys.HotkeysConfig;
+pub const HotkeysConfig = hotkeys_mod.HotkeysConfig;
 pub const AutoColorStore = auto_colors.AutoColorStore;
+
+pub const PROFILE_FORMAT_IDENTIFIER = "eve-maj-preview";
+/// Bumped only for schema changes needing a migration, independent of the release version; see config/migrate.zig and Config.fromWire.
+pub const PROFILE_FORMAT_VERSION: u32 = migrate.SPACES_VERSION;
 
 pub const ShownColors = struct {
     system_name_color: u32,
@@ -113,6 +109,7 @@ pub const AutoHide = struct { is_enabled: bool, delay_ms: u32 };
 
 pub const Config = struct {
     allocator: std.mem.Allocator,
+    /// Owned; freed in deinit.
     profile_name: []const u8,
     /// Reset to the current values after loading; formatVersion is only read to migrate older profiles.
     app: []const u8 = PROFILE_FORMAT_IDENTIFIER,
@@ -155,10 +152,10 @@ pub const Config = struct {
     }
 
     /// The only way a Config is built, so `fromWire(.{}, ...)` is also the default profile.
-    pub fn fromWire(w: Wire, allocator: std.mem.Allocator, profile_name: []const u8) !Config {
+    pub fn fromWire(wire_value: Wire, allocator: std.mem.Allocator, profile_name: []const u8) !Config {
         var config: Config = .{ .allocator = allocator, .profile_name = try allocator.dupe(u8, profile_name) };
         errdefer config.deinit();
-        try wire.fromWireInto(Config, w, allocator, &config);
+        try wire.fromWireInto(Config, wire_value, allocator, &config);
         try spaces.ensureSpecialSpaces(allocator, &config.thumbnailSpaces);
         spaces.keepSpecialSpacesFirst(config.thumbnailSpaces.items);
 
@@ -214,23 +211,23 @@ pub const Config = struct {
         return @field(character, field);
     }
 
-    pub fn getOrCreateCharacter(self: *Config, allocator: std.mem.Allocator, name: []const u8) !*CharacterConfig {
+    pub fn getOrCreateCharacter(self: *Config, name: []const u8) !*CharacterConfig {
         if (self.findCharacter(name)) |character| {
             return character;
         }
 
-        const owned_name = try allocator.dupe(u8, name);
-        errdefer allocator.free(owned_name);
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
 
-        try self.characters.append(allocator, .{ .name = owned_name });
+        try self.characters.append(self.allocator, .{ .name = owned_name });
         return &self.characters.items[self.characters.items.len - 1];
     }
 
     /// Exact names beat patterns regardless of row order; ties within each group go to the first row.
     pub fn findSystemColor(self: *const Config, name: []const u8) ?u32 {
-        inline for (.{ false, true }) |wildcards| {
-            for (self.systemColors.items) |sc| {
-                if (sc.matches(name, wildcards)) return sc.color;
+        inline for (.{ false, true }) |uses_wildcards| {
+            for (self.systemColors.items) |system_color| {
+                if (system_color.matches(name, uses_wildcards)) return system_color.color;
             }
         }
         return null;

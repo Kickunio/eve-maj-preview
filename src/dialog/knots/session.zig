@@ -9,7 +9,7 @@ const log = @import("../../log.zig");
 
 const Config = config.Config;
 const GlobalConfig = config.GlobalConfig;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 pub const Doc = enum { profile, global };
 

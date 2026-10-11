@@ -3,7 +3,7 @@ const std = @import("std");
 const http_client = @import("../../util/http_client.zig");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("esi_prices");
+const slog = log.Scoped("esi_prices");
 
 const ESI_BASE = "https://esi.evetech.net/latest";
 const ESI_JITA_REGION_ID = 10000002;

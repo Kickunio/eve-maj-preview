@@ -3,7 +3,7 @@ const win32 = @import("../platform/win32.zig");
 const config_mod = @import("../config.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("animation");
+const slog = log.Scoped("animation");
 
 /// Runs ShowWindowAsync(hwnd, show_command); with No Animation, turns the Windows setting off around the call and puts the user's value back.
 pub fn showClient(config: *const config_mod.Config, hwnd: win32.HWND, show_command: c_int) void {

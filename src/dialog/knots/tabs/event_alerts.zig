@@ -20,7 +20,7 @@ const Button = ui.component.Button;
 const TextInput = ui.component.TextInput;
 const NotificationType = notification.NotificationType;
 const TypeRef = session.Ref(config.NotificationTypeConfig);
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// The most a custom text box takes.
 const CUSTOM_TEXT_MAX_LENGTH = 100;

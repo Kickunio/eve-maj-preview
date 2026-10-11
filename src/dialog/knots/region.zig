@@ -11,7 +11,7 @@ const status = @import("status.zig");
 const host = @import("host.zig");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 var g_allocator: std.mem.Allocator = undefined;
 /// The id of the space a running selection fills, so a reorder or removal meanwhile can't redirect it; null when none is running.

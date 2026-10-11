@@ -3,7 +3,7 @@ const std = @import("std");
 const files = @import("../config/files.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("chatlog");
+const slog = log.Scoped("chatlog");
 
 /// Written only by this module.
 const FILE_NAME = files.CHARACTER_IDS_FILE;

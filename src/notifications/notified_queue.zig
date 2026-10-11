@@ -3,7 +3,7 @@ const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("notified_queue");
+const slog = log.Scoped("notified_queue");
 
 pub const NotifiedQueue = struct {
     /// Owns a copy of the name since it must outlive ThumbnailWindow.character_name, which is freed on window close.

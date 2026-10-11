@@ -3,7 +3,7 @@ const std = @import("std");
 const vk = @import("../platform/virtual_keys.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 pub const MAX_KEYS = 4;
 

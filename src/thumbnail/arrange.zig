@@ -11,7 +11,7 @@ const log = @import("../log.zig");
 const Painter = painter_mod.Painter;
 const ThumbnailWindow = window.ThumbnailWindow;
 const Size = window.Size;
-const slog = log.scoped("arrange");
+const slog = log.Scoped("arrange");
 
 pub const Place = struct { position: config_mod.Position, size: Size };
 

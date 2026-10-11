@@ -11,7 +11,7 @@ const log = @import("../../log.zig");
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// The update check runs in the background, so a window opened at startup looks once more after this.
 const RETRY_DELAY_MS = 4000;

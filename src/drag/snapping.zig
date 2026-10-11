@@ -7,7 +7,7 @@ const log = @import("../log.zig");
 
 const Painter = painter_mod.Painter;
 const GhostGroup = overlays.GhostGroup;
-const slog = log.scoped("drag");
+const slog = log.Scoped("drag");
 
 pub const SnapPosition = struct { x: i32, y: i32 };
 

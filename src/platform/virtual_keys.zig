@@ -3,7 +3,7 @@ const std = @import("std");
 const win32 = @import("win32.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("virtual_keys");
+const slog = log.Scoped("virtual_keys");
 
 pub const VK_F1: u32 = 0x70;
 pub const VK_TAB: u32 = 0x09;

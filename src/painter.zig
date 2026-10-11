@@ -28,7 +28,7 @@ const notified_queue_mod = @import("notifications/notified_queue.zig");
 const history_panel_mod = @import("notifications/history_panel.zig");
 const log = @import("log.zig");
 
-const slog = log.scoped("painter");
+const slog = log.Scoped("painter");
 
 pub const ThumbnailWindow = window.ThumbnailWindow;
 
@@ -52,13 +52,13 @@ pub const SystemNameSnapshot = struct {
     }
 
     pub fn capture(self: *SystemNameSnapshot, painter: *const Painter) void {
-        for (painter.thumbnails.items) |thumb| {
-            if (thumb.system_name.len == 0) continue;
-            const copy = self.allocator.dupe(u8, thumb.system_name) catch |err| {
+        for (painter.thumbnails.items) |thumbnail| {
+            if (thumbnail.system_name.len == 0) continue;
+            const copy = self.allocator.dupe(u8, thumbnail.system_name) catch |err| {
                 slog.warn("Failed to snapshot system name for reload: {}", .{err});
                 continue;
             };
-            self.names.put(thumb.source_hwnd, copy) catch |err| {
+            self.names.put(thumbnail.source_hwnd, copy) catch |err| {
                 slog.warn("Failed to record system name snapshot for reload: {}", .{err});
                 self.allocator.free(copy);
             };
@@ -80,7 +80,7 @@ pub const Painter = struct {
     store: *config_mod.ProfileStore,
     focus_event_hook: ?win32.HANDLE = null,
     destroy_event_hook: ?win32.HANDLE = null,
-    hide_timer_pending: bool = false,
+    is_hide_timer_pending: bool = false,
     font_cache: font_cache_mod.FontCache,
     /// Non-null when viewMode == .ClientList; owns the compact list panel window.
     list_window: ?list_view.ListWindow = null,
@@ -156,8 +156,8 @@ pub const Painter = struct {
         // The timer outlives this Painter on the main window, and would otherwise hide the next one's thumbnails.
         self.cancelHideTimer();
 
-        if (self.list_window) |*lw| {
-            lw.deinit();
+        if (self.list_window) |*list_window| {
+            list_window.deinit();
             self.list_window = null;
         }
         self.history_panel.deinit();
@@ -241,12 +241,12 @@ pub const Painter = struct {
         return self.thumbnails.items[index].is_eve_client;
     }
 
-    /// Returns whether a reflow is needed to refill the region.
+    /// Returns whether a reflow is needed to refill the spaces.
     pub fn cleanupClosedThumbnails(self: *Painter, closed_windows: []const scout.ClosedWindow) bool {
         // By source_hwnd, not name: multiple windows can share a name (e.g. "EVE").
         var removed_any = false;
-        for (closed_windows) |cw| {
-            const index = self.indexOfSource(cw.hwnd) orelse continue;
+        for (closed_windows) |closed| {
+            const index = self.indexOfSource(closed.hwnd) orelse continue;
             slog.info("Cleaning up closed thumbnail for {s}", .{self.thumbnails.items[index].character_name});
             self.removeThumbnailAt(index);
             removed_any = true;
@@ -342,13 +342,13 @@ pub const Painter = struct {
             slog.err("Failed to start hide debounce timer", .{});
             return;
         }
-        self.hide_timer_pending = true;
+        self.is_hide_timer_pending = true;
     }
 
     fn cancelHideTimer(self: *Painter) void {
-        if (!self.hide_timer_pending) return;
+        if (!self.is_hide_timer_pending) return;
         if (main.g_timer_hwnd) |timer_hwnd| _ = win32.KillTimer(timer_hwnd, HIDE_DEBOUNCE_TIMER_ID);
-        self.hide_timer_pending = false;
+        self.is_hide_timer_pending = false;
     }
 
     /// The hide-debounce timer fired, so no EVE window has had focus for hideDebounceMs.
@@ -440,15 +440,15 @@ pub const Painter = struct {
         return self.hasThumbnail(foreground_hwnd);
     }
 
-    /// See ThumbnailWindow.system_name_event_timestamp and .travel for `event_ts` and `is_jump`.
-    pub fn updateSystemNameByHwnd(self: *Painter, source_hwnd: win32.HWND, system_name: []const u8, event_ts: u64, is_jump: bool) !void {
+    /// See ThumbnailWindow.system_name_event_timestamp and .travel for `event_timestamp` and `is_jump`.
+    pub fn updateSystemNameByHwnd(self: *Painter, source_hwnd: win32.HWND, system_name: []const u8, event_timestamp: u64, is_jump: bool) !void {
         const thumbnail = self.getThumbnailBySourceHwnd(source_hwnd) orelse {
             slog.debug("No thumbnail for window 0x{x} to show system {s}", .{ @intFromPtr(source_hwnd), system_name });
             return;
         };
 
-        if (event_ts != 0 and event_ts < thumbnail.system_name_event_timestamp) {
-            slog.debug("Ignoring stale system update for {s}: {s} (event_ts={} < current={})", .{ thumbnail.character_name, system_name, event_ts, thumbnail.system_name_event_timestamp });
+        if (event_timestamp != 0 and event_timestamp < thumbnail.system_name_event_timestamp) {
+            slog.debug("Ignoring stale system update for {s}: {s} (event_timestamp={} < current={})", .{ thumbnail.character_name, system_name, event_timestamp, thumbnail.system_name_event_timestamp });
             return;
         }
 
@@ -456,7 +456,7 @@ pub const Painter = struct {
         self.allocator.free(thumbnail.system_name);
 
         thumbnail.system_name = new_name;
-        thumbnail.system_name_event_timestamp = event_ts;
+        thumbnail.system_name_event_timestamp = event_timestamp;
         thumbnail.cached_system_color = self.auto_colors.systemNameColor(self.config, system_name);
         thumbnail.render_cache.system_name.dims = null;
         thumbnail.render_cache.settings = null;
@@ -520,10 +520,10 @@ pub const Painter = struct {
             const thumbnail = self.getThumbnailBySourceHwnd(change.hwnd) orelse continue;
 
             const was_generic = scout.isGenericCharacterName(change.old_name);
-            const now_generic = scout.isGenericCharacterName(change.new_name);
+            const is_now_generic = scout.isGenericCharacterName(change.new_name);
             // Either direction can move a thumbnail to another space, or change its rank in one.
-            if (was_generic and !now_generic) any_login = true;
-            if (now_generic and !was_generic) any_logout = true;
+            if (was_generic and !is_now_generic) any_login = true;
+            if (is_now_generic and !was_generic) any_logout = true;
 
             self.rename(thumbnail, change.new_name) catch |err| {
                 slog.err("Failed to rename the thumbnail for '{s}': {}", .{ change.new_name, err });
@@ -531,9 +531,9 @@ pub const Painter = struct {
             };
             thumbnail.session_start = change.logged_in_at;
 
-            if (was_generic and !now_generic) self.onLogin(thumbnail);
-            if (now_generic and !was_generic and self.config.exclusion.logoutClearsExclusion) hotkeys.clearLoggedOutExclusion(change.old_name);
-            if (now_generic) self.onLogout(thumbnail);
+            if (was_generic and !is_now_generic) self.onLogin(thumbnail);
+            if (is_now_generic and !was_generic and self.config.exclusion.logoutClearsExclusion) hotkeys.clearLoggedOutExclusion(change.old_name);
+            if (is_now_generic) self.onLogout(thumbnail);
 
             // Cycle cursors are keyed by name and a rename fires no focus event, so the focused window must re-sync under its new one.
             if (win32.GetForegroundWindow() == thumbnail.source_hwnd) {
@@ -589,8 +589,7 @@ pub const Painter = struct {
         thumbnail.needs_render = true;
     }
 
-    /// The client is back at the login screen: it has no system and its notifications no longer apply.
-    /// Moving it into the not-logged-in space happens in applyNameChanges' reflow, which also resizes the others already there.
+    /// The client is back at the login screen, so it has no system and its notifications no longer apply; applyNameChanges' reflow moves it.
     fn onLogout(self: *Painter, thumbnail: *ThumbnailWindow) void {
         dispatch.clearAll(self, thumbnail);
         self.refreshExclusion(thumbnail);
@@ -610,36 +609,36 @@ pub const Painter = struct {
 
     pub const PopulateOptions = struct {
         /// Moves each new client window to its saved position (auto-move).
-        move_to_saved: bool,
+        should_move_to_saved: bool,
         /// Minimizes each new client window; false at startup/reload so clients already running stay put.
-        minimize_new: bool = false,
+        should_minimize_new: bool = false,
         /// Seeds each new thumbnail's system name, so a reload doesn't show them blank.
         system_names: ?*const SystemNameSnapshot = null,
     };
 
     /// Startup/reload: creates every window's thumbnail, then reflows once, since createThumbnail sizes each one against the count so far.
-    pub fn populate(self: *Painter, eve_windows: []const scout.EveWindow, opts: PopulateOptions) void {
-        if (self.addMissingThumbnails(eve_windows, opts) and arrange.hasCountDependentLayout(self)) self.repositionAllThumbnails();
+    pub fn populate(self: *Painter, eve_windows: []const scout.EveWindow, options: PopulateOptions) void {
+        if (self.addMissingThumbnails(eve_windows, options) and arrange.hasCountDependentLayout(self)) self.repositionAllThumbnails();
     }
 
     /// Creates a thumbnail for each window not yet tracked, logging and skipping failures; returns whether any were created.
-    fn addMissingThumbnails(self: *Painter, eve_windows: []const scout.EveWindow, opts: PopulateOptions) bool {
+    fn addMissingThumbnails(self: *Painter, eve_windows: []const scout.EveWindow, options: PopulateOptions) bool {
         var created_new = false;
 
         for (eve_windows) |eve_window| {
             if (self.hasThumbnail(eve_window.hwnd)) continue;
 
-            const system_name = if (opts.system_names) |names| (names.get(eve_window.hwnd) orelse "") else "";
+            const system_name = if (options.system_names) |names| (names.get(eve_window.hwnd) orelse "") else "";
             self.createThumbnail(&eve_window, system_name) catch |err| {
                 slog.err("Failed to create thumbnail for '{s}': {}", .{ eve_window.character_name, err });
                 continue;
             };
             created_new = true;
 
-            if (opts.move_to_saved and eve_window.is_eve_client) {
+            if (options.should_move_to_saved and eve_window.is_eve_client) {
                 self.auto_move.moveToSavedPosition(self.config, eve_window.hwnd, eve_window.character_name);
             }
-            if (opts.minimize_new and eve_window.is_eve_client) {
+            if (options.should_minimize_new and eve_window.is_eve_client) {
                 auto_minimize_mod.minimizeNewClient(self.config, eve_window.hwnd);
             }
         }
@@ -656,8 +655,8 @@ pub const Painter = struct {
 
         // createThumbnail seeds character_name from eve_window, so new thumbnails need no re-sync.
         const created_new = self.addMissingThumbnails(eve_windows, .{
-            .move_to_saved = self.config.autoMovePosition.enabled,
-            .minimize_new = self.config.autoMinimize.startMinimized,
+            .should_move_to_saved = self.config.autoMovePosition.enabled,
+            .should_minimize_new = self.config.autoMinimize.startMinimized,
         });
         needs_region_reflow = (created_new and arrange.hasCountDependentLayout(self)) or needs_region_reflow;
 
@@ -666,8 +665,8 @@ pub const Painter = struct {
 
         self.renderDirtyThumbnails(null);
 
-        if (self.list_window) |*lw| {
-            lw.render(self.thumbnails.items, self.active_source_hwnd) catch |err| {
+        if (self.list_window) |*list_window| {
+            list_window.render(self.thumbnails.items, self.active_source_hwnd) catch |err| {
                 slog.err("Failed to render list window: {}", .{err});
             };
         }
@@ -710,14 +709,14 @@ pub const Painter = struct {
         const allocator = self.allocator;
         const character_name_copy = try allocator.dupe(u8, character_name);
         errdefer allocator.free(character_name_copy);
-        const sys_name_copy = try allocator.dupe(u8, system_name);
-        errdefer allocator.free(sys_name_copy);
+        const system_name_copy = try allocator.dupe(u8, system_name);
+        errdefer allocator.free(system_name_copy);
         const group_badge_label_copy = try self.config.groupBadgeLabel(allocator, character_name);
         errdefer allocator.free(group_badge_label_copy);
 
         return .{
             .character_name = character_name_copy,
-            .system_name = sys_name_copy,
+            .system_name = system_name_copy,
             .group_badge_label = group_badge_label_copy,
         };
     }
@@ -725,7 +724,7 @@ pub const Painter = struct {
     /// The data record both creation paths share; the caller supplies the window handles (sentinels outside Thumbnails mode) and owns the result's strings.
     fn newThumbnailRecord(self: *Painter, eve_window: *const scout.EveWindow, initial_system_name: []const u8, handles: window.Handles, win32_enabled: bool) !ThumbnailWindow {
         const strings = try self.dupeThumbnailStrings(eve_window.character_name, initial_system_name);
-        var thumbnail = ThumbnailWindow{
+        var thumbnail: ThumbnailWindow = .{
             .hwnd = handles.hwnd,
             .text_hwnd = handles.text_hwnd,
             .thumbnail_id = handles.thumbnail_id,
@@ -817,7 +816,7 @@ pub const Painter = struct {
     fn positionOf(thumbnail: *const ThumbnailWindow) ?config_mod.ProfileStore.CharacterPosition {
         if (!thumbnail.win32_enabled) return null;
         var rect: win32.RECT = undefined;
-        if (win32.GetWindowRect(thumbnail.hwnd, &rect) == 0) return null;
+        if (!win32.toBool(win32.GetWindowRect(thumbnail.hwnd, &rect))) return null;
         return .{ .name = thumbnail.character_name, .position = .{ .x = rect.left, .y = rect.top } };
     }
 };

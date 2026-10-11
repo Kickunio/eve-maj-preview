@@ -5,7 +5,7 @@ const tts = @import("tts.zig");
 const sound = @import("sound.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("alert_effects");
+const slog = log.Scoped("alert_effects");
 
 /// Main thread only; session-only, never saved to the profile.
 var g_is_muted = false;

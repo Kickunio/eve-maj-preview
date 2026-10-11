@@ -4,7 +4,7 @@ const template = @import("template.zig");
 const log = @import("../log.zig");
 
 const Placeholder = template.Placeholder;
-const slog = log.scoped("notification");
+const slog = log.Scoped("notification");
 
 /// For the dialog's preview; Test uses each thumbnail's own name.
 pub const SAMPLE_CHARACTER = "Your Pilot";

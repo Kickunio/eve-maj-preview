@@ -11,7 +11,7 @@ const log = @import("../log.zig");
 
 const Painter = painter_mod.Painter;
 const Config = config_mod.Config;
-const slog = log.scoped("activity");
+const slog = log.Scoped("activity");
 
 /// Independent of the overlay refresh, and also the cap when an alert's throttle is 0.
 const ALERT_CHECK_INTERVAL_MS: i64 = 1000;

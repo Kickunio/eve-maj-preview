@@ -6,7 +6,7 @@ const log = @import("../log.zig");
 
 const KeyList = key_list.KeyList;
 const KeyListWire = key_list.KeyListWire;
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 /// ARGB color, serialized as an 8-digit hex string, e.g. "0xFF606060".
 pub const Argb = struct {

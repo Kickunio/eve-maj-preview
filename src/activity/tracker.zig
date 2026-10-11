@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 
-const slog = log.scoped("activity_tracker");
+const slog = log.Scoped("activity_tracker");
 
 /// Ring-buffer capacity per character; a window holding more events is rated over the time the newest 512 span.
 const RING_CAPACITY = 512;

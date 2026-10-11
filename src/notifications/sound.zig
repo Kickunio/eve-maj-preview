@@ -6,7 +6,7 @@ const log = @import("../log.zig");
 
 const windows = std.os.windows;
 const HANDLE = win32.HANDLE;
-const slog = log.scoped("sound");
+const slog = log.Scoped("sound");
 
 const HRESULT = c_long;
 const WCHAR = u16;

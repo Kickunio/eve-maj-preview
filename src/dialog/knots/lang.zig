@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const EN_JSON = @embedFile("../../lang/en.json");
 

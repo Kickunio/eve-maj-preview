@@ -3,7 +3,7 @@ const std = @import("std");
 const win32 = @import("platform/win32.zig");
 const config_mod = @import("config.zig");
 const update = @import("update.zig");
-const client_actions = @import("clients/actions.zig");
+const actions = @import("clients/actions.zig");
 const hotkeys = @import("hotkeys/manager.zig");
 const painter_mod = @import("painter.zig");
 const auto_minimize = @import("clients/auto_minimize.zig");
@@ -13,7 +13,7 @@ const alert_effects = @import("notifications/alert_effects.zig");
 const main = @import("main.zig");
 const log = @import("log.zig");
 
-const slog = log.scoped("tray");
+const slog = log.Scoped("tray");
 
 /// IDI_ICON1 in app.rc: the icon built into the exe.
 const APP_ICON_ID = 101;
@@ -25,11 +25,11 @@ pub const TrayIcon = struct {
     nid: win32.NOTIFYICONDATAA,
     allocator: std.mem.Allocator,
     owns_icon: bool,
-    /// The profiles the menu last listed, which a profile item's ID indexes into.
+    /// The profiles the menu last listed, which a profile item's ID indexes into; owned, freed by freeProfiles.
     profiles: std.ArrayList([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, hwnd: win32.HWND) !TrayIcon {
-        var tray = TrayIcon{
+        var tray: TrayIcon = .{
             .hwnd = hwnd,
             .nid = std.mem.zeroes(win32.NOTIFYICONDATAA),
             .allocator = allocator,
@@ -94,7 +94,7 @@ pub const TrayIcon = struct {
 
     fn showContextMenu(self: *TrayIcon, config: *const config_mod.Config) void {
         var cursor_position: win32.POINT = undefined;
-        if (win32.GetCursorPos(&cursor_position) == 0) {
+        if (!win32.toBool(win32.GetCursorPos(&cursor_position))) {
             slog.err("Failed to get cursor position", .{});
             return;
         }
@@ -195,9 +195,9 @@ pub const TrayIcon = struct {
                 knots_host.open();
             },
             win32.IDM_TOGGLE_DRAGGING => {
-                const enabled = !config.interaction.enableDragging;
-                store.update(.{ .interaction = .{ .enableDragging = enabled } });
-                slog.info("Thumbnail dragging toggled: {s}", .{if (enabled) "enabled" else "disabled"});
+                const is_enabled = !config.interaction.enableDragging;
+                store.update(.{ .interaction = .{ .enableDragging = is_enabled } });
+                slog.info("Thumbnail dragging toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
             },
             win32.IDM_TOGGLE_AUTO_MINIMIZE => {
                 const painter = painter_mod.g_painter_ptr orelse {
@@ -207,9 +207,9 @@ pub const TrayIcon = struct {
                 auto_minimize.toggle(painter);
             },
             win32.IDM_TOGGLE_TRAVEL_MODE => {
-                const enabled = !config.travel.enabled;
-                store.update(.{ .travel = .{ .enabled = enabled } });
-                slog.info("Travel Mode toggled: {s}", .{if (enabled) "enabled" else "disabled"});
+                const is_enabled = !config.travel.enabled;
+                store.update(.{ .travel = .{ .enabled = is_enabled } });
+                slog.info("Travel Mode toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
             },
             win32.IDM_TOGGLE_VISIBILITY => {
                 slog.info("Toggle visibility requested from system tray", .{});
@@ -253,7 +253,7 @@ pub const TrayIcon = struct {
                     slog.err("Failed to close all clients: Scout isn't ready", .{});
                     return;
                 };
-                client_actions.closeAllClients(scout.getWindows(), config);
+                actions.closeAllClients(scout.getWindows(), config);
             },
             win32.IDM_UPDATE => {
                 slog.info("Opening releases page from tray menu", .{});
@@ -264,8 +264,8 @@ pub const TrayIcon = struct {
     }
 };
 
-fn appendChecked(menu: win32.HMENU, checked: bool, id: usize, label: [*:0]const u8) void {
+fn appendChecked(menu: win32.HMENU, is_checked: bool, id: usize, label: [*:0]const u8) void {
     var flags: u32 = win32.MF_STRING;
-    if (checked) flags |= win32.MF_CHECKED;
+    if (is_checked) flags |= win32.MF_CHECKED;
     _ = win32.AppendMenuA(menu, flags, id, label);
 }

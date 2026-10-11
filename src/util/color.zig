@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 
-const slog = log.scoped("color");
+const slog = log.Scoped("color");
 
 const DISTINCT_HUE_STEPS = 36;
 const DISTINCT_LIGHTNESS = [_]f32{ 0.70, 0.80, 0.90 };

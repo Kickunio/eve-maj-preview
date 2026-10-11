@@ -4,7 +4,7 @@ const win32 = @import("../platform/win32.zig");
 const config_mod = @import("../config.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("scout");
+const slog = log.Scoped("scout");
 
 /// character_name before login or after logout while the client window stays open.
 const GENERIC_CHARACTER_NAME = "EVE";

@@ -3,7 +3,7 @@ const win32 = @import("win32.zig");
 const virtual_keys = @import("virtual_keys.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("focus_grant");
+const slog = log.Scoped("focus_grant");
 
 const FOCUS_GRANT_VK: win32.UINT = virtual_keys.VK_FOCUS_GRANT;
 const FOCUS_GRANT_ID_BASE: c_int = 9000;

@@ -3,13 +3,12 @@ const std = @import("std");
 const win32 = @import("platform/win32.zig");
 const log = @import("log.zig");
 
-const slog = log.scoped("protocol");
+const slog = log.Scoped("protocol");
 
 /// Window class of the main app's hidden timer window, the target of every WM_COPYDATA command; a second CLI invocation finds the running instance by it.
 pub const MAIN_WINDOW_CLASS = "EVE_TIMER_CLASS";
 
-/// Global hotkey actions; hotkeys/bindings.zig's GLOBAL_BINDINGS maps each to its HotkeyAction.
-/// Backing type must match win32.WPARAM (usize): sent as the WM_PROTOCOL_HOTKEY wParam.
+/// Sent as the WM_PROTOCOL_HOTKEY wParam, so backed by usize; hotkeys/bindings.zig's GLOBAL_BINDINGS maps each to its HotkeyAction.
 pub const GlobalAction = enum(usize) {
     minimize_all,
     close_all,
@@ -52,7 +51,7 @@ pub const Command = union(enum) {
     }
 };
 
-/// `evemajpreview://action/params`; free the result with Command.deinit.
+/// `evemajpreview://action/params`; logs each failure, and the result is freed with Command.deinit.
 pub fn parseUrl(url: []const u8, allocator: std.mem.Allocator) !Command {
     const protocol_prefix = "evemajpreview://";
     if (!std.mem.startsWith(u8, url, protocol_prefix)) {
@@ -61,29 +60,25 @@ pub fn parseUrl(url: []const u8, allocator: std.mem.Allocator) !Command {
     }
 
     const path = url[protocol_prefix.len..];
-    var iter = std.mem.splitScalar(u8, path, '/');
-
-    const action = iter.next() orelse {
-        slog.err("Failed to parse protocol URL '{s}': no action", .{url});
-        return error.MissingAction;
-    };
+    var segments = std.mem.splitScalar(u8, path, '/');
+    const action = segments.first();
 
     if (std.mem.eql(u8, action, "switch")) {
-        const character_name_encoded = iter.next() orelse {
+        const character_name_encoded = segments.next() orelse {
             slog.err("Failed to parse switch command: no character name", .{});
             return error.MissingParameter;
         };
         const character_name = try urlDecode(allocator, character_name_encoded);
-        return Command{ .switch_character = character_name };
+        return .{ .switch_character = character_name };
     } else if (std.mem.eql(u8, action, "profile")) {
-        const profile_name_encoded = iter.next() orelse {
+        const profile_name_encoded = segments.next() orelse {
             slog.err("Failed to parse profile command: no profile name", .{});
             return error.MissingParameter;
         };
         const profile_name = try urlDecode(allocator, profile_name_encoded);
-        return Command{ .profile = profile_name };
+        return .{ .profile = profile_name };
     } else if (std.mem.eql(u8, action, "hotkey")) {
-        const hotkey_action = iter.next() orelse {
+        const hotkey_action = segments.next() orelse {
             slog.err("Failed to parse hotkey command: no action", .{});
             return error.MissingParameter;
         };
@@ -91,7 +86,7 @@ pub fn parseUrl(url: []const u8, allocator: std.mem.Allocator) !Command {
             slog.err("Failed to parse hotkey command: unknown action '{s}'", .{hotkey_action});
             return error.InvalidGlobalAction;
         };
-        return Command{ .hotkey = parsed_action };
+        return .{ .hotkey = parsed_action };
     } else {
         slog.err("Failed to parse protocol URL: unknown action '{s}'", .{action});
         return error.InvalidAction;
@@ -105,22 +100,19 @@ pub fn findExistingInstance() ?win32.HWND {
 /// Hands a --protocol URL to the already-running instance; protocol URLs never start one.
 pub fn forwardToRunningInstance(url: []const u8, allocator: std.mem.Allocator) !void {
     const existing_hwnd = findExistingInstance() orelse {
-        slog.warn("No existing instance found, protocol command ignored", .{});
+        slog.warn("Failed to forward the protocol command: no running instance", .{});
         return error.MissingInstance;
     };
 
-    const cmd = parseUrl(url, allocator) catch |err| {
-        slog.err("Failed to parse protocol URL: {}", .{err});
-        return err;
-    };
-    defer cmd.deinit(allocator);
+    const command = try parseUrl(url, allocator);
+    defer command.deinit(allocator);
 
-    sendCommandToInstance(existing_hwnd, cmd);
+    sendCommandToInstance(existing_hwnd, command);
     slog.info("Protocol command sent successfully", .{});
 }
 
-pub fn sendCommandToInstance(hwnd: win32.HWND, cmd: Command) void {
-    switch (cmd) {
+pub fn sendCommandToInstance(hwnd: win32.HWND, command: Command) void {
+    switch (command) {
         .switch_character => |character_name| {
             sendCopyData(hwnd, win32.PROTOCOL_SWITCH_CHARACTER, character_name);
             slog.info("Sent switch to '{s}'", .{character_name});
@@ -141,9 +133,9 @@ pub fn sendCommandToInstance(hwnd: win32.HWND, cmd: Command) void {
 }
 
 /// Receiving side of sendCopyData; null for a message sent without a payload.
-pub fn copyDataBytes(cds: *const win32.COPYDATASTRUCT) ?[]const u8 {
-    const data_ptr = cds.lpData orelse return null;
-    return @as([*]const u8, @ptrCast(data_ptr))[0..cds.cbData];
+pub fn copyDataBytes(copy_data: *const win32.COPYDATASTRUCT) ?[]const u8 {
+    const data_ptr = copy_data.lpData orelse return null;
+    return @as([*]const u8, @ptrCast(data_ptr))[0..copy_data.cbData];
 }
 
 /// Returns the protocol URL if --protocol was passed (caller must free), otherwise null.
@@ -174,41 +166,35 @@ pub fn ensureRegistered(allocator: std.mem.Allocator) void {
     }
 
     slog.info("Protocol handler not registered, attempting auto-registration", .{});
-    const success = register(allocator) catch |err| blk: {
-        slog.warn("Failed to auto-register protocol handler: {}", .{err});
-        slog.warn("You may need to run as administrator or manually register using register-protocol.reg", .{});
-        break :blk false;
+    register(allocator) catch |err| {
+        slog.warn("Failed to auto-register protocol handler (run as administrator, or use register-protocol.reg): {}", .{err});
     };
-    if (success) {
-        slog.info("Protocol handler successfully registered", .{});
-    } else {
-        slog.warn("Failed to register protocol handler", .{});
-    }
 }
 
 pub fn isRegistered() bool {
-    var hKey: win32.HKEY = undefined;
+    var key: win32.HKEY = undefined;
     const result = win32.RegOpenKeyExA(
         win32.HKEY_CURRENT_USER,
         "Software\\Classes\\evemajpreview",
         0,
         win32.KEY_READ,
-        &hKey,
+        &key,
     );
 
     if (result == win32.ERROR_SUCCESS) {
-        _ = win32.RegCloseKey(hKey);
+        _ = win32.RegCloseKey(key);
         return true;
     }
 
     return false;
 }
 
-pub fn register(allocator: std.mem.Allocator) !bool {
+/// Logs the failing registry call before returning error.RegistryWriteFailed.
+fn register(allocator: std.mem.Allocator) !void {
     var exe_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const exe_path = try win32.selfExePath(&exe_path_buf);
 
-    var hKey: win32.HKEY = undefined;
+    var key: win32.HKEY = undefined;
     var disposition: win32.DWORD = undefined;
 
     // HKCU rather than HKEY_CLASSES_ROOT: the latter falls back to HKLM for new keys, which requires admin rights.
@@ -220,19 +206,19 @@ pub fn register(allocator: std.mem.Allocator) !bool {
         win32.REG_OPTION_NON_VOLATILE,
         win32.KEY_WRITE,
         null,
-        &hKey,
+        &key,
         &disposition,
     );
 
     if (result != win32.ERROR_SUCCESS) {
         slog.err("Failed to create registry key HKCU\\Software\\Classes\\evemajpreview: error {}", .{result});
-        return false;
+        return error.RegistryWriteFailed;
     }
-    defer _ = win32.RegCloseKey(hKey);
+    defer _ = win32.RegCloseKey(key);
 
     const description = "URL:EVE-Maj Preview Protocol";
     result = win32.RegSetValueExA(
-        hKey,
+        key,
         null,
         0,
         win32.REG_SZ,
@@ -242,12 +228,12 @@ pub fn register(allocator: std.mem.Allocator) !bool {
 
     if (result != win32.ERROR_SUCCESS) {
         slog.err("Failed to set default value: error {}", .{result});
-        return false;
+        return error.RegistryWriteFailed;
     }
 
     const url_protocol = "";
     result = win32.RegSetValueExA(
-        hKey,
+        key,
         "URL Protocol",
         0,
         win32.REG_SZ,
@@ -257,10 +243,10 @@ pub fn register(allocator: std.mem.Allocator) !bool {
 
     if (result != win32.ERROR_SUCCESS) {
         slog.err("Failed to set URL Protocol value: error {}", .{result});
-        return false;
+        return error.RegistryWriteFailed;
     }
 
-    var hCommandKey: win32.HKEY = undefined;
+    var command_key: win32.HKEY = undefined;
     result = win32.RegCreateKeyExA(
         win32.HKEY_CURRENT_USER,
         "Software\\Classes\\evemajpreview\\shell\\open\\command",
@@ -269,22 +255,22 @@ pub fn register(allocator: std.mem.Allocator) !bool {
         win32.REG_OPTION_NON_VOLATILE,
         win32.KEY_WRITE,
         null,
-        &hCommandKey,
+        &command_key,
         &disposition,
     );
 
     if (result != win32.ERROR_SUCCESS) {
         slog.err("Failed to create command key: error {}", .{result});
-        return false;
+        return error.RegistryWriteFailed;
     }
-    defer _ = win32.RegCloseKey(hCommandKey);
+    defer _ = win32.RegCloseKey(command_key);
 
     // \x00 is embedded in the format string itself, so command.len already covers the terminator (unlike description/url_protocol above, which need +1).
     const command = try allocator.print("\"{s}\" --protocol \"%1\"\x00", .{exe_path});
     defer allocator.free(command);
 
     result = win32.RegSetValueExA(
-        hCommandKey,
+        command_key,
         null,
         0,
         win32.REG_SZ,
@@ -294,11 +280,10 @@ pub fn register(allocator: std.mem.Allocator) !bool {
 
     if (result != win32.ERROR_SUCCESS) {
         slog.err("Failed to set command value: error {}", .{result});
-        return false;
+        return error.RegistryWriteFailed;
     }
 
     slog.info("Protocol handler registered successfully: {s}", .{exe_path});
-    return true;
 }
 
 fn urlDecode(allocator: std.mem.Allocator, encoded: []const u8) ![]const u8 {
@@ -330,12 +315,12 @@ fn urlDecode(allocator: std.mem.Allocator, encoded: []const u8) ![]const u8 {
 
 /// Synchronous, so `payload` only has to outlive the call; an empty payload is sent as a null lpData.
 fn sendCopyData(hwnd: win32.HWND, kind: usize, payload: []const u8) void {
-    const cds = win32.COPYDATASTRUCT{
+    const copy_data: win32.COPYDATASTRUCT = .{
         .dwData = kind,
         .cbData = @intCast(payload.len),
         .lpData = if (payload.len > 0) payload.ptr else null,
     };
-    _ = win32.SendMessageA(hwnd, win32.WM_COPYDATA, 0, @intCast(@intFromPtr(&cds)));
+    _ = win32.SendMessageA(hwnd, win32.WM_COPYDATA, 0, @intCast(@intFromPtr(&copy_data)));
 }
 
 const testing = std.testing;

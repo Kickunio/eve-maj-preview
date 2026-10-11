@@ -3,7 +3,7 @@ const std = @import("std");
 const config = @import("../../config.zig");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("ultra_potato");
+const slog = log.Scoped("ultra_potato");
 
 /// The client's lowest-quality sentinel value.
 const LOWEST_QUALITY = "-300";

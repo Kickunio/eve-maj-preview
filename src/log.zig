@@ -3,6 +3,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const win32 = @import("platform/win32.zig");
 
+const slog = Scoped("log");
+
 pub const LOG_DIR = "logs";
 pub const LOG_FILE_NAME = LOG_DIR ++ "/eve-maj.log";
 pub const LOG_FILE_NAME_OLD = LOG_DIR ++ "/eve-maj.log.old";
@@ -30,14 +32,14 @@ pub const LogLevel = enum {
 
 var g_level: LogLevel = .err;
 /// std.debug.print caches its stderr handle on first use, so printing before AllocConsole would keep a dead one; true only while the console is shown.
-var g_console_ready = false;
+var g_is_console_shown = false;
 /// The console is hidden rather than freed, since a reallocated one would get a handle the cached one doesn't match.
-var g_console_allocated = false;
+var g_has_console = false;
 
 var g_io: std.Io = undefined;
-var g_log_file: ?std.Io.File = null;
+/// Guards the file and buffer below, which every logging thread writes.
 var g_log_mutex: std.Io.Mutex = .init;
-
+var g_log_file: ?std.Io.File = null;
 /// Buffers debug/info lines, so the frequent debug-level scan tick costs a memcpy rather than a write syscall.
 var g_log_buf: [16 * 1024]u8 = undefined;
 var g_log_buf_len: usize = 0;
@@ -51,26 +53,25 @@ pub fn setIo(io: std.Io) void {
     g_io = io;
 }
 
-/// Pops a console for debug logging, since the Windows GUI subsystem doesn't create one; std.debug.print's console mirror stays off until this runs (see g_console_ready).
-/// Does nothing once the console is open; shows it again after closeDebugConsole.
+/// Pops (or shows again) a console for debug logging, since the GUI subsystem doesn't create one; std.debug.print's mirror stays off until then.
 pub fn openDebugConsole() void {
-    if (g_console_ready) return;
-    if (g_console_allocated) {
+    if (g_is_console_shown) return;
+    if (g_has_console) {
         if (win32.GetConsoleWindow()) |hwnd| _ = win32.ShowWindow(hwnd, win32.SW_SHOW);
     } else {
         _ = win32.AllocConsole();
-        g_console_allocated = true;
+        g_has_console = true;
         // Closing the console window kills the process before any `defer` can run, so buffered lines are flushed from its ctrl handler instead.
         _ = win32.SetConsoleCtrlHandler(consoleCtrlHandler, win32.TRUE);
         disableQuickEdit();
     }
-    g_console_ready = true;
+    g_is_console_shown = true;
 }
 
 /// Hides the console and stops mirroring to it; openDebugConsole shows it again.
 pub fn closeDebugConsole() void {
-    if (!g_console_ready) return;
-    g_console_ready = false;
+    if (!g_is_console_shown) return;
+    g_is_console_shown = false;
     if (win32.GetConsoleWindow()) |hwnd| _ = win32.ShowWindow(hwnd, win32.SW_HIDE);
 }
 
@@ -96,19 +97,19 @@ pub fn writeCrashLine(comptime fmt: []const u8, args: anytype) void {
     defer g_log_mutex.unlock(g_io);
 
     flushLocked();
-    var ts_buf: [23]u8 = undefined;
+    var timestamp_buf: [23]u8 = undefined;
     var line_buf: [512]u8 = undefined;
-    appendLocked(formatLine(&line_buf, "[{s}][CRASH] " ++ fmt ++ "\n", .{formatTimestamp(&ts_buf)} ++ args));
+    appendLocked(formatLine(&line_buf, "[{s}][CRASH] " ++ fmt ++ "\n", .{formatTimestamp(&timestamp_buf)} ++ args));
 }
 
-pub fn scoped(comptime scope: []const u8) type {
+pub fn Scoped(comptime scope: []const u8) type {
     return struct {
         inline fn logImpl(comptime level: LogLevel, comptime fmt: []const u8, args: anytype) void {
             if (shouldLog(level)) {
-                var ts_buf: [23]u8 = undefined;
-                const ts = formatTimestamp(&ts_buf);
-                writeToFile(level, ts, scope, fmt, args);
-                if (g_console_ready) std.debug.print("[{s}][{s}][{s}] " ++ fmt ++ "\n", .{ ts, level.asString(), scope } ++ args);
+                var timestamp_buf: [23]u8 = undefined;
+                const timestamp = formatTimestamp(&timestamp_buf);
+                writeToFile(level, timestamp, scope, fmt, args);
+                if (g_is_console_shown) std.debug.print("[{s}][{s}][{s}] " ++ fmt ++ "\n", .{ timestamp, level.asString(), scope } ++ args);
             }
         }
 
@@ -132,9 +133,8 @@ pub fn scoped(comptime scope: []const u8) type {
 
 /// A click in a QuickEdit console starts a selection that blocks every console write until it ends, freezing whichever thread logs next.
 fn disableQuickEdit() void {
-    const slog = scoped("log");
     const input = win32.GetStdHandle(win32.STD_INPUT_HANDLE) orelse {
-        slog.warn("No console input handle; clicking the debug console can pause the app", .{});
+        slog.warn("Failed to get the console input handle; clicking the debug console can pause the app", .{});
         return;
     };
     var mode: win32.DWORD = 0;
@@ -182,10 +182,10 @@ fn shouldLog(level: LogLevel) bool {
 }
 
 fn formatTimestamp(buf: *[23]u8) []const u8 {
-    var st: win32.SYSTEMTIME = undefined;
-    win32.GetLocalTime(&st);
+    var system_time: win32.SYSTEMTIME = undefined;
+    win32.GetLocalTime(&system_time);
     return std.mem.print(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{
-        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+        system_time.wYear, system_time.wMonth, system_time.wDay, system_time.wHour, system_time.wMinute, system_time.wSecond, system_time.wMilliseconds,
     }) catch "????-??-?? ??:??:??.???";
 }
 
@@ -233,12 +233,12 @@ fn flushLocked() void {
 }
 
 /// Callers already passed shouldLog; warnings and errors flush at once, so they survive a crash right after.
-inline fn writeToFile(comptime level: LogLevel, ts: []const u8, comptime scope: []const u8, comptime fmt: []const u8, args: anytype) void {
+inline fn writeToFile(comptime level: LogLevel, timestamp: []const u8, comptime scope: []const u8, comptime fmt: []const u8, args: anytype) void {
     g_log_mutex.lock(g_io) catch return;
     defer g_log_mutex.unlock(g_io);
 
     var line_buf: [2048]u8 = undefined;
-    const line = formatLine(&line_buf, "[{s}][{s}][{s}] " ++ fmt ++ "\n", .{ ts, comptime level.asString(), scope } ++ args);
+    const line = formatLine(&line_buf, "[{s}][{s}][{s}] " ++ fmt ++ "\n", .{ timestamp, comptime level.asString(), scope } ++ args);
 
     if (line.len > g_log_buf.len - g_log_buf_len) flushLocked();
     @memcpy(g_log_buf[g_log_buf_len..][0..line.len], line);

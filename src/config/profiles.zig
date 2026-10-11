@@ -5,7 +5,7 @@ const config_mod = @import("../config.zig");
 const log = @import("../log.zig");
 
 const Config = config_mod.Config;
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 /// A profile's display name, without ".json"; longer names from older versions still load.
 pub const MAX_NAME_LENGTH: usize = 16;

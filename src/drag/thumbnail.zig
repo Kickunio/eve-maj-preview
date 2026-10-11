@@ -9,7 +9,7 @@ const log = @import("../log.zig");
 
 const Painter = painter_mod.Painter;
 const ThumbnailWindow = painter_mod.ThumbnailWindow;
-const slog = log.scoped("drag");
+const slog = log.Scoped("drag");
 
 const DragState = struct {
     /// Null when no drag is in progress.

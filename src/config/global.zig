@@ -7,7 +7,7 @@ const ranges_mod = @import("ranges.zig");
 const log = @import("../log.zig");
 
 const KeyList = key_list.KeyList;
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 /// Not ".json", which would list it as a profile.
 const UNREADABLE_BACKUP_FILE = files.GLOBAL_SETTINGS_FILE ++ ".bak";

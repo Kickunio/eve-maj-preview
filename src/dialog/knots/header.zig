@@ -22,7 +22,7 @@ const TextInput = ui.component.TextInput;
 const ColorPicker = ui.component.ColorPicker;
 const SelectInput = ui.component.SelectInput;
 const Color = ui.Color;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const COPY_SUFFIX = " - Copy";
 /// A new profile's accent colour, Config's own default.

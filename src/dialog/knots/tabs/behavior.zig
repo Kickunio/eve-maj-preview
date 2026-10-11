@@ -15,7 +15,7 @@ const log = @import("../../../log.zig");
 
 const Button = ui.component.Button;
 const SelectInput = ui.component.SelectInput;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const PROTOCOL_DOCS_URL = "https://github.com/mrmjstc/eve-maj-preview/blob/main/docs/CONFIGURATION.md#protocol-handler";
 

@@ -6,7 +6,7 @@ const hook_bindings = @import("hook_bindings.zig");
 const log = @import("../log.zig");
 
 const HookBindings = hook_bindings.HookBindings;
-const slog = log.scoped("hotkeys");
+const slog = log.Scoped("hotkeys");
 
 var g_hook: HookBindings = .{
     .hook_type = win32.WH_KEYBOARD_LL,

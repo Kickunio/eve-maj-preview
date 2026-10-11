@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 /// 20% of 255 up to fully opaque; below that, thumbnails and overlays effectively vanish.
 pub const OPACITY = .{ 51, 255 };

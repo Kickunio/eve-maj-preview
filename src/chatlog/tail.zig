@@ -4,7 +4,7 @@ const lines_mod = @import("lines.zig");
 const utf16 = @import("utf16.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("chatlog");
+const slog = log.Scoped("chatlog");
 
 const READ_CHUNK_SIZE = 4096;
 /// So a big backlog can't hold up the other files.

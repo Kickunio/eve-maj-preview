@@ -7,7 +7,7 @@ const animation = @import("animation.zig");
 const exclusions = @import("../hotkeys/exclusions.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("actions");
+const slog = log.Scoped("actions");
 
 /// Kept clear of the screen edges so a restored window's title bar stays grabbable.
 const SCREEN_EDGE_MARGIN: i32 = 30;

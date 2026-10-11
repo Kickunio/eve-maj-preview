@@ -17,7 +17,7 @@ const Text = ui.component.Text;
 const Button = ui.component.Button;
 const TextInput = ui.component.TextInput;
 const KeyList = key_list.KeyList;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// Matches writeVirtualKey's order.
 const MODIFIER_ORDER = [_]struct { flag: u32, name: []const u8 }{

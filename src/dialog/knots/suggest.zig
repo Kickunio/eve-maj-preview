@@ -7,7 +7,7 @@ const log = @import("../../log.zig");
 
 const Rect = ui.component.Rect;
 const Button = ui.component.Button;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// The box whose list is showing; kept while the mouse is down on the list, since pressing it takes the box's focus.
 var g_open_for: ?u64 = null;

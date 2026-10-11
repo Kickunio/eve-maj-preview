@@ -10,7 +10,7 @@ const manager_mod = @import("manager.zig");
 const log = @import("../log.zig");
 
 const HotkeyManager = manager_mod.HotkeyManager;
-const slog = log.scoped("hotkeys");
+const slog = log.Scoped("hotkeys");
 
 /// Cursors for the cycles whose position isn't kept in config (hotkey groups) or hotkey_map (per-character hotkeys).
 pub const CycleState = struct {

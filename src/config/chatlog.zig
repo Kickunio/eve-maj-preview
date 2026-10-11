@@ -6,7 +6,7 @@ const ranges_mod = @import("ranges.zig");
 const files = @import("files.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 pub const ChatlogConfig = struct {
     enabled: bool = false,

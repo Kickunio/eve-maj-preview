@@ -2,7 +2,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 
-const slog = log.scoped("config");
+const slog = log.Scoped("config");
 
 /// How every settings file is read: keys this version doesn't know are ignored.
 pub const PARSE_OPTIONS: std.json.ParseOptions = .{ .ignore_unknown_fields = true };

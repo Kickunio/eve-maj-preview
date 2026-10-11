@@ -7,7 +7,7 @@ const style = @import("style.zig");
 const log = @import("../../log.zig");
 
 const SelectInput = ui.component.SelectInput;
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 const PROMPT = "-- Select a running window --";
 

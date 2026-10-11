@@ -17,7 +17,7 @@ const keyboard_hook = @import("hotkeys/keyboard_hook.zig");
 const paste_upload = @import("hotkeys/paste_upload.zig");
 const chatlog = @import("chatlog.zig");
 const character_ids = @import("chatlog/character_ids.zig");
-const activity = @import("activity/runtime.zig");
+const runtime = @import("activity/runtime.zig");
 const tts = @import("notifications/tts.zig");
 const sound = @import("notifications/sound.zig");
 const travel_left_behind = @import("travel/left_behind.zig");
@@ -29,7 +29,7 @@ const schedule = @import("util/schedule.zig");
 const log = @import("log.zig");
 
 const CharacterIds = character_ids.CharacterIds;
-const slog = log.scoped("main");
+const slog = log.Scoped("main");
 
 const TIMER_ID: usize = 1;
 /// Timed rather than counted in ticks, so a slower scan interval doesn't stretch it; each scan is a full EnumWindows.
@@ -37,7 +37,10 @@ const FORCED_SCAN_INTERVAL_MS: u64 = 1000;
 /// With no window tracked and the configuration window closed there's nothing to draw, so the tick only keeps up with the scan.
 const IDLE_TICK_INTERVAL_MS: win32.UINT = FORCED_SCAN_INTERVAL_MS;
 const TRAVEL_CHECK_INTERVAL_MS: u64 = 2000;
-const PROFILE_NAME_BUF = 256;
+const PROFILE_NAME_BUFFER_SIZE = 256;
+
+/// Routes panics into eve-maj.log; Zig only looks for `panic` in the root source file.
+pub const panic = std.debug.FullPanic(crash.handlePanic);
 
 /// How far a live profile edit moves thumbnails: `spaces` reflows only while a thumbnail space is active, `all` repositions every thumbnail.
 pub const LiveLayout = enum { none, spaces, all };
@@ -45,7 +48,7 @@ pub const LiveLayout = enum { none, spaces, all };
 var g_allocator: std.mem.Allocator = undefined;
 var g_io: std.Io = undefined;
 var g_chatlog_monitor: ?*chatlog.ChatlogMonitor = null;
-var g_trackers: activity.Trackers = undefined;
+var g_trackers: runtime.Trackers = undefined;
 
 // Public for the configuration window, which edits them in this process.
 pub var g_store: config.ProfileStore = undefined;
@@ -58,15 +61,12 @@ var g_update_checker: ?update.UpdateChecker = null;
 /// Public so other modules can post to it without having it passed through every call.
 pub var g_timer_hwnd: ?win32.HWND = null;
 
-var g_pending_profile_buf: [PROFILE_NAME_BUF]u8 = undefined;
+var g_pending_profile_buf: [PROFILE_NAME_BUFFER_SIZE]u8 = undefined;
 var g_pending_profile: ?[]const u8 = null;
 
 var g_last_forced_scan: win32.Ticks = .{};
 var g_tick_interval_ms: win32.UINT = 0;
-var g_last_travel_check_ms: win32.Ticks = .{};
-
-/// Routes panics into eve-maj.log; Zig only looks for `panic` in the root source file.
-pub const panic = std.debug.FullPanic(crash.handlePanic);
+var g_last_travel_check: win32.Ticks = .{};
 
 pub fn main(init: std.process.Init) void {
     // Must precede any window/monitor API call, or Windows bitmap-stretches our windows on scaled monitors.
@@ -85,8 +85,7 @@ pub fn main(init: std.process.Init) void {
     };
 }
 
-/// Switches on the next message-loop turn rather than inside the tray menu or hotkey handler asking, which the switch would tear down under it.
-/// Keeps its own copy of `profile_name`, so the caller's may be freed straight away.
+/// Switches on the next message-loop turn, not inside the tray menu or hotkey handler that asked and would be torn down under it; copies `profile_name`.
 pub fn requestProfileSwitch(profile_name: []const u8) void {
     if (profile_name.len > g_pending_profile_buf.len) {
         slog.err("Failed to switch to profile '{s}': name too long", .{profile_name});
@@ -112,8 +111,7 @@ pub fn switchToSavedProfile(profile_name: []const u8, global_draft: ?*config.Glo
     try reloadWithProfile(profile_name, global_draft);
 }
 
-/// After the config dialog saves the running profile or global settings: the parts that only read them at setup (hotkeys, chatlog, timer, window filters) start over.
-/// `global_draft`, if given, becomes the running global settings (see GlobalConfig.adopt), leaving it holding the replaced values.
+/// After a Save of the running profile or global settings, restarts what only reads them at setup; `global_draft`, if given, is adopted and left holding the replaced values.
 pub fn applySavedSettings(global_draft: ?*config.GlobalConfig) !void {
     const timer_hwnd = g_timer_hwnd orelse return error.MissingTimerWindow;
     try restartSubsystems(timer_hwnd, null, global_draft);
@@ -182,13 +180,11 @@ fn mainImpl(init: std.process.Init) !void {
     const open_config = try hasArgument(init.minimal.args, "--config");
 
     const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Global\\EVE-Maj-Preview-SingleInstance");
-    const instance_mutex = win32.CreateMutexW(null, win32.TRUE, mutex_name);
-
-    if (instance_mutex == null) {
+    const instance_mutex = win32.CreateMutexW(null, win32.TRUE, mutex_name) orelse {
         slog.err("Failed to create instance mutex", .{});
-        return error.MutexCreationFailed;
-    }
-    defer _ = win32.CloseHandle(instance_mutex.?);
+        return error.CreateMutexFailed;
+    };
+    defer _ = win32.CloseHandle(instance_mutex);
 
     const last_error = win32.GetLastError();
     if (last_error == win32.ERROR_ALREADY_EXISTS) {
@@ -222,25 +218,26 @@ fn mainImpl(init: std.process.Init) !void {
     defer args_arena.deinit();
     const args = try init.minimal.args.toSlice(args_arena.allocator());
 
-    var j: usize = 1;
-    while (j < args.len) : (j += 1) {
-        if (std.mem.eql(u8, args[j], "--profile") or std.mem.eql(u8, args[j], "-p")) {
-            if (j + 1 < args.len) {
-                profile_name = args[j + 1];
-                j += 1;
+    var arg_index: usize = 1;
+    while (arg_index < args.len) : (arg_index += 1) {
+        const arg = args[arg_index];
+        if (std.mem.eql(u8, arg, "--profile") or std.mem.eql(u8, arg, "-p")) {
+            if (arg_index + 1 < args.len) {
+                profile_name = args[arg_index + 1];
+                arg_index += 1;
             } else {
                 slog.err("Failed to parse arguments: --profile needs a profile name", .{});
                 return error.InvalidArguments;
             }
-        } else if (std.mem.eql(u8, args[j], "--config")) {
+        } else if (std.mem.eql(u8, arg, "--config")) {
             // Handled before the instance check above.
-        } else if (std.mem.eql(u8, args[j], "--protocol")) {
-            // Skip protocol arg (already handled above)
-            if (j + 1 < args.len) {
-                j += 1;
+        } else if (std.mem.eql(u8, arg, "--protocol")) {
+            // Its URL was handled above.
+            if (arg_index + 1 < args.len) {
+                arg_index += 1;
             }
         } else {
-            slog.err("Failed to parse arguments: unknown argument '{s}'", .{args[j]});
+            slog.err("Failed to parse arguments: unknown argument '{s}'", .{arg});
             return error.InvalidArguments;
         }
     }
@@ -343,7 +340,7 @@ fn mainImpl(init: std.process.Init) !void {
 
     // Thumbnails first, since they need no I/O; the chatlog monitor's slower log discovery follows.
     const eve_windows = scout_ptr.getWindows();
-    painter_ptr.populate(eve_windows, .{ .move_to_saved = g_store.live.autoMovePosition.moveOnStartup });
+    painter_ptr.populate(eve_windows, .{ .should_move_to_saved = g_store.live.autoMovePosition.moveOnStartup });
 
     if (g_chatlog_monitor) |monitor| addChatlogCharacters(monitor, eve_windows);
 
@@ -441,7 +438,7 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
             const pending = g_pending_profile orelse return 0;
             g_pending_profile = null;
             // Copied out, so a switch requested while this one runs can't overwrite the name in use.
-            var name_buf: [PROFILE_NAME_BUF]u8 = undefined;
+            var name_buf: [PROFILE_NAME_BUFFER_SIZE]u8 = undefined;
             const name = name_buf[0..pending.len];
             @memcpy(name, pending);
             slog.info("Switching to profile: {s}", .{name});
@@ -449,10 +446,10 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
             return 0;
         },
         win32.WM_COPYDATA => {
-            const cds = win32.lparamToPtr(win32.COPYDATASTRUCT, lParam);
-            const payload = protocol.copyDataBytes(cds);
+            const copy_data = win32.lparamToPtr(win32.COPYDATASTRUCT, lParam);
+            const payload = protocol.copyDataBytes(copy_data);
 
-            switch (cds.dwData) {
+            switch (copy_data.dwData) {
                 win32.PROTOCOL_SWITCH_CHARACTER => if (payload) |character_name| {
                     slog.info("Protocol handler: switch to character: {s}", .{character_name});
                     if (scout.g_scout_ptr) |scout_ptr| {
@@ -518,8 +515,8 @@ fn onTimerTick() void {
     g_trackers.tick(&g_store.live, scout_result.windows, @intCast(tick_start.ms), g_tick_interval_ms);
 
     if (painter.g_painter_ptr) |painter_ptr| {
-        if (schedule.isDue(@intCast(tick_start.elapsedSince(g_last_travel_check_ms)), TRAVEL_CHECK_INTERVAL_MS, g_tick_interval_ms)) {
-            g_last_travel_check_ms = tick_start;
+        if (schedule.isDue(@intCast(tick_start.elapsedSince(g_last_travel_check)), TRAVEL_CHECK_INTERVAL_MS, g_tick_interval_ms)) {
+            g_last_travel_check = tick_start;
             travel_left_behind.check(painter_ptr, tick_start);
         }
     }
@@ -575,7 +572,7 @@ fn buildPainter(windows: []const scout.EveWindow, system_names: *const painter.S
     if (hotkeys.g_hotkey_manager_ptr) |manager| manager.painter = new_painter;
     new_painter.populate(windows, .{
         // Clients are already where the user put them; only startup and new arrivals auto-move.
-        .move_to_saved = false,
+        .should_move_to_saved = false,
         // Only seeded if monitoring stays on to refresh it, or a stale name would freeze on screen forever.
         .system_names = if (g_store.saved.chatlog.enabled) system_names else null,
     });
@@ -685,13 +682,13 @@ fn restartSubsystems(timer_hwnd: win32.HWND, replacement: ?config.ProfileStore, 
     errdefer if (pending) |*store| store.deinit();
     const next: *const config.Config = if (pending) |*store| &store.saved else &g_store.saved;
 
-    const keep_chatlog_monitor = if (g_chatlog_monitor) |monitor| monitor.runsWith(&next.chatlog) else false;
+    const kept_monitor: ?*chatlog.ChatlogMonitor = if (g_chatlog_monitor) |monitor| (if (monitor.runsWith(&next.chatlog)) monitor else null) else null;
     // A Save keeps the painter: the dialog already previewed what was saved, so rebuilding would only flash every window.
     const rebuild_painter = pending != null or painter.g_painter_ptr == null;
 
-    if (keep_chatlog_monitor) {
+    if (kept_monitor) |monitor| {
         // Pause (not destroy) so the worker thread can't race the tracker swap below.
-        g_chatlog_monitor.?.stopWorkerThread();
+        monitor.stopWorkerThread();
         slog.debug("Paused chatlog monitor for reload (scan state preserved)", .{});
     } else if (g_chatlog_monitor != null) {
         destroyChatlogMonitor();
@@ -727,18 +724,17 @@ fn restartSubsystems(timer_hwnd: win32.HWND, replacement: ?config.ProfileStore, 
             return err;
         };
         slog.debug("Recreated {} thumbnail(s)", .{eve_windows.len});
-    } else {
-        const painter_ptr = painter.g_painter_ptr.?;
+    } else if (painter.g_painter_ptr) |painter_ptr| {
         // Windows the new filters admit.
-        painter_ptr.populate(eve_windows, .{ .move_to_saved = false });
+        painter_ptr.populate(eve_windows, .{ .should_move_to_saved = false });
     }
 
-    if (keep_chatlog_monitor) {
-        g_chatlog_monitor.?.applySettings(&g_store.saved.chatlog);
+    if (kept_monitor) |monitor| {
+        monitor.applySettings(&g_store.saved.chatlog);
         slog.debug("Applied reload settings to paused chatlog monitor", .{});
     } else if (g_store.saved.chatlog.enabled) {
         g_chatlog_monitor = createChatlogMonitor() catch |err| blk: {
-            slog.warn("Failed to initialize chatlog monitor: {}", .{err});
+            slog.err("Failed to initialize chatlog monitor: {}", .{err});
             break :blk null;
         };
     } else {
@@ -750,7 +746,7 @@ fn restartSubsystems(timer_hwnd: win32.HWND, replacement: ?config.ProfileStore, 
 
     if (g_chatlog_monitor) |monitor| {
         startChatlogWorker(monitor);
-        if (keep_chatlog_monitor) {
+        if (kept_monitor != null) {
             slog.info("Resumed chatlog monitoring without rescanning logs", .{});
         } else {
             addChatlogCharacters(monitor, eve_windows);

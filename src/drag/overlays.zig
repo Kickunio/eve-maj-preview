@@ -11,7 +11,7 @@ const pixel_buffer = @import("../util/pixel_buffer.zig");
 const log = @import("../log.zig");
 
 const Painter = painter_mod.Painter;
-const slog = log.scoped("drag_overlays");
+const slog = log.Scoped("drag_overlays");
 
 const WINDOW_CLASS_NAME = "EVE_GHOST_OVERLAY_CLASS";
 const OUTLINE_THICKNESS = 2;

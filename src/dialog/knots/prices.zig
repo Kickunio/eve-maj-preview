@@ -6,7 +6,7 @@ const files = @import("../../config/files.zig");
 const esi_prices = @import("../tools/esi_prices.zig");
 const log = @import("../../log.zig");
 
-const slog = log.scoped("dialog_knots");
+const slog = log.Scoped("dialog_knots");
 
 /// Every ore the catalogue lists, which the fetch asks for.
 pub const NAMES = blk: {

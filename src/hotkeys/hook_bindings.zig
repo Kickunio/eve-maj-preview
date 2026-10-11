@@ -4,7 +4,7 @@ const win32 = @import("../platform/win32.zig");
 const vk = @import("../platform/virtual_keys.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("hotkeys");
+const slog = log.Scoped("hotkeys");
 
 /// One low-level hook's bindings; the hook is installed only while something is bound.
 pub const HookBindings = struct {

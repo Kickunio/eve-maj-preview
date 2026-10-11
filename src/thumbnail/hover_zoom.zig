@@ -14,7 +14,7 @@ const ThumbnailWindow = window.ThumbnailWindow;
 const Painter = painter_mod.Painter;
 const Config = config_mod.Config;
 const FontCache = font_cache_mod.FontCache;
-const slog = log.scoped("hover_zoom");
+const slog = log.Scoped("hover_zoom");
 
 /// The game picture, and the thumbnail's text overlay redrawn at the zoom's size above it.
 const Windows = struct {

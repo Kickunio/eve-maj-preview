@@ -8,7 +8,7 @@ const manager_mod = @import("manager.zig");
 const log = @import("../log.zig");
 
 const HotkeyManager = manager_mod.HotkeyManager;
-const slog = log.scoped("hotkeys");
+const slog = log.Scoped("hotkeys");
 
 /// Toggles a client in/out of cycling, with visual feedback via a semi-transparent overlay.
 pub fn toggleThumbnailExclusion(manager: *HotkeyManager, source_hwnd: win32.HWND) void {

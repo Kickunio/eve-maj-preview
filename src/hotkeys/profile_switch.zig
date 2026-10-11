@@ -6,7 +6,7 @@ const cycling = @import("cycling.zig");
 const strings = @import("../util/strings.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("hotkeys");
+const slog = log.Scoped("hotkeys");
 
 pub fn cycle(allocator: std.mem.Allocator, current_profile: []const u8, is_forward: bool) void {
     slog.info("{s} profile hotkey pressed", .{if (is_forward) "Next" else "Previous"});

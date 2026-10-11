@@ -11,7 +11,7 @@ const log = @import("../log.zig");
 
 const Painter = painter_mod.Painter;
 const ThumbnailWindow = window.ThumbnailWindow;
-const slog = log.scoped("notification");
+const slog = log.Scoped("notification");
 
 const TEXT_MAX: usize = 128;
 const TEST_PERMANENT_FALLBACK_MS: u32 = 5000;
