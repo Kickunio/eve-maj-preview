@@ -411,7 +411,7 @@ pub const HotkeyManager = struct {
         membership.toggleThumbnailExclusion(self, eve_window.hwnd);
     }
 
-    fn closeForegroundClient(self: *HotkeyManager) void {
+    fn closeForegroundClient(self: *const HotkeyManager) void {
         const eve_window = self.foregroundEveWindow() orelse {
             slog.debug("Focused window is not an EVE client, close ignored", .{});
             return;

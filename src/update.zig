@@ -119,7 +119,7 @@ pub const UpdateChecker = struct {
         return std.SemanticVersion.parse(normalized) catch null;
     }
 
-    pub fn checkForUpdates(self: *UpdateChecker) !?UpdateInfo {
+    pub fn checkForUpdates(self: *const UpdateChecker) !?UpdateInfo {
         slog.info("Checking for updates (current: {s})", .{self.current_version});
 
         var client: std.http.Client = .{ .allocator = self.allocator, .io = g_io };

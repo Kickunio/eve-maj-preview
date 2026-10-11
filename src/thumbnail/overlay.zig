@@ -209,7 +209,7 @@ const Layout = struct {
         if (self.original_font == null) self.original_font = previous;
     }
 
-    fn restoreFont(self: *Layout) void {
+    fn restoreFont(self: *const Layout) void {
         if (self.original_font) |font| _ = win32.SelectObject(self.dc, font);
     }
 

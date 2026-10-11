@@ -68,11 +68,11 @@ pub const Draft = struct {
     }
 
     /// Copies `parameters`, which callers build on the stack.
-    pub fn text(self: *Draft, key: []const u8, parameters: []const Parameter) !Text {
+    pub fn text(self: *const Draft, key: []const u8, parameters: []const Parameter) !Text {
         return .{ .key = key, .parameters = try self.arena.dupe(Parameter, parameters) };
     }
 
-    pub fn countText(self: *Draft, key: []const u8, item_count: usize) !Text {
+    pub fn countText(self: *const Draft, key: []const u8, item_count: usize) !Text {
         return self.text(key, &.{.{ .name = "n", .value = try self.format(item_count) }});
     }
 
@@ -81,7 +81,7 @@ pub const Draft = struct {
     }
 
     /// `number` is any integer or float.
-    pub fn format(self: *Draft, number: anytype) ![]const u8 {
+    pub fn format(self: *const Draft, number: anytype) ![]const u8 {
         return self.arena.print("{d}", .{number});
     }
 

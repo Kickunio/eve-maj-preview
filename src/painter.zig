@@ -705,7 +705,7 @@ pub const Painter = struct {
     };
 
     /// Dupes the three owned strings a ThumbnailWindow needs; on partial failure, whatever already succeeded is freed before the error propagates.
-    fn dupeThumbnailStrings(self: *Painter, character_name: []const u8, system_name: []const u8) !ThumbnailStrings {
+    fn dupeThumbnailStrings(self: *const Painter, character_name: []const u8, system_name: []const u8) !ThumbnailStrings {
         const allocator = self.allocator;
         const character_name_copy = try allocator.dupe(u8, character_name);
         errdefer allocator.free(character_name_copy);

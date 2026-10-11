@@ -323,7 +323,7 @@ pub const ChatlogMonitor = struct {
         if (self.bounty_tracker) |tracker| tracker.removeCharacter(character_name);
     }
 
-    fn resolveId(self: *ChatlogMonitor, character_name: []const u8) void {
+    fn resolveId(self: *const ChatlogMonitor, character_name: []const u8) void {
         const ids = self.character_ids orelse return;
         const cached = ids.contains(character_name) catch |err| blk: {
             slog.err("Failed to check character ID cache for '{s}': {}", .{ character_name, err });
@@ -446,7 +446,7 @@ pub const ChatlogMonitor = struct {
         };
     }
 
-    fn copySystemUpdate(self: *ChatlogMonitor, character_name: []const u8, system_name: []const u8, event_timestamp: u64, is_jump: bool) !queue.SystemUpdate {
+    fn copySystemUpdate(self: *const ChatlogMonitor, character_name: []const u8, system_name: []const u8, event_timestamp: u64, is_jump: bool) !queue.SystemUpdate {
         const owned_name = try self.allocator.dupe(u8, character_name);
         errdefer self.allocator.free(owned_name);
         return .{ .character_name = owned_name, .system_name = try self.allocator.dupe(u8, system_name), .event_timestamp = event_timestamp, .is_jump = is_jump };
@@ -478,7 +478,7 @@ pub const ChatlogMonitor = struct {
     }
 
     /// Fills `event` field by field so a partial failure leaves it safe to deinit.
-    fn copyNotificationEvent(self: *ChatlogMonitor, event: *queue.NotificationEvent, character_name: []const u8, notification: notification_mod.Notification) !void {
+    fn copyNotificationEvent(self: *const ChatlogMonitor, event: *queue.NotificationEvent, character_name: []const u8, notification: notification_mod.Notification) !void {
         event.character_name = try self.allocator.dupe(u8, character_name);
         if (notification.source) |source| event.notification.source = try self.allocator.dupe(u8, source);
         if (notification.target) |target| event.notification.target = try self.allocator.dupe(u8, target);
@@ -564,7 +564,7 @@ pub const ChatlogMonitor = struct {
     }
 
     /// A missing price counts as 0 ISK; only a missing volume drops the yield, since m3 can't be computed without it.
-    fn handleMiningEvent(self: *ChatlogMonitor, file: *LogFile, event_text: []const u8) void {
+    fn handleMiningEvent(self: *const ChatlogMonitor, file: *LogFile, event_text: []const u8) void {
         const tracker = self.mining_tracker orelse return;
         const parsed = activity_lines.parseMiningLine(event_text) orelse return;
         const global_settings = self.global_settings orelse return;
@@ -581,7 +581,7 @@ pub const ChatlogMonitor = struct {
         };
     }
 
-    fn handleBountyEvent(self: *ChatlogMonitor, file: *LogFile, event_text: []const u8) void {
+    fn handleBountyEvent(self: *const ChatlogMonitor, file: *LogFile, event_text: []const u8) void {
         const tracker = self.bounty_tracker orelse return;
         const isk = activity_lines.parseBountyLine(event_text) orelse return;
         tracker.addEntry(file.character_name, .{ isk, trackerNowMs() }) catch |err| {

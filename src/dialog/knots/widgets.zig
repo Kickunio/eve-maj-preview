@@ -221,7 +221,7 @@ pub const ReorderList = struct {
     }
 
     /// After the rows; returns the lifted row's index, if one is being dragged.
-    pub fn end(self: *ReorderList, context: *ui.Frame) !?usize {
+    pub fn end(self: *const ReorderList, context: *ui.Frame) !?usize {
         const lifted = self.lifted orelse return null;
         try self.gapIfDue(context, lifted);
         return lifted.from;

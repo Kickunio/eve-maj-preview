@@ -92,6 +92,7 @@ pub const Status = enum { success, cancelled, too_small };
 var g_is_window_class_registered = false;
 var g_border_color: u32 = DEFAULT_BORDER_COLOR;
 var g_is_dragging = false;
+/// Created on first use, then kept hidden between selections for the rest of the run.
 var g_hwnd: ?win32.HWND = null;
 var g_bitmap: ?gdi_overlay.OverlayBitmap = null;
 var g_virtual_screen: win32.RECT = undefined;

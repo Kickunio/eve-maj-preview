@@ -173,7 +173,7 @@ pub const TrayIcon = struct {
         }
     }
 
-    pub fn handleMenuCommand(self: *TrayIcon, command_id: u16, store: *config_mod.ProfileStore) void {
+    pub fn handleMenuCommand(self: *const TrayIcon, command_id: u16, store: *config_mod.ProfileStore) void {
         if (command_id >= win32.IDM_PROFILE_BASE and command_id < win32.IDM_PROFILE_BASE + MAX_PROFILE_ITEMS) {
             const index = command_id - win32.IDM_PROFILE_BASE;
             if (index >= self.profiles.items.len) return;

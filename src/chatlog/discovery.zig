@@ -76,7 +76,7 @@ pub const LogFinder = struct {
         };
     }
 
-    fn folderChanged(self: *LogFinder, watcher: *?win32.HANDLE, is_new: *bool, dir: []const u8) bool {
+    fn folderChanged(self: *const LogFinder, watcher: *?win32.HANDLE, is_new: *bool, dir: []const u8) bool {
         const handle = watcher.* orelse {
             watcher.* = watchFolder(self.allocator, dir) orelse return false;
             is_new.* = true;
@@ -93,7 +93,7 @@ pub const LogFinder = struct {
     }
 
     /// Owned by the caller.
-    pub fn find(self: *LogFinder, character_name: []const u8, is_chatlog: bool) ?[]u8 {
+    pub fn find(self: *const LogFinder, character_name: []const u8, is_chatlog: bool) ?[]u8 {
         const dir = if (is_chatlog) self.chatlog_dir else self.gamelog_dir;
         if (self.cachedId(character_name)) |id| {
             defer self.allocator.free(id);
@@ -104,7 +104,7 @@ pub const LogFinder = struct {
     }
 
     /// Caller frees.
-    fn cachedId(self: *LogFinder, character_name: []const u8) ?[]const u8 {
+    fn cachedId(self: *const LogFinder, character_name: []const u8) ?[]const u8 {
         const ids = self.character_ids orelse return null;
         return ids.get(self.allocator, character_name) catch |err| {
             slog.warn("Failed to look up cached character ID for '{s}': {}", .{ character_name, err });
@@ -113,7 +113,7 @@ pub const LogFinder = struct {
     }
 
     /// Lets Windows filter the folder down to this ID's files, then keeps the newest.
-    fn findById(self: *LogFinder, dir: []const u8, is_chatlog: bool, id: []const u8) ?[]u8 {
+    fn findById(self: *const LogFinder, dir: []const u8, is_chatlog: bool, id: []const u8) ?[]u8 {
         var pattern_buf: [64]u8 = undefined;
         const pattern = std.mem.print(&pattern_buf, "{s}*_{s}.txt", .{ if (is_chatlog) "Local_" else "", id }) catch |err| {
             slog.warn("Failed to build log search for character ID '{s}': {}", .{ id, err });
@@ -144,7 +144,7 @@ pub const LogFinder = struct {
     const Candidate = struct { timestamp: u64, name: []u8 };
 
     /// Only the newest MAX_HEADER_CHECKS files are kept while listing, so a huge folder is never sorted or opened wholesale.
-    fn findByHeader(self: *LogFinder, dir: []const u8, is_chatlog: bool, character_name: []const u8) ?[]u8 {
+    fn findByHeader(self: *const LogFinder, dir: []const u8, is_chatlog: bool, character_name: []const u8) ?[]u8 {
         var newest: [MAX_HEADER_CHECKS]Candidate = undefined;
         var candidate_count: usize = 0;
         defer for (newest[0..candidate_count]) |candidate| self.allocator.free(candidate.name);
@@ -185,14 +185,14 @@ pub const LogFinder = struct {
         return null;
     }
 
-    fn cacheId(self: *LogFinder, character_name: []const u8, id: []const u8) void {
+    fn cacheId(self: *const LogFinder, character_name: []const u8, id: []const u8) void {
         const ids = self.character_ids orelse return;
         ids.put(character_name, id) catch |err| {
             slog.warn("Failed to cache character ID for '{s}': {}", .{ character_name, err });
         };
     }
 
-    fn isListener(self: *LogFinder, path: []const u8, is_chatlog: bool, character_name: []const u8) bool {
+    fn isListener(self: *const LogFinder, path: []const u8, is_chatlog: bool, character_name: []const u8) bool {
         const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch |err| {
             slog.warn("Failed to open '{s}' to read its listener: {}", .{ path, err });
             return false;
@@ -212,7 +212,7 @@ pub const LogFinder = struct {
         return std.mem.eql(u8, listener, character_name);
     }
 
-    fn joinPath(self: *LogFinder, dir: []const u8, name: []const u8) ?[]u8 {
+    fn joinPath(self: *const LogFinder, dir: []const u8, name: []const u8) ?[]u8 {
         return std.Io.Dir.path.join(self.allocator, &.{ dir, name }) catch |err| {
             slog.warn("Failed to build path for log file '{s}': {}", .{ name, err });
             return null;

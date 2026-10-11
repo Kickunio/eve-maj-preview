@@ -25,7 +25,7 @@ const Check = struct {
         return start;
     }
 
-    fn drop(self: *Check, comptime outcome: []const u8) void {
+    fn drop(self: *const Check, comptime outcome: []const u8) void {
         const path = self.path_buf[0..self.path_len];
         slog.warn("Failed to read setting '{s}', " ++ outcome, .{path});
         const skipped = self.skipped orelse return;
