@@ -173,7 +173,7 @@ pub const HintBox = struct {
         _ = win32.ShowWindow(hwnd, win32.SW_SHOWNOACTIVATE);
     }
 
-    pub fn hide(self: *HintBox) void {
+    pub fn hide(self: *const HintBox) void {
         if (self.hwnd) |hwnd| {
             _ = win32.ShowWindow(hwnd, win32.SW_HIDE);
         }

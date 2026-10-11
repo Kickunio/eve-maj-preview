@@ -93,7 +93,7 @@ pub const HotkeyManager = struct {
     }
 
     // Mouse buttons/wheel route through the mouse hook, everything else through the keyboard hook; both re-post a match as WM_HOTKEY.
-    fn hookKey(self: *HotkeyManager, hwnd: win32.HWND, id: c_int, virtual_key: u32) !void {
+    fn hookKey(self: *const HotkeyManager, hwnd: win32.HWND, id: c_int, virtual_key: u32) !void {
         if (vk.isMouseHookVk(vk.extractVk(virtual_key))) try mouse_hook.register(self.allocator, hwnd, virtual_key, id) else try keyboard_hook.register(self.allocator, hwnd, virtual_key, id);
     }
 

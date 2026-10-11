@@ -147,7 +147,7 @@ pub const HistoryPanelWindow = struct {
         self.panel.hide();
     }
 
-    fn saveWindowPosition(self: *HistoryPanelWindow) void {
+    fn saveWindowPosition(self: *const HistoryPanelWindow) void {
         if (!self.config.display.rememberNotifInfoPanelPosition) return;
         const top_left = self.panel.topLeft();
         self.store.update(.{ .display = .{ .notifInfoPanelX = top_left.x, .notifInfoPanelY = top_left.y } });

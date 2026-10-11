@@ -75,7 +75,7 @@ pub const ListWindow = struct {
         return self.row_source_hwnds.items[index];
     }
 
-    fn saveWindowPosition(self: *ListWindow) void {
+    fn saveWindowPosition(self: *const ListWindow) void {
         if (!self.config.display.rememberListViewPosition) return;
         const top_left = self.panel.topLeft();
         self.store.update(.{ .display = .{ .startX = top_left.x, .startY = top_left.y } });

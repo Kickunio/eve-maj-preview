@@ -166,20 +166,20 @@ const TtsEngine = struct {
         };
     }
 
-    fn setVolume(self: *TtsEngine, volume: u8) void {
-        self.dispatch.invokePropertyPut(self.volume_dispid, @intCast(volume)) catch |err| {
+    fn setVolume(self: *const TtsEngine, volume_percent: u8) void {
+        self.dispatch.invokePropertyPut(self.volume_dispid, @intCast(volume_percent)) catch |err| {
             slog.warn("Failed to set TTS volume: {}", .{err});
         };
     }
 
-    fn setRate(self: *TtsEngine, rate: i8) void {
+    fn setRate(self: *const TtsEngine, rate: i8) void {
         self.dispatch.invokePropertyPut(self.rate_dispid, @intCast(rate)) catch |err| {
             slog.warn("Failed to set TTS rate: {}", .{err});
         };
     }
 
     /// Blocks until finished: SpVoice's Invoke only accepts the Text-only call, not one with Flags, so this must never run on the main thread.
-    fn speak(self: *TtsEngine, text: []const u8) void {
+    fn speak(self: *const TtsEngine, text: []const u8) void {
         const text_w = std.unicode.utf8ToUtf16LeAllocZ(std.heap.page_allocator, text) catch |err| {
             slog.warn("Failed to convert TTS text to UTF-16: {}", .{err});
             return;
@@ -201,7 +201,7 @@ const TtsEngine = struct {
     pub fn run(self: *TtsEngine, command: Command) void {
         switch (command) {
             .speak => |text| self.speak(text),
-            .set_volume => |volume| self.setVolume(volume),
+            .set_volume_percent => |volume_percent| self.setVolume(volume_percent),
             .set_rate => |rate| self.setRate(rate),
         }
     }
@@ -215,7 +215,7 @@ const TtsEngine = struct {
 const Command = union(enum) {
     /// Owned by page_allocator.
     speak: []const u8,
-    set_volume: u8,
+    set_volume_percent: u8,
     set_rate: i8,
 
     pub fn deinit(self: Command) void {
@@ -231,9 +231,9 @@ pub fn setIo(io: std.Io) void {
 }
 
 /// Safe before TTS has started; does nothing if it can't start.
-pub fn setVoiceSettings(volume: u8, rate: i8) void {
+pub fn setVoiceSettings(volume_percent: u8, rate: i8) void {
     if (!g_worker.start()) return;
-    g_worker.push(.{ .set_volume = volume });
+    g_worker.push(.{ .set_volume_percent = volume_percent });
     g_worker.push(.{ .set_rate = rate });
 }
 

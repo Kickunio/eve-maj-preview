@@ -9,12 +9,12 @@ const NotificationType = notification.NotificationType;
 /// Field slices borrow from `event_text`; ChatlogMonitor.queueNotification copies them.
 pub fn classify(event_text: []const u8) ?Notification {
     // EVE gamelog format: "[ timestamp ] (type) message"
-    var text_start: usize = 0;
+    var text_start_index: usize = 0;
     if (std.mem.find(u8, event_text, "]")) |close_bracket| {
-        text_start = close_bracket + 1;
+        text_start_index = close_bracket + 1;
     }
 
-    const remaining = std.mem.trim(u8, event_text[text_start..], " \t\r\n");
+    const remaining = std.mem.trim(u8, event_text[text_start_index..], " \t\r\n");
 
     if (std.mem.startsWith(u8, remaining, "(question)")) {
         return parseQuestionEvent(remaining["(question)".len..]);
