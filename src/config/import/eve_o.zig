@@ -66,6 +66,49 @@ pub fn isFile(root: Value) bool {
     return values.objectAt(root, "FlatLayout") != null or values.objectAt(root, "DisableThumbnail") != null;
 }
 
+pub fn sections(draft: *Draft, root: Value) ![]const Section {
+    var positioned: std.array_hash_map.String(void) = .empty;
+    var position_count: usize = 0;
+    inline for (.{ "FlatLayout", "PerClientThumbnailSize", "DisableThumbnail" }) |map| {
+        position_count += try countCharacters(draft.arena, values.objectAt(root, map), &positioned);
+    }
+    var colored: std.array_hash_map.String(void) = .empty;
+    const color_count = try countCharacters(draft.arena, values.objectAt(root, "PerClientActiveClientHighlightColor"), &colored);
+    var hotkeyed: std.array_hash_map.String(void) = .empty;
+    const hotkey_count = try countCharacters(draft.arena, values.objectAt(root, "ClientHotkey"), &hotkeyed);
+    var group_count: usize = 0;
+    for (1..CYCLE_GROUP_COUNT + 1) |group_number| {
+        if ((try cycleGroupMembers(draft.arena, root, group_number)).len > 0) group_count += 1;
+    }
+    const has_appearance = values.has(root, "ThumbnailsOpacity") or values.has(root, "ActiveClientHighlightColor") or
+        values.has(root, "OverlayLabelColor") or values.has(root, "ThumbnailSize");
+
+    return draft.arena.dupe(Section, &.{
+        .{ .id = "thumbnailAppearance", .title = "dynamic.import.eveo.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.eveo.thumbnailAppearance.hint" }, .available = has_appearance },
+        .{ .id = "characterPositions", .title = "dynamic.import.eveo.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
+        .{ .id = "characterColors", .title = "dynamic.import.eveo.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "dynamic.import.eveo.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
+        .{ .id = "autoMinimize", .title = "dynamic.import.eveo.autoMinimize.title", .hint = .{ .key = "dynamic.import.eveo.autoMinimize.hint" }, .available = values.has(root, "MinimizeInactiveClients") },
+        .{ .id = "snapping", .title = "dynamic.import.eveo.snapping.title", .hint = .{ .key = "dynamic.import.eveo.snapping.hint" }, .available = values.has(root, "EnableThumbnailSnap") },
+    });
+}
+
+/// `cycle_group_name` is the translated "Cycle Group {n}", since EVE-O Preview's groups have no names.
+pub fn build(draft: *Draft, root: Value, chosen: []const []const u8, cycle_group_name: []const u8) !void {
+    if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, root);
+    if (draft_mod.isChosen(chosen, "characterPositions")) try characterPositions(draft, root);
+    if (draft_mod.isChosen(chosen, "characterColors")) try colorsAndHotkeys(draft, root);
+    if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, root, cycle_group_name);
+    if (draft_mod.isChosen(chosen, "autoMinimize")) {
+        if (values.get(root, "MinimizeInactiveClients")) |v| try draft.setBool("autoMinimize.enabled", values.truthy(v));
+        try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
+    }
+    if (draft_mod.isChosen(chosen, "snapping")) {
+        if (values.get(root, "EnableThumbnailSnap")) |v| try draft.setBool("snapping.enabled", values.truthy(v));
+        try draft.note("dynamic.import.snappingImportedNote", &.{});
+    }
+}
+
 /// "#RRGGBB", "#AARRGGBB" (its alpha dropped, as borders and text here are opaque) or a .NET colour name.
 fn color(text: ?[]const u8) ?u32 {
     const trimmed = std.mem.trim(u8, text orelse return null, " \t");
@@ -176,49 +219,6 @@ fn countCharacters(arena: std.mem.Allocator, map: ?Value, seen: *std.array_hash_
         if (!(try seen.getOrPut(arena, name)).found_existing) new_count += 1;
     }
     return new_count;
-}
-
-pub fn sections(draft: *Draft, root: Value) ![]const Section {
-    var positioned: std.array_hash_map.String(void) = .empty;
-    var position_count: usize = 0;
-    inline for (.{ "FlatLayout", "PerClientThumbnailSize", "DisableThumbnail" }) |map| {
-        position_count += try countCharacters(draft.arena, values.objectAt(root, map), &positioned);
-    }
-    var colored: std.array_hash_map.String(void) = .empty;
-    const color_count = try countCharacters(draft.arena, values.objectAt(root, "PerClientActiveClientHighlightColor"), &colored);
-    var hotkeyed: std.array_hash_map.String(void) = .empty;
-    const hotkey_count = try countCharacters(draft.arena, values.objectAt(root, "ClientHotkey"), &hotkeyed);
-    var group_count: usize = 0;
-    for (1..CYCLE_GROUP_COUNT + 1) |group_number| {
-        if ((try cycleGroupMembers(draft.arena, root, group_number)).len > 0) group_count += 1;
-    }
-    const has_appearance = values.has(root, "ThumbnailsOpacity") or values.has(root, "ActiveClientHighlightColor") or
-        values.has(root, "OverlayLabelColor") or values.has(root, "ThumbnailSize");
-
-    return draft.arena.dupe(Section, &.{
-        .{ .id = "thumbnailAppearance", .title = "dynamic.import.eveo.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.eveo.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.eveo.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
-        .{ .id = "characterColors", .title = "dynamic.import.eveo.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.eveo.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
-        .{ .id = "autoMinimize", .title = "dynamic.import.eveo.autoMinimize.title", .hint = .{ .key = "dynamic.import.eveo.autoMinimize.hint" }, .available = values.has(root, "MinimizeInactiveClients") },
-        .{ .id = "snapping", .title = "dynamic.import.eveo.snapping.title", .hint = .{ .key = "dynamic.import.eveo.snapping.hint" }, .available = values.has(root, "EnableThumbnailSnap") },
-    });
-}
-
-/// `cycle_group_name` is the translated "Cycle Group {n}", since EVE-O Preview's groups have no names.
-pub fn build(draft: *Draft, root: Value, chosen: []const []const u8, cycle_group_name: []const u8) !void {
-    if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, root);
-    if (draft_mod.isChosen(chosen, "characterPositions")) try characterPositions(draft, root);
-    if (draft_mod.isChosen(chosen, "characterColors")) try colorsAndHotkeys(draft, root);
-    if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, root, cycle_group_name);
-    if (draft_mod.isChosen(chosen, "autoMinimize")) {
-        if (values.get(root, "MinimizeInactiveClients")) |v| try draft.setBool("autoMinimize.enabled", values.truthy(v));
-        try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
-    }
-    if (draft_mod.isChosen(chosen, "snapping")) {
-        if (values.get(root, "EnableThumbnailSnap")) |v| try draft.setBool("snapping.enabled", values.truthy(v));
-        try draft.note("dynamic.import.snappingImportedNote", &.{});
-    }
 }
 
 fn appearance(draft: *Draft, root: Value) !void {

@@ -44,6 +44,7 @@ const Group = struct { members: []const []const u8, forward: ?[]const u8, backwa
 
 /// Keys are percent-encoded, points "@Point(x y)", fonts "Family,Size,...", and hotkeys "enabled,vk,ctrl,alt,shift" tuples joined by '|'.
 pub const Ini = struct {
+    /// Names and values borrow from the parsed text; the maps live in the arena given to parse.
     sections: std.array_hash_map.String(Keys) = .empty,
 
     pub fn parse(arena: std.mem.Allocator, text: []const u8) !Ini {
@@ -83,6 +84,51 @@ pub const Ini = struct {
     }
 };
 
+pub fn anchorName(index: ?f64) ?[]const u8 {
+    const position = index orelse return null;
+    if (position < 0 or position >= POSITIONS_IN_ORDER.len) return null;
+    return POSITIONS_IN_ORDER[@intFromFloat(position)];
+}
+
+pub fn sections(draft: *Draft, ini: *const Ini) ![]const Section {
+    const position_count = ini.count("thumbnailPositions");
+    const color_count = ini.count("characterBorderColors");
+    const hotkey_count = ini.count("characterHotkeys");
+    const group_count = try groupCount(draft, ini);
+    const has_appearance = ini.section("ui") != null or ini.section("overlay") != null or ini.section("thumbnail") != null;
+    const has_auto_minimize = ini.get("window", "minimizeInactiveClients") != null or ini.get("window", "minimizeDelay") != null or
+        !isInvalid(ini.get("window", "neverMinimizeCharacters")) or !isInvalid(ini.get("window", "neverCloseCharacters"));
+    const has_snapping = ini.get("position", "enableSnapping") != null or ini.get("position", "snapDistance") != null;
+    const has_global_hotkeys = ini.section("closeAllHotkeys") != null or ini.section("minimizeAllHotkeys") != null or
+        ini.section("toggleThumbnailsVisibilityHotkeys") != null or ini.section("hotkeys") != null or ini.section("hotkey") != null;
+    const has_chatlog = ini.section("chatlog") != null or ini.section("gamelog") != null;
+    const has_notifications = eve_x.hasText(ini.get("combatMessages", "enabledEventTypes"));
+
+    return draft.arena.dupe(Section, &.{
+        .{ .id = "thumbnailAppearance", .title = "dynamic.import.apm.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.apm.thumbnailAppearance.hint" }, .available = has_appearance },
+        .{ .id = "characterPositions", .title = "dynamic.import.apm.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
+        .{ .id = "characterColors", .title = "dynamic.import.apm.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "dynamic.import.apm.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
+        .{ .id = "globalHotkeys", .title = "dynamic.import.apm.globalHotkeys.title", .hint = .{ .key = "dynamic.import.apm.globalHotkeys.hint" }, .available = has_global_hotkeys },
+        .{ .id = "autoMinimize", .title = "dynamic.import.apm.autoMinimize.title", .hint = .{ .key = "dynamic.import.apm.autoMinimize.hint" }, .available = has_auto_minimize },
+        .{ .id = "snapping", .title = "dynamic.import.apm.snapping.title", .hint = .{ .key = "dynamic.import.apm.snapping.hint" }, .available = has_snapping },
+        .{ .id = "chatlog", .title = "dynamic.import.apm.chatlog.title", .hint = .{ .key = "dynamic.import.apm.chatlog.hint" }, .available = has_chatlog },
+        .{ .id = "notifications", .title = "dynamic.import.apm.notifications.title", .hint = .{ .key = "dynamic.import.apm.notifications.hint" }, .available = has_notifications },
+    });
+}
+
+pub fn build(draft: *Draft, ini: *const Ini, chosen: []const []const u8) !void {
+    if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, ini);
+    if (draft_mod.isChosen(chosen, "characterPositions")) try characterPositions(draft, ini);
+    if (draft_mod.isChosen(chosen, "characterColors")) try colorsAndHotkeys(draft, ini);
+    if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, ini);
+    if (draft_mod.isChosen(chosen, "globalHotkeys")) try globalHotkeys(draft, ini);
+    if (draft_mod.isChosen(chosen, "autoMinimize")) try autoMinimize(draft, ini);
+    if (draft_mod.isChosen(chosen, "snapping")) try snapping(draft, ini);
+    if (draft_mod.isChosen(chosen, "chatlog")) try chatlog(draft, ini);
+    if (draft_mod.isChosen(chosen, "notifications")) try notifications(draft, ini);
+}
+
 /// QSettings' own percent-encoding: "%XX" is a Latin-1 byte and "%UXXXX" a UTF-16 unit, unlike URI encoding.
 fn decodeKey(arena: std.mem.Allocator, key: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
@@ -111,8 +157,8 @@ fn decodeKey(arena: std.mem.Allocator, key: []const u8) ![]const u8 {
 fn appendCodepoint(arena: std.mem.Allocator, out: *std.ArrayList(u8), codepoint: u21) !void {
     var buf: [4]u8 = undefined;
     // A lone surrogate half can't be encoded; a replacement keeps the rest of the name.
-    const len = std.unicode.utf8Encode(codepoint, &buf) catch std.unicode.utf8Encode(0xFFFD, &buf) catch unreachable;
-    try out.appendSlice(arena, buf[0..len]);
+    const encoded_length = std.unicode.utf8Encode(codepoint, &buf) catch std.unicode.utf8Encode(0xFFFD, &buf) catch unreachable;
+    try out.appendSlice(arena, buf[0..encoded_length]);
 }
 
 fn unquote(raw: ?[]const u8) ?[]const u8 {
@@ -162,8 +208,8 @@ fn number(raw: ?[]const u8) ?f64 {
 }
 
 fn intValue(raw: ?[]const u8) ?f64 {
-    const n = values.parseIntLoose(raw) orelse return null;
-    return @floatFromInt(n);
+    const integer = values.parseIntLoose(raw) orelse return null;
+    return @floatFromInt(integer);
 }
 
 fn parseTuple(raw: ?[]const u8) ?Tuple {
@@ -193,19 +239,13 @@ fn isBound(raw: ?[]const u8) bool {
 fn tupleHotkey(raw: ?[]const u8) ?u32 {
     const tuple = parseTuple(raw) orelse return null;
     if (!tuple.is_enabled) return null;
-    const code = tuple.vk_code orelse return null;
-    if (code <= 0 or code > 0xFF or code == VK_LBUTTON or code == VK_RBUTTON) return null;
+    const virtual_key = tuple.vk_code orelse return null;
+    if (virtual_key <= 0 or virtual_key > 0xFF or virtual_key == VK_LBUTTON or virtual_key == VK_RBUTTON) return null;
     var modifiers: u32 = 0;
     if (tuple.has_ctrl) modifiers |= vk.MOD_CONTROL;
     if (tuple.has_alt) modifiers |= vk.MOD_ALT;
     if (tuple.has_shift) modifiers |= vk.MOD_SHIFT;
-    return vk.combineKey(@intCast(code), modifiers);
-}
-
-pub fn anchorName(index: ?f64) ?[]const u8 {
-    const position = index orelse return null;
-    if (position < 0 or position >= POSITIONS_IN_ORDER.len) return null;
-    return POSITIONS_IN_ORDER[@intFromFloat(position)];
+    return vk.combineKey(@intCast(virtual_key), modifiers);
 }
 
 fn eventType(event: []const u8) ?[]const u8 {
@@ -220,33 +260,6 @@ fn isNonEveWindow(name: []const u8) bool {
     const separator_index = std.mem.find(u8, name, "::") orelse return false;
     const dot_index = std.mem.findScalarLast(u8, name[0..separator_index], '.') orelse return false;
     return dot_index + 1 < separator_index;
-}
-
-pub fn sections(draft: *Draft, ini: *const Ini) ![]const Section {
-    const position_count = ini.count("thumbnailPositions");
-    const color_count = ini.count("characterBorderColors");
-    const hotkey_count = ini.count("characterHotkeys");
-    const group_count = try groupCount(draft, ini);
-    const has_appearance = ini.section("ui") != null or ini.section("overlay") != null or ini.section("thumbnail") != null;
-    const has_auto_minimize = ini.get("window", "minimizeInactiveClients") != null or ini.get("window", "minimizeDelay") != null or
-        !isInvalid(ini.get("window", "neverMinimizeCharacters")) or !isInvalid(ini.get("window", "neverCloseCharacters"));
-    const has_snapping = ini.get("position", "enableSnapping") != null or ini.get("position", "snapDistance") != null;
-    const has_global_hotkeys = ini.section("closeAllHotkeys") != null or ini.section("minimizeAllHotkeys") != null or
-        ini.section("toggleThumbnailsVisibilityHotkeys") != null or ini.section("hotkeys") != null or ini.section("hotkey") != null;
-    const has_chatlog = ini.section("chatlog") != null or ini.section("gamelog") != null;
-    const has_notifications = eve_x.hasText(ini.get("combatMessages", "enabledEventTypes"));
-
-    return draft.arena.dupe(Section, &.{
-        .{ .id = "thumbnailAppearance", .title = "dynamic.import.apm.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.apm.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.apm.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
-        .{ .id = "characterColors", .title = "dynamic.import.apm.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.apm.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
-        .{ .id = "globalHotkeys", .title = "dynamic.import.apm.globalHotkeys.title", .hint = .{ .key = "dynamic.import.apm.globalHotkeys.hint" }, .available = has_global_hotkeys },
-        .{ .id = "autoMinimize", .title = "dynamic.import.apm.autoMinimize.title", .hint = .{ .key = "dynamic.import.apm.autoMinimize.hint" }, .available = has_auto_minimize },
-        .{ .id = "snapping", .title = "dynamic.import.apm.snapping.title", .hint = .{ .key = "dynamic.import.apm.snapping.hint" }, .available = has_snapping },
-        .{ .id = "chatlog", .title = "dynamic.import.apm.chatlog.title", .hint = .{ .key = "dynamic.import.apm.chatlog.hint" }, .available = has_chatlog },
-        .{ .id = "notifications", .title = "dynamic.import.apm.notifications.title", .hint = .{ .key = "dynamic.import.apm.notifications.hint" }, .available = has_notifications },
-    });
 }
 
 /// Groups with no members and no keys are the empty one EVE-APM starts with.
@@ -270,18 +283,6 @@ fn parseGroup(arena: std.mem.Allocator, raw: []const u8) !Group {
         if (trimmed.len > 0) try members.append(arena, trimmed);
     }
     return .{ .members = members.items, .forward = parts.next(), .backward = parts.next() };
-}
-
-pub fn build(draft: *Draft, ini: *const Ini, chosen: []const []const u8) !void {
-    if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, ini);
-    if (draft_mod.isChosen(chosen, "characterPositions")) try characterPositions(draft, ini);
-    if (draft_mod.isChosen(chosen, "characterColors")) try colorsAndHotkeys(draft, ini);
-    if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, ini);
-    if (draft_mod.isChosen(chosen, "globalHotkeys")) try globalHotkeys(draft, ini);
-    if (draft_mod.isChosen(chosen, "autoMinimize")) try autoMinimize(draft, ini);
-    if (draft_mod.isChosen(chosen, "snapping")) try snapping(draft, ini);
-    if (draft_mod.isChosen(chosen, "chatlog")) try chatlog(draft, ini);
-    if (draft_mod.isChosen(chosen, "notifications")) try notifications(draft, ini);
 }
 
 fn borderStyle(draft: *Draft, path: []const u8, raw: ?[]const u8, label: []const u8) !void {
@@ -410,7 +411,7 @@ fn colorsAndHotkeys(draft: *Draft, ini: *const Ini) !void {
 
 fn hotkeyGroups(draft: *Draft, ini: *const Ini) !void {
     const entries = ini.section("cycleGroups") orelse return;
-    const first_note = draft.notes.items.len;
+    const first_note_index = draft.notes.items.len;
     var imported_count: usize = 0;
     var it = entries.iterator();
     while (it.next()) |entry| {
@@ -432,7 +433,7 @@ fn hotkeyGroups(draft: *Draft, ini: *const Ini) !void {
         if (forward == null and isBound(group.forward)) try draft.note("dynamic.import.apm.hotkeyGroupForwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
         if (backward == null and isBound(group.backward)) try draft.note("dynamic.import.apm.hotkeyGroupBackwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
     }
-    try draft.notes.insert(draft.arena, first_note, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", imported_count));
+    try draft.notes.insert(draft.arena, first_note_index, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", imported_count));
 }
 
 /// EVE-APM can bind several keys to one action.
@@ -483,7 +484,7 @@ fn autoMinimize(draft: *Draft, ini: *const Ini) !void {
 fn snapping(draft: *Draft, ini: *const Ini) !void {
     try draft.setBool("snapping.enabled", qtBool(ini.get("position", "enableSnapping")));
     try draft.setNumber("snapping.threshold", intValue(ini.get("position", "snapDistance")));
-    if (qtBool(ini.get("position", "lockPositions"))) |locked| try draft.setBool("interaction.enableDragging", !locked);
+    if (qtBool(ini.get("position", "lockPositions"))) |is_locked| try draft.setBool("interaction.enableDragging", !is_locked);
     try draft.note("dynamic.import.snappingImportedNote", &.{});
 }
 
@@ -504,7 +505,7 @@ fn notifications(draft: *Draft, ini: *const Ini) !void {
     try draft.setBool("thumbnail.notifications.enabled", qtBool(ini.get("combatMessages", "enabled")));
     const default_duration = intValue(ini.get("combatMessages", "duration"));
     const color = values.rgbColor(ini.get("combatMessages", "color"));
-    const suppress_all = qtBool(ini.get("combatMessages", "suppressWhenFocused"));
+    const suppresses_all = qtBool(ini.get("combatMessages", "suppressWhenFocused"));
 
     var mapped_count: usize = 0;
     var total_count: usize = 0;
@@ -523,7 +524,7 @@ fn notifications(draft: *Draft, ini: *const Ini) !void {
         try draft.setNumber(try concat(draft, base, "duration_ms"), intValue(ini.get("combatMessages", duration_key)) orelse default_duration);
         try draft.setColor(try concat(draft, base, "border_color"), color);
         const suppress_key = try draft.arena.print("suppressFocused\\{s}", .{event});
-        try draft.setBool(try concat(draft, base, "suppress_when_focused"), qtBool(ini.get("combatMessages", suppress_key)) orelse suppress_all);
+        try draft.setBool(try concat(draft, base, "suppress_when_focused"), qtBool(ini.get("combatMessages", suppress_key)) orelse suppresses_all);
         mapped_count += 1;
     }
     if (total_count > 0) try draft.note("dynamic.import.apm.notificationTypesImportedNote", &.{ .{ .name = "mapped", .value = try draft.format(mapped_count) }, .{ .name = "total", .value = try draft.format(total_count) } });

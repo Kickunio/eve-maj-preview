@@ -82,39 +82,6 @@ pub fn defaultProfile(root: Value) ?[]const u8 {
     return if (names.len > 0) names[0] else null;
 }
 
-/// Version 3 has no "global_Settings" and keeps its few app-wide settings at the top level.
-fn globals(root: Value) ?Value {
-    return values.objectAt(root, "global_Settings") orelse root;
-}
-
-fn countNames(names: []const Value) usize {
-    var name_count: usize = 0;
-    for (names) |name| {
-        if (name == .string and values.characterName(name.string) != null) name_count += 1;
-    }
-    return name_count;
-}
-
-fn countHotkeys(entries: []const Value) usize {
-    var hotkey_count: usize = 0;
-    for (entries) |entry| {
-        if (entry != .object) continue;
-        for (entry.object.keys()) |name| {
-            if (values.characterName(name) != null) hotkey_count += 1;
-        }
-    }
-    return hotkey_count;
-}
-
-fn countPositions(all: ?Value) usize {
-    const positions = all orelse return 0;
-    var position_count: usize = 0;
-    for (positions.object.keys()) |key| {
-        if (values.characterName(key) != null) position_count += 1;
-    }
-    return position_count;
-}
-
 pub fn sections(draft: *Draft, root: Value, profile_name: []const u8) ![]const Section {
     const source = Source.init(root, profile_name);
     const position_count = countPositions(values.objectAt(source.profile, "Thumbnail Positions"));
@@ -153,11 +120,6 @@ pub fn hasText(text: ?[]const u8) bool {
     return std.mem.trim(u8, t, " \t").len > 0;
 }
 
-fn suspendHotkey(source: Source) ?[]const u8 {
-    const value = source.first(&.{ .{ source.global, "Suspend_Hotkeys_Hotkey" }, .{ source.hotkeys, "Suspend_Hotkeys_Hotkey" } }) orelse return null;
-    return if (value == .string) value.string else null;
-}
-
 pub fn build(draft: *Draft, root: Value, profile_name: []const u8, chosen: []const []const u8) !void {
     const source = Source.init(root, profile_name);
     if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, source);
@@ -168,6 +130,52 @@ pub fn build(draft: *Draft, root: Value, profile_name: []const u8, chosen: []con
     if (draft_mod.isChosen(chosen, "snapping")) try snapping(draft, source);
     if (draft_mod.isChosen(chosen, "globalHotkeys")) try globalHotkeys(draft, source);
     if (draft_mod.isChosen(chosen, "chatlog")) try chatlog(draft, source);
+}
+
+/// EVE-X ran DPI-unaware, so its positions are in a 96-DPI space Windows scaled for it.
+pub fn putPosition(draft: *Draft, character: *std.json.ObjectMap, x: f64, y: f64) !void {
+    const legacy: config.Position = .{ .x = std.math.lossyCast(i32, @round(x)), .y = std.math.lossyCast(i32, @round(y)) };
+    const position = legacy.scaleFromLegacyDpiUnaware();
+    try draft.put(character, "position.x", .{ .integer = position.x });
+    try draft.put(character, "position.y", .{ .integer = position.y });
+}
+
+/// Version 3 has no "global_Settings" and keeps its few app-wide settings at the top level.
+fn globals(root: Value) ?Value {
+    return values.objectAt(root, "global_Settings") orelse root;
+}
+
+fn countNames(names: []const Value) usize {
+    var name_count: usize = 0;
+    for (names) |name| {
+        if (name == .string and values.characterName(name.string) != null) name_count += 1;
+    }
+    return name_count;
+}
+
+fn countHotkeys(entries: []const Value) usize {
+    var hotkey_count: usize = 0;
+    for (entries) |entry| {
+        if (entry != .object) continue;
+        for (entry.object.keys()) |name| {
+            if (values.characterName(name) != null) hotkey_count += 1;
+        }
+    }
+    return hotkey_count;
+}
+
+fn countPositions(all: ?Value) usize {
+    const positions = all orelse return 0;
+    var position_count: usize = 0;
+    for (positions.object.keys()) |key| {
+        if (values.characterName(key) != null) position_count += 1;
+    }
+    return position_count;
+}
+
+fn suspendHotkey(source: Source) ?[]const u8 {
+    const value = source.first(&.{ .{ source.global, "Suspend_Hotkeys_Hotkey" }, .{ source.hotkeys, "Suspend_Hotkeys_Hotkey" } }) orelse return null;
+    return if (value == .string) value.string else null;
 }
 
 fn appearance(draft: *Draft, source: Source) !void {
@@ -221,14 +229,6 @@ fn characterPositions(draft: *Draft, source: Source) !void {
     }
     try draft.noteCount("dynamic.import.importedPositionsWithSizeNote", "n", imported_count);
     if (skipped_count > 0) try draft.noteCount("dynamic.import.skippedPlaceholderNote", "n", skipped_count);
-}
-
-/// EVE-X ran DPI-unaware, so its positions are in a 96-DPI space Windows scaled for it.
-pub fn putPosition(draft: *Draft, character: *std.json.ObjectMap, x: f64, y: f64) !void {
-    const legacy: config.Position = .{ .x = std.math.lossyCast(i32, @round(x)), .y = std.math.lossyCast(i32, @round(y)) };
-    const position = legacy.scaleFromLegacyDpiUnaware();
-    try draft.put(character, "position.x", .{ .integer = position.x });
-    try draft.put(character, "position.y", .{ .integer = position.y });
 }
 
 fn colorsAndHotkeys(draft: *Draft, source: Source) !void {

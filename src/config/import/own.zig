@@ -16,15 +16,6 @@ pub fn isFile(root: Value) bool {
     return std.mem.eql(u8, app, config_mod.PROFILE_FORMAT_IDENTIFIER);
 }
 
-/// Stamped on every save rather than chosen by the user.
-fn isStamp(comptime name: []const u8) bool {
-    return std.mem.eql(u8, name, "app") or std.mem.eql(u8, name, "formatVersion");
-}
-
-fn isList(comptime T: type) bool {
-    return wire.ListItem(T) != null;
-}
-
 /// Every saved section, so one added later is importable without a change here.
 pub fn sections(draft: *Draft, root: Value) ![]const Section {
     var migrated = root;
@@ -63,6 +54,15 @@ pub fn build(draft: *Draft, text: []const u8, root: Value, chosen: []const []con
         if (!draft_mod.isChosen(chosen, path[0..section_end])) continue;
         try draft.skipped.append(draft.arena, path);
     }
+}
+
+/// Stamped on every save rather than chosen by the user.
+fn isStamp(comptime name: []const u8) bool {
+    return std.mem.eql(u8, name, "app") or std.mem.eql(u8, name, "formatVersion");
+}
+
+fn isList(comptime T: type) bool {
+    return wire.ListItem(T) != null;
 }
 
 fn importSection(draft: *Draft, config: *const Config, root: Value, comptime name: []const u8) !void {
