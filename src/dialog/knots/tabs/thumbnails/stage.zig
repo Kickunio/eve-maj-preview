@@ -28,7 +28,7 @@ const Drag = struct {
     /// Where in the chip it was grabbed.
     grab: [2]f32,
     start: [2]f64,
-    moved: bool = false,
+    has_moved: bool = false,
     /// The chip's top-left on the stage while it's dragged.
     position: [2]f32,
 };
@@ -37,7 +37,7 @@ const Drop = struct { anchor: types.TextPosition, offset: [2]i32 };
 
 var g_drag: ?Drag = null;
 var g_selected_index: usize = 0;
-var g_popover_open: bool = false;
+var g_is_popover_open: bool = false;
 
 /// At the thumbnail's size, shrunk only to fit the section.
 pub fn show(context: *ui.Frame) !void {
@@ -67,7 +67,7 @@ pub fn show(context: *ui.Frame) !void {
     stage_style.* = .{
         .width = .fixed(stage_size[0]),
         .height = .fixed(stage_size[1]),
-        .background = .{ .color = withAlpha(CLIENT_BACKGROUND, opacity) },
+        .background = .{ .color = scaleAlpha(CLIENT_BACKGROUND, opacity) },
         .overflow = .hidden,
     };
     const stage = Rect{ .key = stage_key, .style = stage_style };
@@ -86,13 +86,13 @@ pub fn show(context: *ui.Frame) !void {
 
 /// Beside the selected chip, on whichever side has room; a click outside closes it.
 fn popover(context: *ui.Frame) !void {
-    if (!g_popover_open) return;
+    if (!g_is_popover_open) return;
     const ui_state = context.ui();
-    const dialog = try widgets.openPopover(context, POPOVER_KEY, &g_popover_open, measuredBox(ui_state, chipKey(g_selected_index)));
+    const dialog = try widgets.openPopover(context, POPOVER_KEY, &g_is_popover_open, measuredBox(ui_state, chipKey(g_selected_index)));
     inline for (chips.CHIPS, 0..) |chip, index| {
         if (index == g_selected_index) {
             if (try chips.showSettings(context, chip, index)) {
-                g_popover_open = false;
+                g_is_popover_open = false;
                 context.requestRedraw();
             }
         }
@@ -104,7 +104,7 @@ fn popover(context: *ui.Frame) !void {
     inline for (chips.CHIPS, 0..) |_, index| {
         if (index != g_selected_index and measuredBox(ui_state, chipKey(index)).contains(point)) {
             g_selected_index = index;
-            g_popover_open = true;
+            g_is_popover_open = true;
         }
     }
 }
@@ -139,16 +139,16 @@ fn showChip(context: *ui.Frame, comptime chip: chips.Chip, comptime index: usize
     var position = settledPosition(look, chip_size, stage_size, scale);
     if (g_drag) |*drag| if (drag.index == index) {
         if (ui_state.input.mouseButton(.left).down) {
-            if (@abs(mouse[0] - drag.start[0]) + @abs(mouse[1] - drag.start[1]) > DRAG_THRESHOLD) drag.moved = true;
-            if (drag.moved) drag.position = dragTarget(mouse, drag.grab, stage_box, chip_size, stage_size, scale, range);
+            if (@abs(mouse[0] - drag.start[0]) + @abs(mouse[1] - drag.start[1]) > DRAG_THRESHOLD) drag.has_moved = true;
+            if (drag.has_moved) drag.position = dragTarget(mouse, drag.grab, stage_box, chip_size, stage_size, scale, range);
             position = drag.position;
         } else {
-            if (drag.moved) {
+            if (drag.has_moved) {
                 const drop = dropResult(drag.position, chip_size, stage_size, scale, range);
                 chips.place(chip, drop.anchor, drop.offset[0], drop.offset[1]);
                 position = drag.position;
             } else {
-                g_popover_open = true;
+                g_is_popover_open = true;
             }
             g_selected_index = index;
             g_drag = null;
@@ -156,15 +156,15 @@ fn showChip(context: *ui.Frame, comptime chip: chips.Chip, comptime index: usize
         }
     };
 
-    const is_selected = g_popover_open and index == g_selected_index;
+    const is_selected = g_is_popover_open and index == g_selected_index;
     const arena = context.arena();
     const chip_style = try arena.create(ui.Style);
     chip_style.* = style.overlay_text.with(.{
         .offset = position,
         .padding = .xy(draw.TEXT_PADDING_X * scale, draw.TEXT_PADDING_Y * scale),
-        .background = .{ .color = widgets.colorFromArgb(look.bg_color) },
+        .background = .{ .color = widgets.colorFromArgb(look.background_color) },
         // At rest the outline is the background, so the text box reaches the edge as the thumbnail's does.
-        .border_color = if (is_selected) .accent else .{ .color = widgets.colorFromArgb(look.bg_color) },
+        .border_color = if (is_selected) .accent else .{ .color = widgets.colorFromArgb(look.background_color) },
         .opacity = if (look.is_shown) 1 else style.OFF_TEXT_OPACITY,
     });
     const button = Button{ .key = key, .style = chip_style };
@@ -194,15 +194,15 @@ fn settledPosition(look: chips.Look, chip_size: [2]f32, stage_size: [2]f32, scal
 /// The cursor's spot for the chip, snapped flush to the nearest anchor when close and held within the offset range.
 fn dragTarget(mouse: [2]f64, grab: [2]f32, stage_box: Box, chip_size: [2]f32, stage_size: [2]f32, scale: f32, range: [2]f32) [2]f32 {
     const max = [2]f32{ @max(0, stage_size[0] - chip_size[0]), @max(0, stage_size[1] - chip_size[1]) };
-    var raw = [2]f32{
+    var raw_position = [2]f32{
         std.math.clamp(@as(f32, @floatCast(mouse[0])) - stage_box.x() - grab[0], 0, max[0]),
         std.math.clamp(@as(f32, @floatCast(mouse[1])) - stage_box.y() - grab[1], 0, max[1]),
     };
-    const anchor = anchorPosition(zoneFor(raw, chip_size, stage_size), chip_size, stage_size);
-    if (std.math.hypot(raw[0] - anchor[0], raw[1] - anchor[1]) < SNAP_DISTANCE) raw = anchor;
+    const anchor = anchorPosition(zoneFor(raw_position, chip_size, stage_size), chip_size, stage_size);
+    if (std.math.hypot(raw_position[0] - anchor[0], raw_position[1] - anchor[1]) < SNAP_DISTANCE) raw_position = anchor;
     return .{
-        std.math.clamp(raw[0], @max(0, anchor[0] + range[0] * scale), @min(max[0], anchor[0] + range[1] * scale)),
-        std.math.clamp(raw[1], @max(0, anchor[1] + range[0] * scale), @min(max[1], anchor[1] + range[1] * scale)),
+        std.math.clamp(raw_position[0], @max(0, anchor[0] + range[0] * scale), @min(max[0], anchor[0] + range[1] * scale)),
+        std.math.clamp(raw_position[1], @max(0, anchor[1] + range[0] * scale), @min(max[1], anchor[1] + range[1] * scale)),
     };
 }
 
@@ -230,9 +230,9 @@ fn zoneFor(position: [2]f32, chip_size: [2]f32, stage_size: [2]f32) types.TextPo
 /// The chip's top-left when it sits flush in `position`'s corner or edge.
 fn anchorPosition(position: types.TextPosition, chip_size: [2]f32, stage_size: [2]f32) [2]f32 {
     const index = @backingInt(position);
-    const free = [2]f32{ @max(0, stage_size[0] - chip_size[0]), @max(0, stage_size[1] - chip_size[1]) };
+    const free_space = [2]f32{ @max(0, stage_size[0] - chip_size[0]), @max(0, stage_size[1] - chip_size[1]) };
     const fractions = [3]f32{ 0, 0.5, 1 };
-    return .{ free[0] * fractions[index % 3], free[1] * fractions[index / 3] };
+    return .{ free_space[0] * fractions[index % 3], free_space[1] * fractions[index / 3] };
 }
 
 /// Covers the stage, centred and cropped by it.
@@ -251,10 +251,10 @@ fn stageBackground(context: *ui.Frame, stage_size: [2]f32, opacity: f32) !void {
     if (images.g_layout_preview.image(.str("knots.stage.backdrop"), image_style)) |image| try context.e(image);
 }
 
-fn withAlpha(value: u32, alpha: f32) ui.Color {
-    const base = @as(f32, @floatFromInt(value >> 24)) / 255.0;
+fn scaleAlpha(argb: u32, alpha: f32) ui.Color {
+    const base = @as(f32, @floatFromInt(argb >> 24)) / 255.0;
     const combined: u32 = @intFromFloat(@round(base * alpha * 255.0));
-    return widgets.colorFromArgb((value & 0x00FFFFFF) | (combined << 24));
+    return widgets.colorFromArgb((argb & 0x00FFFFFF) | (combined << 24));
 }
 
 comptime {

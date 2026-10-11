@@ -13,8 +13,8 @@ pub fn textOverlays(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Text Overlays", "Texts shown on each thumbnail, previewed at its size. Drag one to move it, or click it to turn it on or off and change its font and colours. Faded ones are off.", &style.section);
     try bind.toggle(context, thumbnail, "showText", "Show Text Overlays");
     const options = try widgets.openGroup(context, .src(@src()), thumbnail.get("showText"));
-    if (try widgets.checkbox(context, .src(@src()), "Sync Fonts and Backgrounds", &chips.g_sync_styling)) {
-        if (chips.g_sync_styling) chips.syncFromCharacterName();
+    if (try widgets.checkbox(context, .src(@src()), "Sync Fonts and Backgrounds", &chips.g_should_sync_styling)) {
+        if (chips.g_should_sync_styling) chips.syncFromCharacterName();
     }
     try widgets.hintText(context, .src(@src()), "Editing one overlay's font or background applies it to all the others.");
     try options.close(context);

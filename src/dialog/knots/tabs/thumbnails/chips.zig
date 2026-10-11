@@ -11,45 +11,10 @@ const overlay_text = @import("../overlay_text.zig");
 
 const Fields = overlay_text.Fields;
 
-/// The settings struct a chip's fields live in.
-pub const Section = enum { thumbnail, notifications, combat, mining, bounty, resources };
-
-/// One row of a chip's popover; number, choice and text rows show only in Advanced Mode, like the tabs they came from, and a `hint` always shows since a popover has no ? button.
-pub const PopoverField = union(enum) {
-    /// A setting of the chip's section; `disables_color` greys out the text colour while it's on.
-    toggle: struct { field: []const u8, label: []const u8, disables_color: bool = false, hint: ?[]const u8 = null },
-    number: struct { field: []const u8, label: []const u8, unit: []const u8, ms_as_seconds: bool = false, hint: ?[]const u8 = null },
-    choice: struct { field: []const u8, label: []const u8 },
-    text: struct { field: []const u8, label: []const u8, placeholder: []const u8, hint: ?[]const u8 = null },
-    /// The chip's text colour.
-    color,
-    /// Name, size and weight on one row.
-    font,
-    /// Colour, with an opacity slider row beneath it.
-    background,
-};
-
-pub const Chip = struct {
-    label: []const u8,
-    /// What the stage draws for it.
-    sample: []const u8,
-    section: Section,
-    fields: Fields,
-    show_field: []const u8,
-    /// The thumbnail's Show Text Overlays has to be on too.
-    needs_show_text: bool,
-    /// Its section's master switch, e.g. Combat's `enabled`, which has to be on too.
-    enabled_field: ?[]const u8 = null,
-    unique_field: ?[]const u8 = null,
-    /// Driven by the chat and game logs, so its popover says when Log Monitoring is off.
-    needs_chatlog: bool = false,
-    popover: []const PopoverField,
-};
-
 const STYLE_ROWS = [_]PopoverField{ .font, .background };
 const WINDOW_HINT = "The rolling look-back period the rate is averaged over, not how often the number updates.";
 const UPDATE_INTERVAL = PopoverField{ .number = .{ .field = "update_interval_ms", .label = "Update Interval", .unit = "s", .ms_as_seconds = true } };
-const COMBAT_WINDOW = PopoverField{ .number = .{ .field = "window_seconds", .label = "Window", .unit = "s", .hint = WINDOW_HINT } };
+const RATE_WINDOW = PopoverField{ .number = .{ .field = "window_seconds", .label = "Window", .unit = "s", .hint = WINDOW_HINT } };
 
 pub const CHIPS = [_]Chip{
     .{
@@ -131,7 +96,7 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "enabled", .label = "Enable Combat Overlays" } },
             .{ .toggle = .{ .field = "show_incoming", .label = "Show Incoming Damage" } },
             .{ .toggle = .{ .field = "incoming_show_prefix", .label = "Show IN: Prefix" } },
-            COMBAT_WINDOW,
+            RATE_WINDOW,
             UPDATE_INTERVAL,
             .{ .text = .{
                 .field = "damage_alert_excluded_weapons",
@@ -155,7 +120,7 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "enabled", .label = "Enable Combat Overlays" } },
             .{ .toggle = .{ .field = "show_outgoing", .label = "Show Outgoing Damage" } },
             .{ .toggle = .{ .field = "outgoing_show_prefix", .label = "Show OUT: Prefix" } },
-            COMBAT_WINDOW,
+            RATE_WINDOW,
             UPDATE_INTERVAL,
             .color,
         } ++ STYLE_ROWS),
@@ -185,7 +150,7 @@ pub const CHIPS = [_]Chip{
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "enabled", .label = "Show Bounty Rate" } },
             .{ .toggle = .{ .field = "show_prefix", .label = "Show ISK: Prefix" } },
-            .{ .number = .{ .field = "window_seconds", .label = "Window", .unit = "s", .hint = WINDOW_HINT } },
+            RATE_WINDOW,
             UPDATE_INTERVAL,
             .{ .choice = .{ .field = "isk_rate_unit", .label = "ISK Rate Unit" } },
             .color,
@@ -209,6 +174,41 @@ pub const CHIPS = [_]Chip{
     },
 };
 
+/// The settings struct a chip's fields live in.
+pub const Section = enum { thumbnail, notifications, combat, mining, bounty, resources };
+
+/// One row of a chip's popover; number, choice and text rows show only in Advanced Mode, like the tabs they came from, and a `hint` always shows since a popover has no ? button.
+pub const PopoverField = union(enum) {
+    /// A setting of the chip's section; `disables_color` greys out the text colour while it's on.
+    toggle: struct { field: []const u8, label: []const u8, disables_color: bool = false, hint: ?[]const u8 = null },
+    number: struct { field: []const u8, label: []const u8, unit: []const u8, ms_as_seconds: bool = false, hint: ?[]const u8 = null },
+    choice: struct { field: []const u8, label: []const u8 },
+    text: struct { field: []const u8, label: []const u8, placeholder: []const u8, hint: ?[]const u8 = null },
+    /// The chip's text colour.
+    color,
+    /// Name, size and weight on one row.
+    font,
+    /// Colour, with an opacity slider row beneath it.
+    background,
+};
+
+pub const Chip = struct {
+    label: []const u8,
+    /// What the stage draws for it.
+    sample: []const u8,
+    section: Section,
+    fields: Fields,
+    show_field: []const u8,
+    /// The thumbnail's Show Text Overlays has to be on too.
+    needs_show_text: bool,
+    /// Its section's master switch, e.g. Combat's `enabled`, which has to be on too.
+    enabled_field: ?[]const u8 = null,
+    unique_field: ?[]const u8 = null,
+    /// Driven by the chat and game logs, so its popover says when Log Monitoring is off.
+    needs_chatlog: bool = false,
+    popover: []const PopoverField,
+};
+
 /// What the stage needs to draw a chip, read from the edited settings.
 pub const Look = struct {
     position: types.TextPosition,
@@ -217,12 +217,12 @@ pub const Look = struct {
     font_size: i32,
     font_weight: types.FontWeight,
     color: u32,
-    bg_color: u32,
+    background_color: u32,
     is_shown: bool,
 };
 
 /// The Text Overlays section's Sync Fonts and Backgrounds; not saved.
-pub var g_sync_styling: bool = false;
+pub var g_should_sync_styling: bool = false;
 
 pub fn SectionType(comptime section: Section) type {
     return switch (section) {
@@ -251,8 +251,8 @@ pub fn look(comptime chip: Chip) Look {
     const ref = refFor(chip.section);
     const thumbnail = &session.profile().ptr.thumbnail;
     const fields = chip.fields;
-    const unique = if (chip.unique_field) |field| ref.get(field) else false;
-    const enabled = if (chip.enabled_field) |field| ref.get(field) else true;
+    const is_unique = if (chip.unique_field) |field| ref.get(field) else false;
+    const is_enabled = if (chip.enabled_field) |field| ref.get(field) else true;
     return .{
         .position = ref.get(fields.position),
         .offset_x = ref.get(fields.offset_x),
@@ -260,9 +260,9 @@ pub fn look(comptime chip: Chip) Look {
         .font_size = ref.get(fields.font_size),
         .font_weight = ref.get(fields.font_weight),
         // Unique colours vary per character, so a sample stands in.
-        .color = if (unique) style.UNIQUE_SAMPLE else if (fields.color) |field| ref.get(field) else 0xFFFFFFFF,
-        .bg_color = ref.get(fields.bg_color),
-        .is_shown = ref.get(chip.show_field) and enabled and (!chip.needs_show_text or thumbnail.showText),
+        .color = if (is_unique) style.UNIQUE_SAMPLE else if (fields.color) |field| ref.get(field) else 0xFFFFFFFF,
+        .background_color = ref.get(fields.bg_color),
+        .is_shown = ref.get(chip.show_field) and is_enabled and (!chip.needs_show_text or thumbnail.showText),
     };
 }
 
@@ -297,7 +297,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
     const was_aligned = widgets.useAlignedRows(true);
     defer _ = widgets.useAlignedRows(was_aligned);
     const is_advanced = session.global().get("advancedMode");
-    var color_disabled = false;
+    var is_color_disabled = false;
     // Every row after the section's master switch, or the chip's show switch, waits on it.
     var gates: [2]widgets.Group = undefined;
     var gate_count: usize = 0;
@@ -306,7 +306,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
             .toggle => |toggle| {
                 try bind.toggle(context, ref, toggle.field, toggle.label);
                 if (toggle.hint) |hint| try widgets.paragraph(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ toggle.field), hint);
-                if (toggle.disables_color and ref.get(toggle.field)) color_disabled = true;
+                if (toggle.disables_color and ref.get(toggle.field)) is_color_disabled = true;
                 if (comptime isGate(chip, toggle.field)) {
                     gates[gate_count] = try widgets.openGroup(context, .str("knots.chip.gate:" ++ chip.label ++ ":" ++ toggle.field), ref.get(toggle.field));
                     gate_count += 1;
@@ -322,7 +322,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
                 if (text.hint) |hint| try widgets.paragraph(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ text.field), hint);
             },
             .color => {
-                const color = try widgets.openGroup(context, .str("knots.chip.color:" ++ chip.label), !color_disabled);
+                const color = try widgets.openGroup(context, .str("knots.chip.color:" ++ chip.label), !is_color_disabled);
                 // Comptime: a chip listing .color without a colour field fails to compile.
                 try bind.rgb(context, ref, fields.color.?, "Text Color");
                 try color.close(context);
@@ -347,7 +347,7 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
 
     const is_restyled = !std.mem.eql(u8, font_before, ref.get(fields.font_name)) or size_before != ref.get(fields.font_size) or
         weight_before != ref.get(fields.font_weight) or background_before != ref.get(fields.bg_color);
-    if (g_sync_styling and is_restyled) copyStyleToOthers(index);
+    if (g_should_sync_styling and is_restyled) copyStyleToOthers(index);
     return close_clicked;
 }
 
