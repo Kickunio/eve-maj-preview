@@ -335,7 +335,7 @@ fn applyPotato(paths: []const []const u8) void {
     var already_set: usize = 0;
     var first_failure: ?ultra_potato.ApplyResult = null;
     for (results) |result| {
-        if (!result.success) {
+        if (!result.succeeded) {
             if (first_failure == null) first_failure = result;
         } else if (result.changed) changed += 1 else already_set += 1;
     }

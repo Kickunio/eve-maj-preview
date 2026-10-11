@@ -17,6 +17,7 @@ test {
     _ = @import("dialog/knots/labels.zig");
     _ = @import("dialog/knots/screen_math.zig");
     _ = @import("dialog/tools/region_math.zig");
+    _ = @import("dialog/tools/ultra_potato.zig");
     _ = @import("hotkeys/bindings.zig");
     _ = @import("hotkeys/exclusions.zig");
     _ = @import("layout/region_grid.zig");

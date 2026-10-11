@@ -33,20 +33,20 @@ pub fn snapSpanOffset(low: i32, high: i32, axis: Axis, others: []const RECT, bou
 
 /// `rect` resized to `length` along `axis`, keeping its left or top edge unless that would run it past `bounds`; never under `min_length`.
 pub fn withLength(rect: RECT, axis: Axis, length: i32, bounds: RECT, min_length: i32) RECT {
-    var r = rect;
+    var resized = rect;
     switch (axis) {
         .x => {
-            const span = resizedSpan(r.left, length, bounds.left, bounds.right, min_length);
-            r.left = span[0];
-            r.right = span[1];
+            const span = resizedSpan(resized.left, length, bounds.left, bounds.right, min_length);
+            resized.left = span[0];
+            resized.right = span[1];
         },
         .y => {
-            const span = resizedSpan(r.top, length, bounds.top, bounds.bottom, min_length);
-            r.top = span[0];
-            r.bottom = span[1];
+            const span = resizedSpan(resized.top, length, bounds.top, bounds.bottom, min_length);
+            resized.top = span[0];
+            resized.bottom = span[1];
         },
     }
-    return r;
+    return resized;
 }
 
 fn considerRect(value: i32, axis: Axis, rect: RECT, best: *?i32, best_gap: *i32) void {

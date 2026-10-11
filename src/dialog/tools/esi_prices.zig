@@ -9,7 +9,7 @@ const ESI_BASE = "https://esi.evetech.net/latest";
 const ESI_JITA_REGION_ID = 10000002;
 const ESI_JITA_STATION_ID: i64 = 60003760;
 
-/// Caps how many HTTP requests run at once for a price fetch - bounded so this stays polite to ESI rather than opening dozens of connections at once.
+/// Most requests a price fetch runs at once, to stay polite to ESI.
 const MAX_CONCURRENT_PRICE_REQUESTS = 8;
 
 /// name is copied into the caller's arena before it's returned.
@@ -22,13 +22,13 @@ pub const Price = struct {
 pub const Prices = struct {
     items: []const Price,
 
-    pub fn jsonStringify(self: Prices, jw: anytype) !void {
-        try jw.beginObject();
-        for (self.items) |p| {
-            try jw.objectField(p.name);
-            try jw.write(p.price);
+    pub fn jsonStringify(self: Prices, json_writer: anytype) !void {
+        try json_writer.beginObject();
+        for (self.items) |entry| {
+            try json_writer.objectField(entry.name);
+            try json_writer.write(entry.price);
         }
-        try jw.endObject();
+        try json_writer.endObject();
     }
 };
 
@@ -45,6 +45,7 @@ const PriceFetchContext = struct {
     lookups: []const PriceLookup,
     next_index: std.atomic.Value(usize),
     results_mutex: std.Io.Mutex = .init,
+    /// Guarded by results_mutex.
     results: *std.ArrayList(Price),
 };
 
@@ -56,8 +57,8 @@ pub fn fetchOrePrices(allocator: std.mem.Allocator, arena: std.mem.Allocator, io
 
     var type_ids = try resolveOreTypeIds(allocator, &client, names);
     defer {
-        var key_it = type_ids.keyIterator();
-        while (key_it.next()) |k| allocator.free(k.*);
+        var it = type_ids.keyIterator();
+        while (it.next()) |key| allocator.free(key.*);
         type_ids.deinit();
     }
 
@@ -80,11 +81,11 @@ pub fn fetchOrePrices(allocator: std.mem.Allocator, arena: std.mem.Allocator, io
             .io = io,
             .client = &client,
             .lookups = lookups,
-            .next_index = std.atomic.Value(usize).init(0),
+            .next_index = .init(0),
             .results = &results,
         };
 
-        // Spawn up to MAX_CONCURRENT_PRICE_REQUESTS - 1 background workers; the calling thread pulls from the same queue as the last one, so a failed spawn just means less parallelism, not less work done.
+        // The calling thread works the queue too, so a failed spawn only costs parallelism.
         const worker_count = @min(MAX_CONCURRENT_PRICE_REQUESTS, lookups.len);
         var threads: [MAX_CONCURRENT_PRICE_REQUESTS - 1]?std.Thread = @splat(null);
         const background_workers = worker_count - 1;
@@ -95,26 +96,30 @@ pub fn fetchOrePrices(allocator: std.mem.Allocator, arena: std.mem.Allocator, io
             };
         }
         priceFetchWorker(&context);
-        for (threads[0..background_workers]) |maybe_t| {
-            if (maybe_t) |t| t.join();
+        for (threads[0..background_workers]) |maybe_thread| {
+            if (maybe_thread) |thread| thread.join();
         }
     }
 
     const copied = try arena.alloc(Price, results.items.len);
-    for (results.items, copied) |r, *c| c.* = .{ .name = try arena.dupe(u8, r.name), .price = r.price };
+    for (results.items, copied) |result, *copy| copy.* = .{ .name = try arena.dupe(u8, result.name), .price = result.price };
     return .{ .items = copied };
 }
 
 /// Resolves "Compressed <name>" -> ESI type_id for each ore name via the public (no-auth) ESI name resolver.
 /// Names with no market match are simply absent from the result. Caller frees both the keys and the map.
 fn resolveOreTypeIds(allocator: std.mem.Allocator, client: *std.http.Client, names: []const []const u8) !std.StringHashMap(i64) {
-    var result = std.StringHashMap(i64).init(allocator);
-    errdefer result.deinit();
+    var result: std.StringHashMap(i64) = .init(allocator);
+    errdefer {
+        var it = result.keyIterator();
+        while (it.next()) |key| allocator.free(key.*);
+        result.deinit();
+    }
     if (names.len == 0) return result;
 
     const prefixed = try allocator.alloc([]const u8, names.len);
     defer {
-        for (prefixed) |p| allocator.free(p);
+        for (prefixed) |name| allocator.free(name);
         allocator.free(prefixed);
     }
     for (names, 0..) |name, i| {
@@ -184,7 +189,10 @@ fn fetchJitaBuyPrice(allocator: std.mem.Allocator, client: *std.http.Client, typ
         return null;
     };
     defer parsed.deinit();
-    if (parsed.value != .array) return null;
+    if (parsed.value != .array) {
+        slog.warn("Failed to read ESI prices for type_id {}: response isn't a JSON array", .{type_id});
+        return null;
+    }
 
     var best: ?f64 = null;
     for (parsed.value.array.items) |order| {
@@ -198,7 +206,7 @@ fn fetchJitaBuyPrice(allocator: std.mem.Allocator, client: *std.http.Client, typ
             .integer => |i| @floatFromInt(i),
             else => continue,
         };
-        if (best == null or price > best.?) best = price;
+        best = if (best) |current| @max(current, price) else price;
     }
     return best;
 }
@@ -206,10 +214,10 @@ fn fetchJitaBuyPrice(allocator: std.mem.Allocator, client: *std.http.Client, typ
 /// Pulls lookups off context's shared index until exhausted; safe to run on several threads (including the caller's) at once.
 fn priceFetchWorker(context: *PriceFetchContext) void {
     while (true) {
-        const i = context.next_index.fetchAdd(1, .monotonic);
-        if (i >= context.lookups.len) return;
+        const lookup_index = context.next_index.fetchAdd(1, .monotonic);
+        if (lookup_index >= context.lookups.len) return;
 
-        const lookup = context.lookups[i];
+        const lookup = context.lookups[lookup_index];
         const price = fetchJitaBuyPrice(context.allocator, context.client, lookup.type_id) orelse continue;
 
         context.results_mutex.lock(context.io) catch |err| {

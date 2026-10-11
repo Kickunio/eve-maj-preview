@@ -5,7 +5,11 @@ const log = @import("../../log.zig");
 
 const slog = log.scoped("ultra_potato");
 
-/// Keys in EVE's core_public__.yaml `device:` section that Ultra Potato Mode forces to -300 (the client's lowest-quality sentinel value).
+/// The client's lowest-quality sentinel value.
+const LOWEST_QUALITY = "-300";
+const MAX_SETTINGS_FILE_SIZE = 4 * 1024 * 1024;
+
+/// Keys in EVE's core_public__.yaml `device:` section that Ultra Potato Mode forces to LOWEST_QUALITY.
 pub const TARGET_KEYS = [_][]const u8{
     "aoQuality",
     "charClothSimulation",
@@ -27,7 +31,7 @@ pub const Profile = struct {
 /// path comes from applyToFiles' allocator, which the caller frees; error_message is static.
 pub const ApplyResult = struct {
     path: []const u8,
-    success: bool,
+    succeeded: bool,
     changed: bool,
     error_message: ?[:0]const u8,
 };
@@ -46,9 +50,9 @@ const PatchedLine = struct {
 pub fn scanProfiles(allocator: std.mem.Allocator, io: std.Io, environ_map: *const std.process.Environ.Map) ![]Profile {
     var profiles: std.ArrayList(Profile) = .empty;
     errdefer {
-        for (profiles.items) |p| {
-            allocator.free(p.path);
-            allocator.free(p.label);
+        for (profiles.items) |profile| {
+            allocator.free(profile.path);
+            allocator.free(profile.label);
         }
         profiles.deinit(allocator);
     }
@@ -97,7 +101,8 @@ pub fn scanProfiles(allocator: std.mem.Allocator, io: std.Io, environ_map: *cons
             errdefer allocator.free(yaml_path);
 
             // Not every settings folder has one.
-            const probe = std.Io.Dir.cwd().openFile(io, yaml_path, .{}) catch {
+            const probe = std.Io.Dir.cwd().openFile(io, yaml_path, .{}) catch |err| {
+                if (err != error.FileNotFound) slog.warn("Failed to open '{s}': {}", .{ yaml_path, err });
                 allocator.free(yaml_path);
                 continue;
             };
@@ -113,12 +118,17 @@ pub fn scanProfiles(allocator: std.mem.Allocator, io: std.Io, environ_map: *cons
     return try profiles.toOwnedSlice(allocator);
 }
 
+/// Caller frees the slice and each path.
 pub fn applyToFiles(allocator: std.mem.Allocator, io: std.Io, paths: []const []const u8) ![]ApplyResult {
-    var results = try allocator.alloc(ApplyResult, paths.len);
+    const results = try allocator.alloc(ApplyResult, paths.len);
     errdefer allocator.free(results);
+    var done_count: usize = 0;
+    errdefer for (results[0..done_count]) |result| allocator.free(result.path);
 
-    for (paths, 0..) |path, i| {
-        results[i] = try applyToOneFile(allocator, io, path);
+    for (paths, results) |path, *result| {
+        result.* = try applyToOneFile(allocator, io, path);
+        done_count += 1;
+        if (!result.succeeded) slog.warn("Failed to apply Ultra Potato Mode to '{s}': {s}", .{ path, result.error_message orelse "unknown error" });
     }
 
     return results;
@@ -127,32 +137,32 @@ pub fn applyToFiles(allocator: std.mem.Allocator, io: std.Io, paths: []const []c
 fn applyToOneFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !ApplyResult {
     const path_copy = try allocator.dupe(u8, path);
 
-    const original = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4 * 1024 * 1024)) catch |err| {
-        return .{ .path = path_copy, .success = false, .changed = false, .error_message = @errorName(err) };
+    const original = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(MAX_SETTINGS_FILE_SIZE)) catch |err| {
+        return .{ .path = path_copy, .succeeded = false, .changed = false, .error_message = @errorName(err) };
     };
     defer allocator.free(original);
 
-    if (!backupExists(io, path, allocator) and !makeBackup(io, path, allocator)) {
-        return .{ .path = path_copy, .success = false, .changed = false, .error_message = "Failed to write backup" };
+    if (!backupExists(allocator, io, path) and !makeBackup(allocator, io, path)) {
+        return .{ .path = path_copy, .succeeded = false, .changed = false, .error_message = "Failed to write backup" };
     }
 
     const outcome = patchYamlText(allocator, original) catch |err| {
-        return .{ .path = path_copy, .success = false, .changed = false, .error_message = @errorName(err) };
+        return .{ .path = path_copy, .succeeded = false, .changed = false, .error_message = @errorName(err) };
     };
     defer allocator.free(outcome.text);
 
     if (!outcome.changed) {
-        return .{ .path = path_copy, .success = true, .changed = false, .error_message = null };
+        return .{ .path = path_copy, .succeeded = true, .changed = false, .error_message = null };
     }
 
     config.atomicWriteFile(allocator, io, path, outcome.text) catch |err| {
-        return .{ .path = path_copy, .success = false, .changed = false, .error_message = @errorName(err) };
+        return .{ .path = path_copy, .succeeded = false, .changed = false, .error_message = @errorName(err) };
     };
 
-    return .{ .path = path_copy, .success = true, .changed = true, .error_message = null };
+    return .{ .path = path_copy, .succeeded = true, .changed = true, .error_message = null };
 }
 
-fn backupExists(io: std.Io, path: []const u8, allocator: std.mem.Allocator) bool {
+fn backupExists(allocator: std.mem.Allocator, io: std.Io, path: []const u8) bool {
     const backup_path = allocator.print("{s}.bak", .{path}) catch |err| {
         slog.err("Failed to build the backup path for '{s}': {}", .{ path, err });
         return false;
@@ -164,7 +174,7 @@ fn backupExists(io: std.Io, path: []const u8, allocator: std.mem.Allocator) bool
     return true;
 }
 
-fn makeBackup(io: std.Io, path: []const u8, allocator: std.mem.Allocator) bool {
+fn makeBackup(allocator: std.mem.Allocator, io: std.Io, path: []const u8) bool {
     const backup_path = allocator.print("{s}.bak", .{path}) catch |err| {
         slog.err("Failed to build the backup path for '{s}': {}", .{ path, err });
         return false;
@@ -185,10 +195,10 @@ fn patchYamlText(allocator: std.mem.Allocator, original: []const u8) !PatchOutco
 
     var any_changed = false;
     var it = std.mem.splitScalar(u8, original, '\n');
-    var first = true;
+    var is_first = true;
     while (it.next()) |line| {
-        if (!first) try out.append(allocator, '\n');
-        first = false;
+        if (!is_first) try out.append(allocator, '\n');
+        is_first = false;
 
         const patched = try patchLine(allocator, line);
         defer allocator.free(patched.text);
@@ -199,12 +209,12 @@ fn patchYamlText(allocator: std.mem.Allocator, original: []const u8) !PatchOutco
     return .{ .text = try out.toOwnedSlice(allocator), .changed = any_changed };
 }
 
-/// Matches lines shaped like `  keyName: [connectionId, value]` for a key in TARGET_KEYS and rewrites `value` to -300 if it isn't already.
+/// Matches lines shaped like `  keyName: [connectionId, value]` for a key in TARGET_KEYS and rewrites `value` to LOWEST_QUALITY if it isn't already.
 fn patchLine(allocator: std.mem.Allocator, line: []const u8) !PatchedLine {
     var body = line;
-    var cr: []const u8 = "";
+    var line_ending: []const u8 = "";
     if (body.len > 0 and body[body.len - 1] == '\r') {
-        cr = "\r";
+        line_ending = "\r";
         body = body[0 .. body.len - 1];
     }
 
@@ -224,11 +234,38 @@ fn patchLine(allocator: std.mem.Allocator, line: []const u8) !PatchedLine {
         const id_text = std.mem.trim(u8, content[0..comma_index], " ");
         const value_text = std.mem.trim(u8, content[comma_index + 1 ..], " ");
 
-        if (std.mem.eql(u8, value_text, "-300")) break;
+        if (std.mem.eql(u8, value_text, LOWEST_QUALITY)) break;
 
-        const new_line = try allocator.print("{s}{s}: [{s}, -300]{s}", .{ body[0..indent_len], key, id_text, cr });
+        const new_line = try allocator.print("{s}{s}: [{s}, " ++ LOWEST_QUALITY ++ "]{s}", .{ body[0..indent_len], key, id_text, line_ending });
         return .{ .text = new_line, .changed = true };
     }
 
     return .{ .text = try allocator.dupe(u8, line), .changed = false };
+}
+
+const testing = std.testing;
+
+test "patchLine rewrites a target key's value and keeps its indent and CRLF" {
+    const patched = try patchLine(testing.allocator, "  shadowQuality: [0, 2]\r");
+    defer testing.allocator.free(patched.text);
+    try testing.expect(patched.changed);
+    try testing.expectEqualStrings("  shadowQuality: [0, -300]\r", patched.text);
+}
+
+test "patchLine leaves other keys and already-lowest values unchanged" {
+    const other = try patchLine(testing.allocator, "  windowMode: [0, 2]");
+    defer testing.allocator.free(other.text);
+    try testing.expect(!other.changed);
+    try testing.expectEqualStrings("  windowMode: [0, 2]", other.text);
+
+    const lowest = try patchLine(testing.allocator, "  aoQuality: [1, -300]");
+    defer testing.allocator.free(lowest.text);
+    try testing.expect(!lowest.changed);
+}
+
+test "patchYamlText keeps untouched lines byte for byte" {
+    const outcome = try patchYamlText(testing.allocator, "device:\n  textureQuality: [0, 1]\n  # comment\n");
+    defer testing.allocator.free(outcome.text);
+    try testing.expect(outcome.changed);
+    try testing.expectEqualStrings("device:\n  textureQuality: [0, -300]\n  # comment\n", outcome.text);
 }
