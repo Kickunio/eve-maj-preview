@@ -30,14 +30,14 @@ const Output = struct {
 
     fn write(self: *Output, bytes: []const u8) void {
         if (self.is_full) return;
-        var count = bytes.len;
-        if (count > self.buf.len - self.len) {
-            count = self.buf.len - self.len;
-            while (count > 0 and isContinuationByte(bytes[count])) count -= 1;
+        var byte_count = bytes.len;
+        if (byte_count > self.buf.len - self.len) {
+            byte_count = self.buf.len - self.len;
+            while (byte_count > 0 and isContinuationByte(bytes[byte_count])) byte_count -= 1;
             self.is_full = true;
         }
-        @memcpy(self.buf[self.len..][0..count], bytes[0..count]);
-        self.len += count;
+        @memcpy(self.buf[self.len..][0..byte_count], bytes[0..byte_count]);
+        self.len += byte_count;
     }
 
     fn slice(self: *const Output) []const u8 {
@@ -79,13 +79,13 @@ pub fn render(template: []const u8, placeholders: []const Placeholder, values: V
 
 /// For displays with one row per notification: line breaks become spaces, truncated on a UTF-8 boundary; the result points into `buf`.
 pub fn oneLine(text: []const u8, buf: []u8) []const u8 {
-    var n = @min(text.len, buf.len);
-    if (n < text.len) {
-        while (n > 0 and isContinuationByte(text[n])) n -= 1;
+    var copy_len = @min(text.len, buf.len);
+    if (copy_len < text.len) {
+        while (copy_len > 0 and isContinuationByte(text[copy_len])) copy_len -= 1;
     }
-    @memcpy(buf[0..n], text[0..n]);
-    std.mem.replaceScalar(u8, buf[0..n], '\n', ' ');
-    return buf[0..n];
+    @memcpy(buf[0..copy_len], text[0..copy_len]);
+    std.mem.replaceScalar(u8, buf[0..copy_len], '\n', ' ');
+    return buf[0..copy_len];
 }
 
 fn find(placeholders: []const Placeholder, name: []const u8) ?Placeholder {

@@ -46,16 +46,16 @@ pub fn notifyAll(painter: *Painter, notification: notification_mod.Notification)
     var text_buf: [TEXT_MAX]u8 = undefined;
     const text = notification_mod.text(notification, type_config.customText(), null, &text_buf);
 
-    var shown = false;
+    var has_shown_any = false;
     for (painter.thumbnails.items) |*thumbnail| {
         if (!thumbnail.is_eve_client) continue;
         const queued = queue(painter, thumbnail, text, notification.notification_type, false) catch |err| {
             slog.err("Failed to show {s} notification for '{s}': {}", .{ @tagName(notification.notification_type), thumbnail.character_name, err });
             continue;
         };
-        shown = shown or queued;
+        has_shown_any = has_shown_any or queued;
     }
-    if (shown) alert_effects.play(settings, type_config, text, null);
+    if (has_shown_any) alert_effects.play(settings, type_config, text, null);
 }
 
 /// Config dialog's "Test Notification": shows `notification_type` with sample fields on every EVE client, bypasses every suppression, force-shows hidden thumbnails for its duration, and skips history/cycle tracking; alerts play once rather than per thumbnail.
@@ -120,7 +120,7 @@ pub fn expire(painter: *Painter) void {
 }
 
 /// Applies the type's enable/mute/suppress/throttle rules and queues the notification; false if it was filtered out.
-fn queue(painter: *Painter, thumbnail: *ThumbnailWindow, text: []const u8, notification_type: notification_mod.NotificationType, record_history: bool) !bool {
+fn queue(painter: *Painter, thumbnail: *ThumbnailWindow, text: []const u8, notification_type: notification_mod.NotificationType, should_record_history: bool) !bool {
     const settings = &painter.config.thumbnail.notifications;
     if (!settings.enabled) return false;
     if (painter.config.isNotificationMuted(thumbnail.character_name)) return false;
@@ -138,7 +138,7 @@ fn queue(painter: *Painter, thumbnail: *ThumbnailWindow, text: []const u8, notif
 
     // Game events feed the "cycle to recently notified" queue; feedback on the user's own action must not.
     if (!notification_mod.isUserAction(notification_type)) painter.notified_queue.track(painter.allocator, thumbnail.character_name);
-    if (record_history) painter.notification_history.push(thumbnail.source_hwnd, thumbnail.character_name, text, notification_type, thumbnail.cached_character_color);
+    if (should_record_history) painter.notification_history.push(thumbnail.source_hwnd, thumbnail.character_name, text, notification_type, thumbnail.cached_character_color);
 
     slog.debug("Queued notification for {s}: [{s}] {s} (border_color_override: {?})", .{ thumbnail.character_name, @tagName(notification_type), text, type_config.border_color });
     return true;

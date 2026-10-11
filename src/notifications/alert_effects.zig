@@ -8,20 +8,20 @@ const log = @import("../log.zig");
 const slog = log.scoped("alert_effects");
 
 /// Main thread only; session-only, never saved to the profile.
-var g_muted = false;
+var g_is_muted = false;
 
 pub fn isMuted() bool {
-    return g_muted;
+    return g_is_muted;
 }
 
 pub fn toggleMuted() void {
-    g_muted = !g_muted;
-    slog.info("Audio alerts {s}", .{if (g_muted) "muted" else "unmuted"});
+    g_is_muted = !g_is_muted;
+    slog.info("Audio alerts {s}", .{if (g_is_muted) "muted" else "unmuted"});
 }
 
 /// Speaks the phrase the popup shows and plays its sound, unless muted; each has its own switch and volume.
 pub fn play(notification_config: *const config.NotificationConfig, type_config: config.NotificationTypeConfig, text: []const u8, spoken_name: ?[]const u8) void {
-    if (g_muted) return;
+    if (g_is_muted) return;
     playUnmuted(notification_config, type_config, text, spoken_name);
 }
 
@@ -31,7 +31,10 @@ pub fn playUnmuted(notification_config: *const config.NotificationConfig, type_c
         tts.setVoiceSettings(notification_config.tts_volume, notification_config.tts_rate);
         if (spoken_name) |name| {
             var speak_buf: [256]u8 = undefined;
-            const spoken = std.mem.print(&speak_buf, "{s}, {s}", .{ name, text }) catch text;
+            const spoken = std.mem.print(&speak_buf, "{s}, {s}", .{ name, text }) catch |err| blk: {
+                slog.debug("Failed to fit '{s}' into the spoken alert, speaking it without: {}", .{ name, err });
+                break :blk text;
+            };
             tts.speakAlert(spoken);
         } else {
             tts.speakAlert(text);

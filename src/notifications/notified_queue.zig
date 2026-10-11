@@ -9,7 +9,7 @@ pub const NotifiedQueue = struct {
     /// Owns a copy of the name since it must outlive ThumbnailWindow.character_name, which is freed on window close.
     const Entry = struct {
         character_name: []const u8,
-        notified_at_ms: win32.Ticks,
+        notified_at: win32.Ticks,
     };
 
     entries: std.ArrayList(Entry) = .empty,
@@ -28,7 +28,7 @@ pub const NotifiedQueue = struct {
                 const existing = self.entries.orderedRemove(i);
                 self.entries.append(allocator, .{
                     .character_name = existing.character_name,
-                    .notified_at_ms = now,
+                    .notified_at = now,
                 }) catch |err| {
                     slog.err("Failed to requeue notified character '{s}': {}", .{ character_name, err });
                     allocator.free(existing.character_name);
@@ -37,13 +37,13 @@ pub const NotifiedQueue = struct {
             }
         }
 
-        const name_dup = allocator.dupe(u8, character_name) catch |err| {
+        const owned_name = allocator.dupe(u8, character_name) catch |err| {
             slog.err("Failed to track notified character '{s}': {}", .{ character_name, err });
             return;
         };
-        self.entries.append(allocator, .{ .character_name = name_dup, .notified_at_ms = now }) catch |err| {
+        self.entries.append(allocator, .{ .character_name = owned_name, .notified_at = now }) catch |err| {
             slog.err("Failed to queue notified character '{s}': {}", .{ character_name, err });
-            allocator.free(name_dup);
+            allocator.free(owned_name);
         };
     }
 
@@ -54,7 +54,7 @@ pub const NotifiedQueue = struct {
         errdefer result.deinit(out_allocator);
 
         for (self.entries.items) |entry| {
-            if (now.elapsedSince(entry.notified_at_ms) <= retention_ms) {
+            if (now.elapsedSince(entry.notified_at) <= retention_ms) {
                 try result.append(out_allocator, entry.character_name);
             }
         }

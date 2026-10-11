@@ -1,16 +1,15 @@
 //! Sound alerts: WAV or MP3 decoded by Media Foundation and played through waveOut on a worker thread.
 const std = @import("std");
+const win32 = @import("../platform/win32.zig");
 const worker = @import("worker.zig");
 const log = @import("../log.zig");
 
 const windows = std.os.windows;
+const HANDLE = win32.HANDLE;
 const slog = log.scoped("sound");
 
 const HRESULT = c_long;
 const WCHAR = u16;
-const BOOL = c_int;
-const HANDLE = *anyopaque;
-const DWORD = u32;
 
 const MF_MT_MAJOR_TYPE = windows.GUID{
     .Data1 = 0x48eba18e,
@@ -62,7 +61,7 @@ const MF_SOURCE_READERF_ENDOFSTREAM: u32 = 0x2;
 
 const WAVE_MAPPER: u32 = 0xFFFFFFFF;
 const CALLBACK_EVENT: u32 = 0x00050000;
-const INFINITE: u32 = 0xFFFFFFFF;
+const WAVE_FORMAT_PCM: u16 = 1;
 
 extern "mfplat" fn MFStartup(version: u32, flags: u32) callconv(.c) HRESULT;
 extern "mfplat" fn MFShutdown() callconv(.c) HRESULT;
@@ -75,11 +74,6 @@ extern "winmm" fn waveOutUnprepareHeader(hwo: HANDLE, header: *WAVEHDR, size: u3
 extern "winmm" fn waveOutWrite(hwo: HANDLE, header: *WAVEHDR, size: u32) callconv(.c) u32;
 extern "winmm" fn waveOutClose(hwo: HANDLE) callconv(.c) u32;
 extern "winmm" fn waveOutSetVolume(hwo: ?HANDLE, volume: u32) callconv(.c) u32;
-
-extern "kernel32" fn CreateEventA(attrs: ?*anyopaque, manual_reset: BOOL, initial_state: BOOL, name: ?[*:0]const u8) callconv(.c) ?HANDLE;
-extern "kernel32" fn ResetEvent(event: HANDLE) callconv(.c) BOOL;
-extern "kernel32" fn WaitForSingleObject(handle: HANDLE, timeout_ms: DWORD) callconv(.c) DWORD;
-extern "kernel32" fn CloseHandle(handle: HANDLE) callconv(.c) BOOL;
 
 // Vtables follow mingw-w64's mfobjects.h/mfreadwrite.h: Microsoft's docs list methods alphabetically, not in ABI order.
 const IMFMediaType = extern struct {
@@ -210,7 +204,7 @@ const IMFSourceReader = extern struct {
 };
 
 const WAVEFORMATEX = extern struct {
-    wFormatTag: u16 = 1, // WAVE_FORMAT_PCM
+    wFormatTag: u16 = WAVE_FORMAT_PCM,
     nChannels: u16,
     nSamplesPerSec: u32,
     nAvgBytesPerSec: u32,
@@ -386,8 +380,8 @@ fn playBlocking(allocator: std.mem.Allocator, path: []const u8, volume_percent: 
         .wBitsPerSample = pcm.bits_per_sample,
     };
 
-    const event = CreateEventA(null, 1, 0, null) orelse return error.CreateEventFailed;
-    defer _ = CloseHandle(event);
+    const event = win32.CreateEventA(null, win32.TRUE, win32.FALSE, null) orelse return error.CreateEventFailed;
+    defer _ = win32.CloseHandle(event);
 
     var hwo_opt: ?HANDLE = null;
     if (waveOutOpen(&hwo_opt, WAVE_MAPPER, &format, @intFromPtr(event), 0, CALLBACK_EVENT) != 0 or hwo_opt == null) {
@@ -397,7 +391,7 @@ fn playBlocking(allocator: std.mem.Allocator, path: []const u8, volume_percent: 
     defer _ = waveOutClose(hwo);
 
     // waveOutOpen signals `event` once on its own (WOM_OPEN); clear that before waiting on WOM_DONE.
-    _ = ResetEvent(event);
+    _ = win32.ResetEvent(event);
     _ = waveOutSetVolume(hwo, packVolume(volume_percent));
 
     var header = WAVEHDR{ .lpData = pcm.data.ptr, .dwBufferLength = @intCast(pcm.data.len) };
@@ -405,5 +399,5 @@ fn playBlocking(allocator: std.mem.Allocator, path: []const u8, volume_percent: 
     defer _ = waveOutUnprepareHeader(hwo, &header, @sizeOf(WAVEHDR));
 
     if (waveOutWrite(hwo, &header, @sizeOf(WAVEHDR)) != 0) return error.WaveOutWriteFailed;
-    _ = WaitForSingleObject(event, INFINITE);
+    _ = win32.WaitForSingleObject(event, win32.INFINITE);
 }

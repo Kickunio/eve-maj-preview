@@ -20,6 +20,8 @@ const IID_NULL = windows.GUID{
     .Data4 = [8]u8{ 0, 0, 0, 0, 0, 0, 0, 0 },
 };
 
+/// CoInitializeEx's "already initialized on this thread", which is fine.
+const S_FALSE: c_long = 0x1;
 const COINIT_APARTMENTTHREADED: u32 = 0x2;
 const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
 const CLSCTX_INPROC_SERVER: u32 = 0x1;
@@ -55,8 +57,8 @@ const VARIANT = extern struct {
     reserved3: u16 = 0,
     payload: u64 = 0,
 
-    fn fromI32(v: i32) VARIANT {
-        return .{ .vt = VT_I4, .payload = @as(u64, @bitCast(@as(i64, v))) };
+    fn fromI32(value: i32) VARIANT {
+        return .{ .vt = VT_I4, .payload = @as(u64, @bitCast(@as(i64, value))) };
     }
 
     fn fromBstr(bstr: [*:0]u16) VARIANT {
@@ -132,8 +134,7 @@ const TtsEngine = struct {
 
     pub fn init() !TtsEngine {
         const hr_init = CoInitializeEx(null, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        // 0x1 is S_FALSE (already initialized on this thread), which is fine.
-        if (hr_init < 0 and hr_init != 0x1) {
+        if (hr_init < 0 and hr_init != S_FALSE) {
             return error.ComInitFailed;
         }
         errdefer CoUninitialize();

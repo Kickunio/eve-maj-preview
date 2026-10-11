@@ -2,7 +2,7 @@
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const gdi_overlay = @import("../platform/gdi_overlay.zig");
-const PanelWindow = @import("../platform/panel_window.zig").PanelWindow;
+const panel_window = @import("../platform/panel_window.zig");
 const config_mod = @import("../config.zig");
 const list_look = @import("../thumbnail/list_look.zig");
 const notification = @import("notification.zig");
@@ -13,9 +13,10 @@ const activation = @import("../clients/activation.zig");
 const drag_panel = @import("../drag/panel.zig");
 const log = @import("../log.zig");
 
+const PanelWindow = panel_window.PanelWindow;
 const slog = log.scoped("history_panel");
 
-const TEXT_BUF: usize = 160;
+const MAX_TEXT_LENGTH: usize = 160;
 
 /// Granularity of the timestamp text baked into the render signature, so it doesn't redraw every scan tick.
 const TIMESTAMP_BUCKET_MS: u64 = 15_000;
@@ -34,8 +35,8 @@ const PanelText = struct {
 pub const HistoryPanel = struct {
     window: ?HistoryPanelWindow = null,
     /// Tray-toggle override: forces the panel visible past hideNotifInfoPanelWhenNoCharacters until characters go logged-in -> logged-out again.
-    force_visible: bool = false,
-    /// Last-seen "any character logged in", used to detect the logged-in -> logged-out edge that clears force_visible.
+    is_forced_visible: bool = false,
+    /// Last-seen "any character logged in", used to detect the logged-in -> logged-out edge that clears is_forced_visible.
     had_characters: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, store: *config_mod.ProfileStore, instance: win32.HINSTANCE) HistoryPanel {
@@ -56,7 +57,7 @@ pub const HistoryPanel = struct {
     pub fn isVisible(self: *const HistoryPanel, config: *const config_mod.Config, any_character_logged_in: bool) bool {
         if (self.window == null) return false;
         if (!config.display.hideNotifInfoPanelWhenNoCharacters) return true;
-        return any_character_logged_in or self.force_visible;
+        return any_character_logged_in or self.is_forced_visible;
     }
 
     /// Keyed on isVisible() rather than window existence, so it turns fully off (not re-hidden) when toggled while visible, and forces it on immediately - even with no characters logged in - when toggled while off/auto-hidden.
@@ -64,7 +65,7 @@ pub const HistoryPanel = struct {
         if (self.isVisible(&store.live, any_character_logged_in)) {
             self.deinit();
             store.update(.{ .display = .{ .showNotifInfoPanel = false } });
-            self.force_visible = false;
+            self.is_forced_visible = false;
             return;
         }
         if (self.window == null) {
@@ -74,16 +75,16 @@ pub const HistoryPanel = struct {
             };
         }
         store.update(.{ .display = .{ .showNotifInfoPanel = true } });
-        self.force_visible = true;
+        self.is_forced_visible = true;
     }
 
     /// Matches the window to showNotifInfoPanel and its configured position, for a change made in the config dialog rather than by `toggle`.
     pub fn sync(self: *HistoryPanel, allocator: std.mem.Allocator, store: *config_mod.ProfileStore, instance: win32.HINSTANCE) void {
-        const wanted = store.live.display.showNotifInfoPanel;
-        if (!wanted and self.window != null) {
+        const is_wanted = store.live.display.showNotifInfoPanel;
+        if (!is_wanted and self.window != null) {
             self.deinit();
-            self.force_visible = false;
-        } else if (wanted and self.window == null) {
+            self.is_forced_visible = false;
+        } else if (is_wanted and self.window == null) {
             self.window = HistoryPanelWindow.init(allocator, store, instance) catch |err| {
                 slog.err("Failed to create History Panel window: {}", .{err});
                 return;
@@ -94,7 +95,7 @@ pub const HistoryPanel = struct {
 
     /// Per-tick: renders the panel from the painter's live history, or hides it.
     pub fn update(self: *HistoryPanel, painter: *const painter_mod.Painter, any_character_logged_in: bool) void {
-        if (self.had_characters and !any_character_logged_in) self.force_visible = false;
+        if (self.had_characters and !any_character_logged_in) self.is_forced_visible = false;
         self.had_characters = any_character_logged_in;
 
         const window = if (self.window) |*w| w else return;
@@ -118,7 +119,9 @@ const HistoryRow = struct {
 
 pub const HistoryPanelWindow = struct {
     panel: PanelWindow,
+    /// Borrowed; outlives the window.
     store: *config_mod.ProfileStore,
+    /// Borrowed; outlives the window.
     config: *const config_mod.Config,
     history_rows: [history.CAPACITY]HistoryRow = undefined,
     history_row_count: usize = 0,
@@ -155,65 +158,65 @@ pub const HistoryPanelWindow = struct {
 
     fn handleFooterClick(self: *HistoryPanelWindow, x: i32) void {
         const category = history_look.filterAt(self.panel.width, x) orelse return;
-        setCategoryEnabled(self.store, category, !history_look.categoryEnabled(&self.config.display, category));
+        setCategoryEnabled(self.store, category, !history_look.isCategoryEnabled(&self.config.display, category));
     }
 
     fn computeRenderSignature(self: *const HistoryPanelWindow, painter: *const painter_mod.Painter) u64 {
-        var h = std.hash.Wyhash.init(0);
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelWidth));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelHeight));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelOpacity));
-        h.update(self.config.display.notifInfoPanelFontName);
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelFontSize));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelFontWeight));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelMaxRows));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelShowTimestamp));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelShowCategoryFilters));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelMergeEnabled));
-        h.update(std.mem.asBytes(&self.config.display.notifInfoPanelMergeWindowSec));
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelWidth));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelHeight));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelOpacity));
+        hasher.update(self.config.display.notifInfoPanelFontName);
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelFontSize));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelFontWeight));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelMaxRows));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelShowTimestamp));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelShowCategoryFilters));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelMergeEnabled));
+        hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelMergeWindowSec));
         for (history_look.CATEGORY_ORDER) |category| {
-            const is_enabled = history_look.categoryEnabled(&self.config.display, category);
-            h.update(std.mem.asBytes(&is_enabled));
+            const is_enabled = history_look.isCategoryEnabled(&self.config.display, category);
+            hasher.update(std.mem.asBytes(&is_enabled));
         }
-        h.update(std.mem.asBytes(&painter.notification_history.revision));
+        hasher.update(std.mem.asBytes(&painter.notification_history.revision));
 
-        const show_timestamp = self.config.display.notifInfoPanelShowTimestamp;
+        const shows_timestamp = self.config.display.notifInfoPanelShowTimestamp;
         const now = win32.Ticks.now();
 
         var entry_buf: [history.CAPACITY]history.Entry = undefined;
         const entries = painter.notification_history.snapshot(&entry_buf);
         for (entries) |*entry| {
-            h.update(entry.characterName());
-            h.update(entry.text());
-            h.update(std.mem.asBytes(&entry.unmerged));
+            hasher.update(entry.characterName());
+            hasher.update(entry.text());
+            hasher.update(std.mem.asBytes(&entry.is_unmerged));
             const name_color = entry.character_color orelse list_look.NAME;
             const message_color = self.messageColor(entry.notification_type);
-            h.update(std.mem.asBytes(&name_color));
-            h.update(std.mem.asBytes(&message_color));
-            if (show_timestamp) {
-                const bucket = now.elapsedSince(entry.timestamp_ms) / TIMESTAMP_BUCKET_MS;
-                h.update(std.mem.asBytes(&bucket));
+            hasher.update(std.mem.asBytes(&name_color));
+            hasher.update(std.mem.asBytes(&message_color));
+            if (shows_timestamp) {
+                const bucket = now.elapsedSince(entry.timestamp) / TIMESTAMP_BUCKET_MS;
+                hasher.update(std.mem.asBytes(&bucket));
             }
         }
 
-        return h.final();
+        return hasher.final();
     }
 
     /// Fills history_rows from `entries`, skipping filtered categories and merging repeats, up to `capacity` rows.
     fn buildRows(self: *HistoryPanelWindow, entries: []const history.Entry, capacity: usize) void {
         const display = &self.config.display;
-        const merge_window_ms: u64 = @as(u64, @intCast(@max(0, display.notifInfoPanelMergeWindowSec))) * 1000;
+        const merge_window_ms: u64 = @as(u64, @intCast(@max(0, display.notifInfoPanelMergeWindowSec))) * std.time.ms_per_s;
         const row_limit = @min(capacity, self.history_rows.len);
         var shown_count: usize = 0;
         for (entries, 0..) |*entry, i| {
             if (!history_look.showsCategory(display, notification.notificationCategory(entry.notification_type))) continue;
 
-            if (display.notifInfoPanelMergeEnabled and shown_count > 0 and !entry.unmerged) {
+            if (display.notifInfoPanelMergeEnabled and shown_count > 0 and !entry.is_unmerged) {
                 const row = &self.history_rows[shown_count - 1];
                 const previous = &entries[row.last];
-                if (!previous.unmerged and previous.notification_type == entry.notification_type and
+                if (!previous.is_unmerged and previous.notification_type == entry.notification_type and
                     std.mem.eql(u8, previous.text(), entry.text()) and
-                    previous.timestamp_ms.elapsedSince(entry.timestamp_ms) <= merge_window_ms)
+                    previous.timestamp.elapsedSince(entry.timestamp) <= merge_window_ms)
                 {
                     row.count += 1;
                     row.last = i;
@@ -256,7 +259,7 @@ pub const HistoryPanelWindow = struct {
         if (sizes.footer_height > 0) {
             gdi_overlay.fillRect(bitmap.pixels, width, height, 0, @intCast(footer_top), width, 1, list_look.DIVIDER);
             for (history_look.CATEGORY_ORDER, 0..) |category, index| {
-                if (!history_look.categoryEnabled(display, category)) continue;
+                if (!history_look.isCategoryEnabled(display, category)) continue;
                 const span = history_look.filterSpan(panel_width, index);
                 gdi_overlay.fillRoundedRect(bitmap.pixels, width, height, @intCast(span.left), @intCast(footer_top + history_look.FILTER_GAP), @intCast(span.right - span.left), @intCast(sizes.header_height), history_look.FILTER_RADIUS, history_look.FILTER_ON);
             }
@@ -307,7 +310,7 @@ pub const HistoryPanelWindow = struct {
         var message_right = right;
         if (self.config.display.notifInfoPanelShowTimestamp) {
             var time_buf: [history_look.TIME_TEXT_MAX]u8 = undefined;
-            const time_text = history_look.relativeTime(&time_buf, now.elapsedSince(entry.timestamp_ms));
+            const time_text = history_look.relativeTime(&time_buf, now.elapsedSince(entry.timestamp));
             _ = win32.SelectObject(dc, text.small_font);
             const time_width: i32 = @intCast(measureTextWidth(dc, time_text));
             drawLine(dc, time_text, @max(left, right - time_width), row_top + @divTrunc(row_height - text.small_height, 2), list_look.MUTED);
@@ -331,7 +334,7 @@ pub const HistoryPanelWindow = struct {
         for (history_look.CATEGORY_ORDER, 0..) |category, index| {
             const span = history_look.filterSpan(panel_width, index);
             const label = history_look.categoryLabel(category);
-            const color = if (history_look.categoryEnabled(&self.config.display, category)) list_look.NAME else list_look.MUTED;
+            const color = if (history_look.isCategoryEnabled(&self.config.display, category)) list_look.NAME else list_look.MUTED;
             const label_width: i32 = @intCast(measureTextWidth(dc, label));
             const span_width = span.right - span.left;
             if (label_width <= span_width) {
@@ -343,24 +346,24 @@ pub const HistoryPanelWindow = struct {
     }
 };
 
-var g_class_registered: bool = false;
+var g_is_class_registered: bool = false;
 
-fn setCategoryEnabled(store: *config_mod.ProfileStore, category: notification.NotificationCategory, value: bool) void {
+fn setCategoryEnabled(store: *config_mod.ProfileStore, category: notification.NotificationCategory, is_enabled: bool) void {
     switch (category) {
-        .Fleet => store.update(.{ .display = .{ .notifInfoPanelShowFleet = value } }),
-        .Mining => store.update(.{ .display = .{ .notifInfoPanelShowMining = value } }),
-        .Combat => store.update(.{ .display = .{ .notifInfoPanelShowCombat = value } }),
-        .Navigation => store.update(.{ .display = .{ .notifInfoPanelShowNavigation = value } }),
-        .General => store.update(.{ .display = .{ .notifInfoPanelShowGeneral = value } }),
+        .Fleet => store.update(.{ .display = .{ .notifInfoPanelShowFleet = is_enabled } }),
+        .Mining => store.update(.{ .display = .{ .notifInfoPanelShowMining = is_enabled } }),
+        .Combat => store.update(.{ .display = .{ .notifInfoPanelShowCombat = is_enabled } }),
+        .Navigation => store.update(.{ .display = .{ .notifInfoPanelShowNavigation = is_enabled } }),
+        .General => store.update(.{ .display = .{ .notifInfoPanelShowGeneral = is_enabled } }),
     }
 }
 
 fn registerWindowClass(instance: win32.HINSTANCE) !void {
-    if (g_class_registered) return;
+    if (g_is_class_registered) return;
 
     try gdi_overlay.registerWindowClass(instance, historyPanelWindowProc, HISTORY_PANEL_WINDOW_CLASS, null);
 
-    g_class_registered = true;
+    g_is_class_registered = true;
 }
 
 fn historyWindow() ?*HistoryPanelWindow {
@@ -396,9 +399,9 @@ fn historyPanelWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARA
                 return 0;
             }
 
-            const row: usize = @intCast(@divTrunc(y - sizes.header_height, sizes.row_height));
-            if (row >= window.history_row_count) return 0;
-            const history_row = window.history_rows[row];
+            const row_index: usize = @intCast(@divTrunc(y - sizes.header_height, sizes.row_height));
+            if (row_index >= window.history_row_count) return 0;
+            const history_row = window.history_rows[row_index];
             if (history_row.count > 1) {
                 painter.notification_history.unmergeRange(history_row.first, history_row.last);
             } else {
@@ -412,22 +415,22 @@ fn historyPanelWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARA
 
 /// Ignores `color`'s alpha byte.
 fn drawLine(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32) void {
-    gdi_overlay.drawText(TEXT_BUF, dc, x, y, text, color & 0x00FF_FFFF);
+    gdi_overlay.drawText(MAX_TEXT_LENGTH, dc, x, y, text, color & 0x00FF_FFFF);
 }
 
 /// Cut short with "..." to fit `max_width` pixels; returns the width drawn.
 fn drawFitted(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32, max_width: i32) i32 {
-    var out: [TEXT_BUF:0]u8 = undefined;
-    const fitted = gdi_overlay.truncateTextToFit(TEXT_BUF, dc, &out, text, @intCast(@max(0, max_width)));
+    var out: [MAX_TEXT_LENGTH:0]u8 = undefined;
+    const fitted = gdi_overlay.truncateTextToFit(MAX_TEXT_LENGTH, dc, &out, text, @intCast(@max(0, max_width)));
     drawLine(dc, fitted, x, y, color);
     return @intCast(measureTextWidth(dc, fitted));
 }
 
 /// The selected font's line height.
 fn lineHeight(dc: win32.HDC) i32 {
-    return gdi_overlay.measureTextSize(TEXT_BUF, dc, "Ag").cy;
+    return gdi_overlay.measureTextSize(MAX_TEXT_LENGTH, dc, "Ag").cy;
 }
 
 fn measureTextWidth(dc: win32.HDC, text: []const u8) usize {
-    return gdi_overlay.measureTextWidth(TEXT_BUF, dc, text);
+    return gdi_overlay.measureTextWidth(MAX_TEXT_LENGTH, dc, text);
 }

@@ -19,27 +19,27 @@ pub fn Worker(comptime Command: type, comptime Engine: type, comptime scope: []c
         /// Main thread only.
         thread: ?std.Thread = null,
         /// Main thread only; set once the worker can't start, so it isn't retried.
-        failed: bool = false,
+        has_failed: bool = false,
         should_exit: std.atomic.Value(bool) = .init(false),
         /// Set by the worker when its engine fails to start.
-        engine_failed: std.atomic.Value(bool) = .init(false),
+        has_engine_failed: std.atomic.Value(bool) = .init(false),
 
         const Self = @This();
 
         /// Starts the thread on first use; false if it isn't running and won't be.
         pub fn start(self: *Self) bool {
             if (self.thread) |thread| {
-                if (!self.engine_failed.load(.acquire)) return true;
+                if (!self.has_engine_failed.load(.acquire)) return true;
                 thread.join();
                 self.thread = null;
-                self.failed = true;
+                self.has_failed = true;
                 return false;
             }
-            if (self.failed) return false;
+            if (self.has_failed) return false;
 
             self.thread = std.Thread.spawn(.{}, run, .{self}) catch |err| {
                 slog.warn("Failed to start the {s} thread: {}", .{ description, err });
-                self.failed = true;
+                self.has_failed = true;
                 return false;
             };
             return true;
@@ -81,7 +81,7 @@ pub fn Worker(comptime Command: type, comptime Engine: type, comptime scope: []c
         fn run(self: *Self) void {
             var engine = Engine.init() catch |err| {
                 slog.warn("Failed to start {s}, so its alerts won't play: {}", .{ description, err });
-                self.engine_failed.store(true, .release);
+                self.has_engine_failed.store(true, .release);
                 return;
             };
             defer engine.deinit();

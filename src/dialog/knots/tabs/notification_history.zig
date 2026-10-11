@@ -256,7 +256,7 @@ fn footer(context: *ui.Frame, display: *const config.DisplayConfig, look: Look) 
     const bar = Rect{ .key = .src(@src()), .style = footer_style };
     _ = try bar.open(context);
     for (history_look.CATEGORY_ORDER, 0..) |category, index| {
-        const is_enabled = history_look.categoryEnabled(display, category);
+        const is_enabled = history_look.isCategoryEnabled(display, category);
         const button_style = try arena.create(ui.Style);
         button_style.* = .{
             .width = .grow(),

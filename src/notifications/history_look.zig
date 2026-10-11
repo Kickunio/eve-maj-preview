@@ -69,10 +69,10 @@ pub fn categoryLabel(category: NotificationCategory) []const u8 {
 /// The `index`th filter button in CATEGORY_ORDER, in a panel `width` wide.
 pub fn filterSpan(width: i32, index: usize) Span {
     const button_count: i32 = CATEGORY_ORDER.len;
-    const i: i32 = @intCast(index);
+    const signed_index: i32 = @intCast(index);
     const room = @max(0, width - FILTER_GAP * (button_count + 1));
-    const left = FILTER_GAP * (i + 1);
-    return .{ .left = left + @divTrunc(room * i, button_count), .right = left + @divTrunc(room * (i + 1), button_count) };
+    const left = FILTER_GAP * (signed_index + 1);
+    return .{ .left = left + @divTrunc(room * signed_index, button_count), .right = left + @divTrunc(room * (signed_index + 1), button_count) };
 }
 
 /// The filter button under `x`; null in a gap between them.
@@ -84,7 +84,7 @@ pub fn filterAt(width: i32, x: i32) ?NotificationCategory {
     return null;
 }
 
-pub fn categoryEnabled(display: *const DisplayConfig, category: NotificationCategory) bool {
+pub fn isCategoryEnabled(display: *const DisplayConfig, category: NotificationCategory) bool {
     return switch (category) {
         .Fleet => display.notifInfoPanelShowFleet,
         .Mining => display.notifInfoPanelShowMining,
@@ -97,7 +97,7 @@ pub fn categoryEnabled(display: *const DisplayConfig, category: NotificationCate
 /// With the filter buttons hidden every category shows, so none is dropped by a filter the user can't see or change.
 pub fn showsCategory(display: *const DisplayConfig, category: NotificationCategory) bool {
     if (!display.notifInfoPanelShowCategoryFilters) return true;
-    return categoryEnabled(display, category);
+    return isCategoryEnabled(display, category);
 }
 
 /// The type's own text colour, else the notifications' default.
@@ -107,57 +107,59 @@ pub fn messageColor(notifications: *const NotificationConfig, notification_type:
 
 /// How long ago, e.g. "just now", "5m ago" or "2h ago".
 pub fn relativeTime(buffer: *[TIME_TEXT_MAX]u8, elapsed_ms: u64) []const u8 {
-    const elapsed_seconds = elapsed_ms / 1000;
-    if (elapsed_seconds < 60) return "just now";
-    if (elapsed_seconds < 3600) return std.fmt.bufPrint(buffer, "{d}m ago", .{elapsed_seconds / 60}) catch unreachable;
-    return std.fmt.bufPrint(buffer, "{d}h ago", .{elapsed_seconds / 3600}) catch unreachable;
+    const elapsed_seconds = elapsed_ms / std.time.ms_per_s;
+    if (elapsed_seconds < std.time.s_per_min) return "just now";
+    if (elapsed_seconds < std.time.s_per_hour) return std.mem.print(buffer, "{d}m ago", .{elapsed_seconds / std.time.s_per_min}) catch unreachable;
+    return std.mem.print(buffer, "{d}h ago", .{elapsed_seconds / std.time.s_per_hour}) catch unreachable;
 }
 
 /// A merged row's count, shown in place of the name.
 pub fn countText(buffer: *[COUNT_TEXT_MAX]u8, count: usize) []const u8 {
-    return std.fmt.bufPrint(buffer, "+{d}", .{count}) catch unreachable;
+    return std.mem.print(buffer, "+{d}", .{count}) catch unreachable;
 }
+
+const testing = std.testing;
 
 test "filterSpan fills the width between gaps without overlapping" {
     const width = 300;
-    try std.testing.expectEqual(FILTER_GAP, filterSpan(width, 0).left);
-    try std.testing.expectEqual(width - FILTER_GAP, filterSpan(width, CATEGORY_ORDER.len - 1).right);
+    try testing.expectEqual(FILTER_GAP, filterSpan(width, 0).left);
+    try testing.expectEqual(width - FILTER_GAP, filterSpan(width, CATEGORY_ORDER.len - 1).right);
     for (1..CATEGORY_ORDER.len) |index| {
-        try std.testing.expectEqual(filterSpan(width, index - 1).right + FILTER_GAP, filterSpan(width, index).left);
+        try testing.expectEqual(filterSpan(width, index - 1).right + FILTER_GAP, filterSpan(width, index).left);
     }
 }
 
 test "filterAt finds the button under the cursor and misses the gaps" {
-    try std.testing.expectEqual(@as(?NotificationCategory, .Fleet), filterAt(300, FILTER_GAP));
-    try std.testing.expectEqual(@as(?NotificationCategory, .General), filterAt(300, 300 - FILTER_GAP - 1));
-    try std.testing.expectEqual(@as(?NotificationCategory, null), filterAt(300, 0));
+    try testing.expectEqual(@as(?NotificationCategory, .Fleet), filterAt(300, FILTER_GAP));
+    try testing.expectEqual(@as(?NotificationCategory, .General), filterAt(300, 300 - FILTER_GAP - 1));
+    try testing.expectEqual(@as(?NotificationCategory, null), filterAt(300, 0));
 }
 
 test "rowCapacity is capped by the max rows setting and by the room there is" {
     var display: DisplayConfig = .{ .notifInfoPanelHeight = 1000, .notifInfoPanelMaxRows = 5 };
-    try std.testing.expectEqual(@as(usize, 5), rowCapacity(&display, metrics(&display)));
+    try testing.expectEqual(@as(usize, 5), rowCapacity(&display, metrics(&display)));
     display.notifInfoPanelHeight = 60;
     display.notifInfoPanelMaxRows = 30;
-    try std.testing.expectEqual(@as(usize, 0), rowCapacity(&display, metrics(&display)));
+    try testing.expectEqual(@as(usize, 0), rowCapacity(&display, metrics(&display)));
 }
 
 test "metrics drops the footer while the filter buttons are hidden" {
     var display: DisplayConfig = .{};
-    try std.testing.expect(metrics(&display).footer_height > 0);
+    try testing.expect(metrics(&display).footer_height > 0);
     display.notifInfoPanelShowCategoryFilters = false;
-    try std.testing.expectEqual(@as(i32, 0), metrics(&display).footer_height);
+    try testing.expectEqual(@as(i32, 0), metrics(&display).footer_height);
 }
 
 test "showsCategory ignores the filters while their buttons are hidden" {
     var display: DisplayConfig = .{ .notifInfoPanelShowMining = false };
-    try std.testing.expect(!showsCategory(&display, .Mining));
+    try testing.expect(!showsCategory(&display, .Mining));
     display.notifInfoPanelShowCategoryFilters = false;
-    try std.testing.expect(showsCategory(&display, .Mining));
+    try testing.expect(showsCategory(&display, .Mining));
 }
 
 test "relativeTime rounds down to minutes, then hours" {
     var buffer: [TIME_TEXT_MAX]u8 = undefined;
-    try std.testing.expectEqualStrings("just now", relativeTime(&buffer, 59_999));
-    try std.testing.expectEqualStrings("5m ago", relativeTime(&buffer, 5 * 60_000 + 30_000));
-    try std.testing.expectEqualStrings("2h ago", relativeTime(&buffer, 2 * 3_600_000 + 59 * 60_000));
+    try testing.expectEqualStrings("just now", relativeTime(&buffer, 59_999));
+    try testing.expectEqualStrings("5m ago", relativeTime(&buffer, 5 * 60_000 + 30_000));
+    try testing.expectEqualStrings("2h ago", relativeTime(&buffer, 2 * 3_600_000 + 59 * 60_000));
 }

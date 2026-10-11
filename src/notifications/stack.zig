@@ -140,19 +140,20 @@ pub const NotificationStack = struct {
         self.len -= 1;
     }
 
+    /// `context` has `fn shouldRemove(context, ActiveNotification) bool`.
     fn removeIf(self: *NotificationStack, allocator: std.mem.Allocator, context: anytype) bool {
-        var write: usize = 0;
-        for (0..self.len) |read| {
-            const entry = self.entries[read];
+        var write_index: usize = 0;
+        for (0..self.len) |read_index| {
+            const entry = self.entries[read_index];
             if (context.shouldRemove(entry)) {
                 allocator.free(entry.text);
                 continue;
             }
-            self.entries[write] = entry;
-            write += 1;
+            self.entries[write_index] = entry;
+            write_index += 1;
         }
-        const removed_any = write < self.len;
-        self.len = write;
+        const removed_any = write_index < self.len;
+        self.len = write_index;
         if (removed_any) self.revision +%= 1;
         return removed_any;
     }
