@@ -93,7 +93,7 @@ pub fn show(context: *ui.Frame) !void {
     if (try iconButton(context, .add, false)) openNamePrompt(.create, "");
     if (try iconButton(context, .copy, false)) {
         const name = profiles.displayName(editing);
-        var buf: [profile_files.MAX_NAME_LEN + COPY_SUFFIX.len]u8 = undefined;
+        var buf: [profile_files.MAX_NAME_LENGTH + COPY_SUFFIX.len]u8 = undefined;
         const suggested = std.fmt.bufPrint(&buf, "{s}{s}", .{ name, COPY_SUFFIX }) catch |err| blk: {
             slog.warn("Failed to suggest a name for the copy of '{s}': {}", .{ name, err });
             break :blk name;
@@ -188,7 +188,7 @@ fn switchPrompt(context: *ui.Frame) !void {
 
 fn openNamePrompt(prompt: NamePrompt, initial: []const u8) void {
     g_name_text.clearRetainingCapacity();
-    g_name_text.appendSlice(g_allocator, initial[0..@min(initial.len, profile_files.MAX_NAME_LEN)]) catch |err| {
+    g_name_text.appendSlice(g_allocator, initial[0..@min(initial.len, profile_files.MAX_NAME_LENGTH)]) catch |err| {
         slog.err("Failed to open the profile name prompt: {}", .{err});
         return;
     };

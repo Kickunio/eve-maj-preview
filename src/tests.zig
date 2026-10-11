@@ -6,6 +6,8 @@ test {
     _ = @import("chatlog/lines.zig");
     _ = @import("chatlog/utf16.zig");
     _ = @import("clients/scout.zig");
+    _ = @import("config/characters.zig");
+    _ = @import("config/global.zig");
     _ = @import("config/import/draft.zig");
     _ = @import("config/import/values.zig");
     _ = @import("config/key_list.zig");
@@ -13,7 +15,9 @@ test {
     _ = @import("config/profiles.zig");
     _ = @import("config/ranges.zig");
     _ = @import("config/readable.zig");
+    _ = @import("config/spaces.zig");
     _ = @import("config/system_colors.zig");
+    _ = @import("config/window_filters.zig");
     _ = @import("config/wire.zig");
     _ = @import("dialog/knots/labels.zig");
     _ = @import("dialog/knots/screen_math.zig");
@@ -23,7 +27,6 @@ test {
     _ = @import("hotkeys/exclusions.zig");
     _ = @import("layout/region_grid.zig");
     _ = @import("layout/spaces.zig");
-    _ = @import("config/spaces.zig");
     _ = @import("layout/zoom.zig");
     _ = @import("notifications/gamelog_events.zig");
     _ = @import("notifications/history_look.zig");

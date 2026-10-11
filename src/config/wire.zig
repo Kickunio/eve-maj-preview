@@ -12,10 +12,10 @@ const slog = log.scoped("config");
 pub const Argb = struct {
     value: u32,
 
-    pub fn jsonStringify(self: Argb, jw: anytype) !void {
+    pub fn jsonStringify(self: Argb, json_writer: anytype) !void {
         var buf: [10]u8 = undefined;
-        const s = std.mem.print(&buf, "0x{X:0>8}", .{self.value}) catch unreachable;
-        try jw.write(s);
+        const text = std.mem.print(&buf, "0x{X:0>8}", .{self.value}) catch unreachable;
+        try json_writer.write(text);
     }
 
     pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) !Argb {
@@ -26,7 +26,17 @@ pub const Argb = struct {
     }
 };
 
-/// A `u32`/`?u32` field whose name ends in "color"/"Color" is an ARGB colour, saved as a hex string.
+/// One field of a settings struct, regathered from @typeInfo's parallel name/type/attribute arrays.
+pub const SavedField = struct {
+    name: [:0]const u8,
+    type: type,
+    attrs: std.lang.Type.Struct.FieldAttributes,
+
+    pub inline fn defaultValue(comptime f: SavedField) ?f.type {
+        return f.attrs.defaultValue(f.type);
+    }
+};
+
 /// Accepts "0xAARRGGBB", "#AARRGGBB" or bare hex.
 pub fn parseHexColor(text: []const u8) !u32 {
     if (text.len < 3) return error.InvalidColorFormat;
@@ -42,6 +52,7 @@ pub fn parseHexColor(text: []const u8) !u32 {
     return std.fmt.parseInt(u32, hex_text, 16) catch error.InvalidColorFormat;
 }
 
+/// A `u32`/`?u32` field whose name ends in "color"/"Color" is an ARGB colour, saved as a hex string.
 pub fn isColorField(comptime name: []const u8) bool {
     // Compared by hand: std.mem.endsWith costs enough comptime branches to matter across every nested field.
     if (name.len < 5) return false;
@@ -74,31 +85,11 @@ pub fn ListItem(comptime T: type) ?type {
     return if (T == std.ArrayList(Item)) Item else null;
 }
 
-/// A field named in `R.runtime_fields` (an allocator, an id) only exists while the app runs and isn't saved.
-fn isSaved(comptime R: type, comptime name: []const u8) bool {
-    if (!@hasDecl(R, "runtime_fields")) return true;
-    inline for (R.runtime_fields) |runtime| {
-        if (comptime std.mem.eql(u8, runtime, name)) return false;
-    }
-    return true;
-}
-
 /// A field in `R.wire_defaults` loads with that default when its key is missing, for defaults a runtime field can't hold (e.g. a non-empty list).
 pub fn hasWireDefault(comptime R: type, comptime name: []const u8) bool {
     if (!@hasDecl(R, "wire_defaults")) return false;
     return @hasField(@TypeOf(R.wire_defaults), name);
 }
-
-/// One field of a settings struct, regathered from @typeInfo's parallel name/type/attribute arrays.
-pub const SavedField = struct {
-    name: [:0]const u8,
-    type: type,
-    attrs: std.lang.Type.Struct.FieldAttributes,
-
-    pub inline fn defaultValue(comptime f: SavedField) ?f.type {
-        return f.attrs.defaultValue(f.type);
-    }
-};
 
 pub fn savedFields(comptime R: type) []const SavedField {
     comptime {
@@ -123,10 +114,10 @@ pub fn encode(comptime T: type, value: T) WireOf(T) {
 }
 
 /// The counterpart of `encode`; the result owns its strings, so free it with `free`.
-pub fn decode(comptime T: type, w: WireOf(T), allocator: std.mem.Allocator) !T {
-    if (comptime !isNested(T)) return fieldFromWire(T, w, allocator);
-    if (comptime @hasDecl(T, "fromWire")) return T.fromWire(w, allocator);
-    return fromWire(T, w, allocator);
+pub fn decode(comptime T: type, saved: WireOf(T), allocator: std.mem.Allocator) !T {
+    if (comptime !isNested(T)) return fieldFromWire(T, saved, allocator);
+    if (comptime @hasDecl(T, "fromWire")) return T.fromWire(saved, allocator);
+    return fromWire(T, saved, allocator);
 }
 
 pub fn free(comptime T: type, value: *T, allocator: std.mem.Allocator) void {
@@ -166,34 +157,19 @@ pub fn fieldToWire(comptime T: type, comptime name: []const u8, value: T) FieldW
     };
 }
 
-fn plainFromWire(comptime T: type, value: anytype) T {
-    return switch (@TypeOf(value)) {
-        Argb => value.value,
-        ?Argb => if (value) |v| v.value else null,
-        ?KeyListWire => if (value) |v| v.value else .empty,
-        else => value,
-    };
-}
-
-/// Allocates list conversions from `allocator`, an arena freed once the result is serialized.
-fn fieldToWireAlloc(comptime T: type, comptime name: []const u8, allocator: std.mem.Allocator, value: T) !FieldWire(T, name) {
-    if (comptime ListItem(T)) |Item| return encodeList(Item, allocator, value.items);
-    return fieldToWire(T, name, value);
-}
-
-/// Copies strings, so the result owns its memory independently of `w_value`.
-pub fn fieldFromWire(comptime T: type, w_value: anytype, allocator: std.mem.Allocator) !T {
-    if (comptime isNested(T)) return decode(T, w_value, allocator);
-    if (comptime OptionalNested(T)) |N| return if (w_value) |v| try decode(N, v, allocator) else null;
+/// Copies strings, so the result owns its memory independently of `saved_value`.
+pub fn fieldFromWire(comptime T: type, saved_value: anytype, allocator: std.mem.Allocator) !T {
+    if (comptime isNested(T)) return decode(T, saved_value, allocator);
+    if (comptime OptionalNested(T)) |N| return if (saved_value) |v| try decode(N, v, allocator) else null;
     if (comptime ListItem(T)) |Item| {
         var list: T = .empty;
         errdefer freeList(Item, &list, allocator);
-        try decodeList(Item, &list, allocator, w_value);
+        try decodeList(Item, &list, allocator, saved_value);
         return list;
     }
-    if (T == []const u8) return try allocator.dupe(u8, w_value);
-    if (T == ?[]const u8) return if (w_value) |s| try allocator.dupe(u8, s) else null;
-    return plainFromWire(T, w_value);
+    if (T == []const u8) return try allocator.dupe(u8, saved_value);
+    if (T == ?[]const u8) return if (saved_value) |s| try allocator.dupe(u8, s) else null;
+    return plainFromWire(T, saved_value);
 }
 
 /// Frees what `fieldFromWire` allocated; `default` is the field's default, which a string may still point at.
@@ -258,18 +234,18 @@ pub fn toWireAlloc(comptime R: type, allocator: std.mem.Allocator, value: *const
     return out;
 }
 
-/// The generated `decode` for `R`: copies every string, so the result owns its memory independently of `w`.
-pub fn fromWire(comptime R: type, w: Wire(R), allocator: std.mem.Allocator) !R {
+/// The generated `decode` for `R`: copies every string, so the result owns its memory independently of `saved`.
+pub fn fromWire(comptime R: type, saved: Wire(R), allocator: std.mem.Allocator) !R {
     var out: R = .{};
     errdefer deinit(R, &out, allocator);
-    try fromWireInto(R, w, allocator, &out);
+    try fromWireInto(R, saved, allocator, &out);
     return out;
 }
 
 /// `out` must still hold its defaults; on failure it holds only what loaded, so `deinit` frees it.
-pub fn fromWireInto(comptime R: type, w: Wire(R), allocator: std.mem.Allocator, out: *R) !void {
+pub fn fromWireInto(comptime R: type, saved: Wire(R), allocator: std.mem.Allocator, out: *R) !void {
     inline for (comptime savedFields(R)) |f| {
-        @field(out, f.name) = try fieldFromWire(f.type, @field(w, f.name), allocator);
+        @field(out, f.name) = try fieldFromWire(f.type, @field(saved, f.name), allocator);
     }
 }
 
@@ -283,14 +259,14 @@ pub fn deinit(comptime R: type, value: *R, allocator: std.mem.Allocator) void {
 /// Borrows each item's strings like `encode`, so allocate from an arena freed once the result is serialized.
 pub fn encodeList(comptime T: type, allocator: std.mem.Allocator, items: []const T) ![]const WireOf(T) {
     const out = try allocator.alloc(WireOf(T), items.len);
-    for (items, out) |item, *w| w.* = encode(T, item);
+    for (items, out) |item, *saved| saved.* = encode(T, item);
     return out;
 }
 
 /// Appends a decoded copy of each of `wires`; on failure `list` holds only the items fully decoded so far.
 pub fn decodeList(comptime T: type, list: *std.ArrayList(T), allocator: std.mem.Allocator, wires: []const WireOf(T)) !void {
     try list.ensureUnusedCapacity(allocator, wires.len);
-    for (wires) |w| list.appendAssumeCapacity(try decode(T, w, allocator));
+    for (wires) |saved| list.appendAssumeCapacity(try decode(T, saved, allocator));
 }
 
 /// Leaves `list` empty, so it can be refilled or freed again.
@@ -321,23 +297,6 @@ pub fn cloneInto(comptime R: type, value: *const R, allocator: std.mem.Allocator
             @field(out, name) = @field(value, name);
         }
     }
-}
-
-fn cloneField(comptime T: type, value: T, allocator: std.mem.Allocator) !T {
-    if (comptime isNested(T)) return clone(T, value, allocator);
-    if (comptime OptionalNested(T)) |N| return if (value) |v| try clone(N, v, allocator) else null;
-    if (comptime ListItem(T)) |Item| {
-        var list: T = .empty;
-        errdefer freeList(Item, &list, allocator);
-        try list.ensureTotalCapacity(allocator, value.items.len);
-        for (value.items) |item| list.appendAssumeCapacity(try cloneField(Item, item, allocator));
-        return list;
-    }
-    // Empty stays a literal, which freeOwnedString skips.
-    if (T == []const u8) return if (value.len == 0) "" else try allocator.dupe(u8, value);
-    if (T == ?[]const u8) return if (value) |s| try allocator.dupe(u8, s) else null;
-    if (comptime hasPointers(T)) @compileError(@typeName(T) ++ " holds pointers, so it needs its own clone to avoid sharing them");
-    return value;
 }
 
 pub fn hasPointers(comptime T: type) bool {
@@ -396,8 +355,49 @@ pub fn logJson(allocator: std.mem.Allocator, settings: anytype) void {
     while (lines.next()) |line| slog.debug("{s}", .{line});
 }
 
-fn freeOwnedString(allocator: std.mem.Allocator, s: []const u8, default: []const u8) void {
-    if (s.len != 0 and s.ptr != default.ptr) allocator.free(s);
+/// A field named in `R.runtime_fields` (an allocator, an id) only exists while the app runs and isn't saved.
+fn isSaved(comptime R: type, comptime name: []const u8) bool {
+    if (!@hasDecl(R, "runtime_fields")) return true;
+    inline for (R.runtime_fields) |runtime| {
+        if (comptime std.mem.eql(u8, runtime, name)) return false;
+    }
+    return true;
+}
+
+fn plainFromWire(comptime T: type, value: anytype) T {
+    return switch (@TypeOf(value)) {
+        Argb => value.value,
+        ?Argb => if (value) |v| v.value else null,
+        ?KeyListWire => if (value) |v| v.value else .empty,
+        else => value,
+    };
+}
+
+/// Allocates list conversions from `allocator`, an arena freed once the result is serialized.
+fn fieldToWireAlloc(comptime T: type, comptime name: []const u8, allocator: std.mem.Allocator, value: T) !FieldWire(T, name) {
+    if (comptime ListItem(T)) |Item| return encodeList(Item, allocator, value.items);
+    return fieldToWire(T, name, value);
+}
+
+fn cloneField(comptime T: type, value: T, allocator: std.mem.Allocator) !T {
+    if (comptime isNested(T)) return clone(T, value, allocator);
+    if (comptime OptionalNested(T)) |N| return if (value) |v| try clone(N, v, allocator) else null;
+    if (comptime ListItem(T)) |Item| {
+        var list: T = .empty;
+        errdefer freeList(Item, &list, allocator);
+        try list.ensureTotalCapacity(allocator, value.items.len);
+        for (value.items) |item| list.appendAssumeCapacity(try cloneField(Item, item, allocator));
+        return list;
+    }
+    // Empty stays a literal, which freeOwnedString skips.
+    if (T == []const u8) return if (value.len == 0) "" else try allocator.dupe(u8, value);
+    if (T == ?[]const u8) return if (value) |s| try allocator.dupe(u8, s) else null;
+    if (comptime hasPointers(T)) @compileError(@typeName(T) ++ " holds pointers, so it needs its own clone to avoid sharing them");
+    return value;
+}
+
+fn freeOwnedString(allocator: std.mem.Allocator, text: []const u8, default: []const u8) void {
+    if (text.len != 0 and text.ptr != default.ptr) allocator.free(text);
 }
 
 const testing = std.testing;

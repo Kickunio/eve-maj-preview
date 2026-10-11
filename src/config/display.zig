@@ -1,5 +1,4 @@
 //! Layout, Client List and History Panel settings.
-const std = @import("std");
 const types = @import("types.zig");
 const wire = @import("wire.zig");
 const ranges_mod = @import("ranges.zig");
@@ -81,7 +80,7 @@ pub const DisplayConfig = struct {
     const SCREEN_X = ranges_mod.SCREEN_X;
     const SCREEN_Y = ranges_mod.SCREEN_Y;
     const SPACING = .{ 0, 200 };
-    pub const NOTIF_PANEL_MAX_ROWS = .{ 1, 30 };
+    pub const NOTIFICATION_PANEL_MAX_ROWS = .{ 1, 30 };
 
     pub const ranges = .{
         .startX = SCREEN_X,
@@ -91,7 +90,7 @@ pub const DisplayConfig = struct {
         .notifInfoPanelY = SCREEN_Y,
         .notifInfoPanelWidth = .{ 100, ranges_mod.MAX_WINDOW_WIDTH },
         .notifInfoPanelHeight = .{ 60, ranges_mod.MAX_WINDOW_HEIGHT },
-        .notifInfoPanelMaxRows = NOTIF_PANEL_MAX_ROWS,
+        .notifInfoPanelMaxRows = NOTIFICATION_PANEL_MAX_ROWS,
         .notifInfoPanelMergeWindowSec = .{ 1, 300 },
         .notifInfoPanelFontSize = ranges_mod.FONT_SIZE,
         .notifInfoPanelOpacity = ranges_mod.OPACITY,

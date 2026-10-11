@@ -73,15 +73,15 @@ pub const ProfileStore = struct {
     pub fn toggleGroupMember(self: *ProfileStore, group_index: usize, character_name: []const u8) !bool {
         if (group_index >= self.saved.hotkeyGroups.items.len) return error.InvalidGroupIndex;
         const group = &self.saved.hotkeyGroups.items[group_index];
-        const member = strings.indexOfString(group.characters.items, character_name) == null;
-        try setMembership(&self.saved, group, character_name, member);
+        const is_member = strings.indexOfString(group.characters.items, character_name) == null;
+        try setMembership(&self.saved, group, character_name, is_member);
         // Unsaved dialog edits may have moved or removed the group in `live`.
         for (self.live.hotkeyGroups.items) |*live_group| {
             if (live_group.id != group.id) continue;
-            try setMembership(&self.live, live_group, character_name, member);
+            try setMembership(&self.live, live_group, character_name, is_member);
         }
         if (!group.temporaryMembership) self.persist();
-        return member;
+        return is_member;
     }
 
     /// Saves everything the dialog changed in `live`.
@@ -101,7 +101,7 @@ pub const ProfileStore = struct {
     }
 
     /// Whether `live` holds dialog edits not yet saved.
-    pub fn isDirty(self: *ProfileStore) bool {
+    pub fn isDirty(self: *const ProfileStore) bool {
         var arena = std.heap.ArenaAllocator.init(self.live.allocator);
         defer arena.deinit();
         const live = self.live.toJsonString(arena.allocator()) catch |err| {
@@ -145,14 +145,14 @@ pub fn applyWindowPosition(config: *Config, character_name: ?[]const u8, positio
 }
 
 /// Idempotent, so both copies end up agreeing even if they didn't before.
-fn setMembership(config: *Config, group: *config_mod.HotkeyGroupConfig, character_name: []const u8, member: bool) !void {
+fn setMembership(config: *Config, group: *config_mod.HotkeyGroupConfig, character_name: []const u8, is_member: bool) !void {
     const members = &group.characters;
     const index = strings.indexOfString(members.items, character_name);
-    if (member and index == null) {
+    if (is_member and index == null) {
         const owned = try config.allocator.dupe(u8, character_name);
         errdefer config.allocator.free(owned);
         try members.append(config.allocator, owned);
-    } else if (!member) {
+    } else if (!is_member) {
         if (index) |i| config.allocator.free(members.orderedRemove(i));
     }
 }

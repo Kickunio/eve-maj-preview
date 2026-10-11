@@ -5,7 +5,7 @@ const notification = @import("notification.zig");
 const template = @import("template.zig");
 const config = @import("../config.zig");
 
-pub const CAPACITY = config.DisplayConfig.NOTIF_PANEL_MAX_ROWS[1];
+pub const CAPACITY = config.DisplayConfig.NOTIFICATION_PANEL_MAX_ROWS[1];
 
 /// One past notification retained for the History Panel; fixed-size buffers avoid a heap allocation per notification.
 pub const Entry = struct {

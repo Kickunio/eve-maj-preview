@@ -195,25 +195,25 @@ pub const GlobalConfig = struct {
     /// Volume never varies by user, so this reads DEFAULT_ORE_TABLE directly rather than the persisted oreTable.
     pub fn oreVolume(self: *const GlobalConfig, name: []const u8) ?f64 {
         _ = self;
-        inline for (.{ true, false }) |exact| {
-            if (findOre(&DEFAULT_ORE_TABLE, name, exact)) |entry| return entry.volumeM3;
+        inline for (.{ true, false }) |is_exact| {
+            if (findOre(&DEFAULT_ORE_TABLE, name, is_exact)) |entry| return entry.volumeM3;
         }
         return null;
     }
 
     /// An exact name beats a grade variant; within each, the persisted price override beats DEFAULT_ORE_TABLE's snapshot price.
     pub fn orePrice(self: *const GlobalConfig, name: []const u8) ?f64 {
-        inline for (.{ true, false }) |exact| {
-            if (findOre(self.oreTable.items, name, exact)) |entry| return entry.price;
-            if (findOre(&DEFAULT_ORE_TABLE, name, exact)) |entry| return entry.price;
+        inline for (.{ true, false }) |is_exact| {
+            if (findOre(self.oreTable.items, name, is_exact)) |entry| return entry.price;
+            if (findOre(&DEFAULT_ORE_TABLE, name, is_exact)) |entry| return entry.price;
         }
         return null;
     }
 
-    fn findOre(table: anytype, name: []const u8, comptime exact: bool) ?@TypeOf(table[0]) {
+    fn findOre(table: anytype, name: []const u8, comptime is_exact: bool) ?@TypeOf(table[0]) {
         for (table) |entry| {
-            const matches = if (exact) std.mem.eql(u8, entry.name, name) else isGradeVariant(name, entry.name);
-            if (matches) return entry;
+            const is_match = if (is_exact) std.mem.eql(u8, entry.name, name) else isGradeVariant(name, entry.name);
+            if (is_match) return entry;
         }
         return null;
     }
@@ -226,8 +226,8 @@ pub const GlobalConfig = struct {
                 return GlobalConfig.fromWire(.{}, allocator);
             }
             slog.err("Failed to read global settings file: {}", .{err});
-            std.Io.Dir.cwd().deleteFile(files.g_io, files.GLOBAL_SETTINGS_FILE) catch |del_err| {
-                slog.warn("Failed to delete unreadable global settings file: {}", .{del_err});
+            std.Io.Dir.cwd().deleteFile(files.g_io, files.GLOBAL_SETTINGS_FILE) catch |delete_err| {
+                slog.warn("Failed to delete unreadable global settings file: {}", .{delete_err});
             };
             return GlobalConfig.fromWire(.{}, allocator);
         };
@@ -253,7 +253,7 @@ pub const GlobalConfig = struct {
     }
 
     /// Caller owns the returned slice.
-    pub fn toJsonString(self: *GlobalConfig, allocator: std.mem.Allocator) ![]u8 {
+    pub fn toJsonString(self: *const GlobalConfig, allocator: std.mem.Allocator) ![]u8 {
         return wire.toJsonAlloc(allocator, self);
     }
 
@@ -266,14 +266,14 @@ pub const GlobalConfig = struct {
         slog.debug("Saved global settings", .{});
     }
 
-    pub fn logSettings(self: *GlobalConfig) void {
+    pub fn logSettings(self: *const GlobalConfig) void {
         wire.logJson(self.allocator, self);
     }
 
     pub fn updateLastUsed(self: *GlobalConfig, profile_name: []const u8) !void {
-        const same_profile = self.lastUsedProfile.len > 0 and std.mem.eql(u8, self.lastUsedProfile, profile_name);
+        const is_same_profile = self.lastUsedProfile.len > 0 and std.mem.eql(u8, self.lastUsedProfile, profile_name);
 
-        if (!same_profile) {
+        if (!is_same_profile) {
             const new_profile = try self.allocator.dupe(u8, profile_name);
             errdefer self.allocator.free(new_profile);
 
@@ -312,10 +312,10 @@ pub const GlobalConfig = struct {
     }
 
     /// The only way a GlobalConfig is built, so its strings are always owned (see updateLastUsed).
-    pub fn fromWire(w: Wire, allocator: std.mem.Allocator) !GlobalConfig {
+    pub fn fromWire(saved: Wire, allocator: std.mem.Allocator) !GlobalConfig {
         var settings: GlobalConfig = .{ .allocator = allocator };
         errdefer settings.deinit();
-        try wire.fromWireInto(GlobalConfig, w, allocator, &settings);
+        try wire.fromWireInto(GlobalConfig, saved, allocator, &settings);
         settings.validate();
         return settings;
     }
@@ -326,11 +326,21 @@ fn isGradeVariant(name: []const u8, base: []const u8) bool {
     if (base.len == 0 or base.len >= name.len) return false;
     var search_start: usize = 0;
     while (std.mem.findPos(u8, name, search_start, base)) |match_index| {
-        const before_ok = match_index == 0 or name[match_index - 1] == ' ';
+        const starts_word = match_index == 0 or name[match_index - 1] == ' ';
         const after_index = match_index + base.len;
-        const after_ok = after_index == name.len or name[after_index] == ' ';
-        if (before_ok and after_ok) return true;
+        const ends_word = after_index == name.len or name[after_index] == ' ';
+        if (starts_word and ends_word) return true;
         search_start = match_index + 1;
     }
     return false;
+}
+
+const testing = std.testing;
+
+test "isGradeVariant matches the base ore name as a whole word" {
+    try testing.expect(isGradeVariant("Shining Loparite", "Loparite"));
+    try testing.expect(isGradeVariant("Nocxite II-Grade", "Nocxite"));
+    try testing.expect(!isGradeVariant("Loparite", "Loparite"));
+    try testing.expect(!isGradeVariant("Veldspars", "Veldspar"));
+    try testing.expect(!isGradeVariant("Dense Veldspar", ""));
 }

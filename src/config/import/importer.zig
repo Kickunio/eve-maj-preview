@@ -89,7 +89,7 @@ pub fn analyze(json_writer: *std.json.Stringify, arena: std.mem.Allocator, text:
         },
     };
 
-    const default_name = try values.profileName(arena, name_source, profiles.MAX_NAME_LEN);
+    const default_name = try values.profileName(arena, name_source, profiles.MAX_NAME_LENGTH);
     try json_writer.objectField("defaultName");
     try json_writer.write(if (default_name.len > 0) default_name else "Imported");
     try json_writer.objectField("sections");

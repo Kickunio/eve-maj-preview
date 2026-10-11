@@ -1,7 +1,8 @@
 //! Enums used by settings; their tag names are saved in profiles, so renaming a tag breaks existing profiles.
+const fonts = @import("../platform/fonts.zig");
 
 /// Kept with the other setting types, though defined where platform/ can use it.
-pub const FontWeight = @import("../platform/fonts.zig").FontWeight;
+pub const FontWeight = fonts.FontWeight;
 
 pub const BorderStyle = enum {
     Solid,
@@ -83,13 +84,13 @@ pub const PlacementMode = enum {
     ThumbnailSpaces,
 };
 
-/// Fill order for RegionFit's grid: configured character list, or grouped by hotkey group membership.
+/// A thumbnail space's fill order: configured character list, or grouped by hotkey group membership.
 pub const RegionFitOrder = enum {
     Characters,
     HotkeyGroups,
 };
 
-/// Fill direction for RegionFit's grid
+/// A thumbnail space's fill direction.
 pub const RegionFitDirection = enum {
     RowFirst_LTR_TTB,
     RowFirst_RTL_TTB,

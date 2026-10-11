@@ -26,7 +26,7 @@ const LEGACY_FILES = [_]struct { from: []const u8, to: []const u8 }{
 };
 
 pub var g_io: std.Io = undefined;
-pub var g_environ_map: *const std.process.Environ.Map = undefined;
+var g_environ_map: ?*const std.process.Environ.Map = null;
 
 /// Must be called once before any Config/GlobalConfig load/save function is used.
 pub fn setIo(io: std.Io) void {
@@ -38,8 +38,15 @@ pub fn setEnvironMap(environ_map: *const std.process.Environ.Map) void {
     g_environ_map = environ_map;
 }
 
-pub fn environMap() *const std.process.Environ.Map {
+/// Null before setEnvironMap.
+pub fn environMap() ?*const std.process.Environ.Map {
     return g_environ_map;
+}
+
+/// Null when the variable is unset, or before setEnvironMap.
+pub fn environmentVariable(name: []const u8) ?[]const u8 {
+    const environ_map = g_environ_map orelse return null;
+    return environ_map.get(name);
 }
 
 /// Creates DATA_DIR and log.LOG_DIR, then moves files older versions kept beside the exe into them; never replaces one already there.
@@ -78,9 +85,9 @@ pub fn createDirIfMissing(path: []const u8) !void {
 pub fn atomicWriteFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8, content: []const u8) !void {
     // Unique per call so overlapping saves of the same path can't share a temp file.
     const unique = blk: {
-        var rand_bytes: [8]u8 = undefined;
-        io.random(&rand_bytes);
-        break :blk std.mem.readInt(u64, &rand_bytes, .little);
+        var random_bytes: [8]u8 = undefined;
+        io.random(&random_bytes);
+        break :blk std.mem.readInt(u64, &random_bytes, .little);
     };
     const temp_path = try allocator.print("{s}.{x}.tmp", .{ path, unique });
     defer allocator.free(temp_path);
@@ -94,7 +101,7 @@ pub fn atomicWriteFile(allocator: std.mem.Allocator, io: std.Io, path: []const u
     temp_file.writeStreamingAll(io, content) catch |err| {
         slog.err("Failed to write {} bytes to temp file '{s}': {}", .{ content.len, temp_path, err });
         std.Io.Dir.cwd().deleteFile(io, temp_path) catch |cleanup_err| {
-            slog.err("Failed to cleanup temp file '{s}' after write failure (original error: {}): {}", .{ temp_path, err, cleanup_err });
+            slog.err("Failed to clean up temp file '{s}' after write failure (original error: {}): {}", .{ temp_path, err, cleanup_err });
         };
         return err;
     };
@@ -102,19 +109,19 @@ pub fn atomicWriteFile(allocator: std.mem.Allocator, io: std.Io, path: []const u
     std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), path, io) catch |err| {
         slog.err("Failed to rename temp file '{s}' to '{s}' ({} bytes): {}", .{ temp_path, path, content.len, err });
         std.Io.Dir.cwd().deleteFile(io, temp_path) catch |cleanup_err| {
-            slog.err("Failed to cleanup temp file '{s}' after rename failure (original error: {}): {}", .{ temp_path, err, cleanup_err });
+            slog.err("Failed to clean up temp file '{s}' after rename failure (original error: {}): {}", .{ temp_path, err, cleanup_err });
         };
         return err;
     };
 }
 
-/// Expand %VAR% patterns in a path string. Caller owns the returned slice.
+/// Backslashes in a variable's value become '/'; caller owns the result.
 pub fn expandEnvironmentVariables(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.mem.findScalar(u8, path, '%') == null) {
         return allocator.dupe(u8, path);
     }
 
-    var result = std.ArrayList(u8).empty;
+    var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(allocator);
 
     var i: usize = 0;
@@ -127,21 +134,21 @@ pub fn expandEnvironmentVariables(allocator: std.mem.Allocator, path: []const u8
                 continue;
             };
 
-            const var_name = path[start..end];
-            if (var_name.len == 0) {
+            const variable_name = path[start..end];
+            if (variable_name.len == 0) {
                 try result.append(allocator, '%');
                 i += 1;
                 continue;
             }
 
-            const var_value = g_environ_map.get(var_name) orelse {
-                slog.warn("Failed to read environment variable '{s}'", .{var_name});
+            const variable_value = environmentVariable(variable_name) orelse {
+                slog.warn("Failed to read environment variable '{s}'", .{variable_name});
                 try result.appendSlice(allocator, path[i .. end + 1]);
                 i = end + 1;
                 continue;
             };
 
-            for (var_value) |c| {
+            for (variable_value) |c| {
                 try result.append(allocator, if (c == '\\') '/' else c);
             }
 

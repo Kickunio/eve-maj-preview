@@ -1,13 +1,14 @@
 //! Profile files on disk: where they live, loading with fallbacks, saving, creating defaults, and the backups kept when one is deleted or unreadable.
 const std = @import("std");
 const files = @import("files.zig");
-const Config = @import("../config.zig").Config;
+const config_mod = @import("../config.zig");
 const log = @import("../log.zig");
 
+const Config = config_mod.Config;
 const slog = log.scoped("config");
 
 /// A profile's display name, without ".json"; longer names from older versions still load.
-pub const MAX_NAME_LEN: usize = 16;
+pub const MAX_NAME_LENGTH: usize = 16;
 const BACKUP_DIR = "backup";
 
 /// `name` borrows from the file name; null `saved_at_seconds` for a backup named any other way.
@@ -29,7 +30,7 @@ pub fn validateName(name: []const u8) !void {
 
 /// "<name>.json" for a display name typed by the user, which may only hold letters, digits, spaces, '-' and '_'; caller owns the result.
 pub fn fileNameFor(allocator: std.mem.Allocator, display_name: []const u8) ![]u8 {
-    if (display_name.len == 0 or display_name.len > MAX_NAME_LEN) return error.InvalidProfileName;
+    if (display_name.len == 0 or display_name.len > MAX_NAME_LENGTH) return error.InvalidProfileName;
     for (display_name) |c| {
         if (!std.ascii.isAlphanumeric(c) and c != ' ' and c != '-' and c != '_') return error.InvalidProfileName;
     }
@@ -171,8 +172,8 @@ pub fn listBackups(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     };
     defer dir.close(files.g_io);
 
-    var iter = dir.iterate();
-    while (try iter.next(files.g_io)) |entry| {
+    var it = dir.iterate();
+    while (try it.next(files.g_io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
         const name = try allocator.dupe(u8, entry.name);
         errdefer allocator.free(name);
@@ -259,8 +260,8 @@ pub fn list(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     defer dir.close(files.g_io);
 
     const global_settings_name = std.Io.Dir.path.basename(files.GLOBAL_SETTINGS_FILE);
-    var iter = dir.iterate();
-    while (try iter.next(files.g_io)) |entry| {
+    var it = dir.iterate();
+    while (try it.next(files.g_io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
         if (std.mem.eql(u8, entry.name, global_settings_name)) continue;
 
@@ -337,7 +338,7 @@ test "fileNameFor appends .json and rejects empty, long or unsafe names" {
     try testing.expectEqualStrings("Main.json", name);
 
     try testing.expectError(error.InvalidProfileName, fileNameFor(testing.allocator, ""));
-    try testing.expectError(error.InvalidProfileName, fileNameFor(testing.allocator, &@as([MAX_NAME_LEN + 1]u8, @splat('a'))));
+    try testing.expectError(error.InvalidProfileName, fileNameFor(testing.allocator, &@as([MAX_NAME_LENGTH + 1]u8, @splat('a'))));
     try testing.expectError(error.InvalidProfileName, fileNameFor(testing.allocator, "a*b"));
 }
 

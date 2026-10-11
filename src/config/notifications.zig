@@ -95,25 +95,25 @@ pub const NotificationTypeConfigs = struct {
             break :blk map;
         };
 
-        pub fn jsonStringify(self: Wire, jw: anytype) !void {
-            try jw.beginObject();
+        pub fn jsonStringify(self: Wire, json_writer: anytype) !void {
+            try json_writer.beginObject();
             inline for (@typeInfo(notification.NotificationType).@"enum".field_names) |name| {
-                try jw.objectField(name);
-                try jw.write(self.map.get(@field(notification.NotificationType, name)));
+                try json_writer.objectField(name);
+                try json_writer.write(self.map.get(@field(notification.NotificationType, name)));
             }
-            try jw.endObject();
+            try json_writer.endObject();
         }
 
         /// Lets wire.parse check each type's settings on their own, so one bad value doesn't reset every type.
         pub const MapValue = NotificationTypeConfig.Wire;
 
-        pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, opts: std.json.ParseOptions) !Wire {
+        pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !Wire {
             var result: Wire = .{};
             if (source != .object) return result;
             var it = source.object.iterator();
             while (it.next()) |entry| {
                 const notification_type = std.meta.stringToEnum(notification.NotificationType, entry.key_ptr.*) orelse continue;
-                const type_wire = try std.json.parseFromValue(NotificationTypeConfig.Wire, allocator, entry.value_ptr.*, opts);
+                const type_wire = try std.json.parseFromValue(NotificationTypeConfig.Wire, allocator, entry.value_ptr.*, options);
                 defer type_wire.deinit();
                 var wire_value = type_wire.value;
                 // type_wire's arena is freed by the defer above, so its strings must be re-duped.

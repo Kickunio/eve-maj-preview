@@ -47,8 +47,8 @@ pub const ChatlogConfig = struct {
     pub const Wire = wire.Wire(ChatlogConfig);
 
     /// Expands %VAR% references in the log directories; an empty one gets EVE's default, which depends on the machine so can't be a field default.
-    pub fn fromWire(w: Wire, allocator: std.mem.Allocator) !ChatlogConfig {
-        var config = try wire.fromWire(ChatlogConfig, w, allocator);
+    pub fn fromWire(saved: Wire, allocator: std.mem.Allocator) !ChatlogConfig {
+        var config = try wire.fromWire(ChatlogConfig, saved, allocator);
         errdefer wire.deinit(ChatlogConfig, &config, allocator);
         replaceDir(allocator, &config.chatlogDir, try files.expandEnvironmentVariables(allocator, config.chatlogDir));
         replaceDir(allocator, &config.gamelogDir, try files.expandEnvironmentVariables(allocator, config.gamelogDir));
@@ -68,22 +68,15 @@ pub const ChatlogConfig = struct {
     }
 };
 
-const FOLDERID_Documents = win32.GUID{
-    .Data1 = 0xFDD39AD0,
-    .Data2 = 0x238F,
-    .Data3 = 0x46AF,
-    .Data4 = [8]u8{ 0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7 },
-};
-
 /// Asks the shell rather than assuming %USERPROFILE%/Documents, which OneDrive can redirect; EVE logs to wherever this resolves.
 fn documentsDir(allocator: std.mem.Allocator) ![]u8 {
-    const dir = win32.getKnownFolderPath(allocator, FOLDERID_Documents) catch |err| blk: {
+    const dir = win32.getKnownFolderPath(allocator, win32.FOLDERID_Documents) catch |err| blk: {
         slog.warn("Failed to resolve the Documents folder, falling back to USERPROFILE/Documents: {}", .{err});
-        const userprofile = files.g_environ_map.get("USERPROFILE") orelse {
+        const user_profile = files.environmentVariable("USERPROFILE") orelse {
             slog.warn("Failed to read USERPROFILE", .{});
             return error.MissingEnvironmentVariable;
         };
-        break :blk try allocator.print("{s}/Documents", .{userprofile});
+        break :blk try allocator.print("{s}/Documents", .{user_profile});
     };
     std.mem.replaceScalar(u8, dir, '\\', '/');
     return dir;

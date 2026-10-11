@@ -1,6 +1,7 @@
 //! Upgrades an older profile's JSON before it's parsed, so the profile loader and the profile importer both see the current schema; no I/O.
 const std = @import("std");
 const values = @import("import/values.zig");
+const spaces_mod = @import("spaces.zig");
 
 const Value = std.json.Value;
 
@@ -25,7 +26,7 @@ fn spacesFromDisplay(arena: std.mem.Allocator, root: *Value) !void {
     // First, so a client at the login screen keeps landing in its own space ahead of the catch-all.
     if (try rectFields(arena, display, "notLoggedInSpaceX", "notLoggedInSpaceY", "notLoggedInSpaceWidth", "notLoggedInSpaceHeight")) |fields| {
         var space = fields;
-        try space.put(arena, "name", .{ .string = "Login Screen" });
+        try space.put(arena, "name", .{ .string = spaces_mod.LOGIN_SCREEN_NAME });
         try space.put(arena, "enabled", .{ .bool = values.boolAt(display, "notLoggedInSpaceEnabled") orelse false });
         try space.put(arena, "holdsLoginScreen", .{ .bool = true });
         try copy(arena, &space, display, "notLoggedInSpaceSpacing", "spacing");
@@ -119,7 +120,7 @@ test "the not-logged-in space comes first and holds the login screen" {
     );
     const spaces = root.object.get("thumbnailSpaces").?.array.items;
     try testing.expectEqual(@as(usize, 2), spaces.len);
-    try testing.expectEqualStrings("Login Screen", values.stringAt(spaces[0], "name").?);
+    try testing.expectEqualStrings(spaces_mod.LOGIN_SCREEN_NAME, values.stringAt(spaces[0], "name").?);
     try testing.expectEqual(true, values.boolAt(spaces[0], "holdsLoginScreen").?);
     try testing.expectEqual(true, values.boolAt(spaces[0], "enabled").?);
     try testing.expectEqual(@as(i64, 900), values.integerAt(spaces[0], "x").?);

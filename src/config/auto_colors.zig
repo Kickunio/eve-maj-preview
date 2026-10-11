@@ -15,7 +15,7 @@ pub const AutoColorStore = struct {
     allocator: std.mem.Allocator,
     system: color.AutoColors = .{},
     character: color.AutoColors = .{},
-    loaded: bool = false,
+    is_loaded: bool = false,
 
     const File = struct {
         systemColors: []const Entry = &.{},
@@ -48,7 +48,7 @@ pub const AutoColorStore = struct {
 
         var overrides: [color.AutoColors.MAX_AVOIDED]u32 = undefined;
         const override_count = @min(config.systemColors.items.len, overrides.len);
-        for (config.systemColors.items[0..override_count], 0..) |sc, i| overrides[i] = sc.color;
+        for (config.systemColors.items[0..override_count], 0..) |system_color, i| overrides[i] = system_color.color;
 
         return self.system.colorFor(self.allocator, system_name, overrides[0..override_count]);
     }
@@ -94,8 +94,8 @@ pub const AutoColorStore = struct {
 
     /// Reads the file on first use only; later calls do nothing.
     fn load(self: *AutoColorStore) void {
-        if (self.loaded) return;
-        self.loaded = true;
+        if (self.is_loaded) return;
+        self.is_loaded = true;
 
         const content = std.Io.Dir.cwd().readFileAlloc(files.g_io, AUTO_COLORS_FILE, self.allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
             if (err != error.FileNotFound) slog.warn("Failed to read '{s}': {}", .{ AUTO_COLORS_FILE, err });
@@ -157,10 +157,10 @@ pub const AutoColorStore = struct {
     }
 
     fn entriesToWire(allocator: std.mem.Allocator, store: *const color.AutoColors) ![]const Entry {
-        const wires = try allocator.alloc(Entry, store.entries.items.len);
-        for (store.entries.items, wires) |entry, *w| {
-            w.* = .{ .name = entry.name, .color = .{ .value = entry.color } };
+        const saved = try allocator.alloc(Entry, store.entries.items.len);
+        for (store.entries.items, saved) |entry, *saved_entry| {
+            saved_entry.* = .{ .name = entry.name, .color = .{ .value = entry.color } };
         }
-        return wires;
+        return saved;
     }
 };

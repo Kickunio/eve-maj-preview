@@ -26,25 +26,9 @@ pub const Context = struct {
 /// Main thread only, like everything that edits a document.
 var g_next_id: u32 = 1;
 
-fn hasId(comptime T: type) bool {
-    return @typeInfo(T) == .@"struct" and @hasField(T, "id");
-}
-
 /// A keyed map (NotificationTypeConfigs) is reached by child name rather than field, and saves in its own shape.
 pub fn isKeyedMap(comptime T: type) bool {
     return @typeInfo(T) == .@"struct" and @hasDecl(T, "childAt");
-}
-
-/// A struct edited field by field: a section with a generated `Wire`, or a plain one saved as its own fields (SnappingConfig, Position).
-fn isStruct(comptime T: type) bool {
-    return @typeInfo(T) == .@"struct" and wire.ListItem(T) == null and !isKeyedMap(T) and T != key_list.KeyList;
-}
-
-/// The struct inside an optional one, such as a character's `?Position`.
-fn OptionalStruct(comptime T: type) ?type {
-    const info = @typeInfo(T);
-    if (info != .optional or !isStruct(info.optional.child)) return null;
-    return info.optional.child;
 }
 
 pub fn ChildOf(comptime T: type) type {
@@ -78,143 +62,159 @@ pub fn assignIds(comptime T: type, value: *T) void {
     }
 }
 
+/// `value` in the dialog's shape: the saved JSON plus each keyed list item's `id`.
+pub fn write(json_writer: anytype, comptime T: type, value: *const T) !void {
+    return writeValue(json_writer, T, "", value);
+}
+
+/// The value at `path`, in the dialog's shape.
+pub fn writeAt(json_writer: anytype, comptime T: type, target: *const T, path: []const std.json.Value) !void {
+    if (path.len == 0) return write(json_writer, T, target);
+    const key = try fieldKey(path[0]);
+    if (comptime isKeyedMap(T)) {
+        const child = target.childAtConst(key) orelse return error.MissingField;
+        return writeAt(json_writer, ChildOf(T), child, path[1..]);
+    } else {
+        inline for (comptime wire.savedFields(T)) |f| {
+            if (std.mem.eql(u8, key, f.name)) return writeFieldAt(json_writer, f.type, f.name, &@field(target, f.name), path[1..]);
+        }
+        return error.MissingField;
+    }
+}
+
+/// Returns the id an `insert` gave its item. Validation is the caller's, once a batch is applied.
+pub fn apply(comptime T: type, document: *T, op: Op, context: Context) !?u32 {
+    const kind = std.meta.stringToEnum(Kind, op.op) orelse return error.InvalidOp;
+    return applyIn(T, document, op.path, kind, op, context);
+}
+
+fn hasId(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasField(T, "id");
+}
+
+/// A struct edited field by field: a section with a generated `Wire`, or a plain one saved as its own fields (SnappingConfig, Position).
+fn isStruct(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and wire.ListItem(T) == null and !isKeyedMap(T) and T != key_list.KeyList;
+}
+
+/// The struct inside an optional one, such as a character's `?Position`.
+fn OptionalStruct(comptime T: type) ?type {
+    const info = @typeInfo(T);
+    if (info != .optional or !isStruct(info.optional.child)) return null;
+    return info.optional.child;
+}
+
 fn nextId() u32 {
     const id = g_next_id;
     g_next_id += 1;
     return id;
 }
 
-/// `value` in the dialog's shape: the saved JSON plus each keyed list item's `id`.
-pub fn write(jw: anytype, comptime T: type, value: *const T) !void {
-    return writeValue(jw, T, "", value);
-}
-
-fn writeValue(jw: anytype, comptime T: type, comptime name: []const u8, value: *const T) !void {
+fn writeValue(json_writer: anytype, comptime T: type, comptime name: []const u8, value: *const T) !void {
     if (comptime wire.isNested(T)) {
-        if (comptime isKeyedMap(T)) return jw.write(wire.encode(T, value.*));
-        try jw.beginObject();
+        if (comptime isKeyedMap(T)) return json_writer.write(wire.encode(T, value.*));
+        try json_writer.beginObject();
         if (comptime hasId(T)) {
-            try jw.objectField("id");
-            try jw.write(value.id);
+            try json_writer.objectField("id");
+            try json_writer.write(value.id);
         }
         inline for (comptime wire.savedFields(T)) |f| {
-            try jw.objectField(f.name);
-            try writeValue(jw, f.type, f.name, &@field(value, f.name));
+            try json_writer.objectField(f.name);
+            try writeValue(json_writer, f.type, f.name, &@field(value, f.name));
         }
-        return jw.endObject();
+        return json_writer.endObject();
     }
     if (comptime wire.OptionalNested(T)) |N| {
-        if (value.*) |*v| return writeValue(jw, N, name, v);
-        return jw.write(null);
+        if (value.*) |*v| return writeValue(json_writer, N, name, v);
+        return json_writer.write(null);
     }
     if (comptime wire.ListItem(T)) |Item| {
-        try jw.beginArray();
-        for (value.items) |*item| try writeValue(jw, Item, name, item);
-        return jw.endArray();
+        try json_writer.beginArray();
+        for (value.items) |*item| try writeValue(json_writer, Item, name, item);
+        return json_writer.endArray();
     }
-    return jw.write(wire.fieldToWire(T, name, value.*));
+    return json_writer.write(wire.fieldToWire(T, name, value.*));
 }
 
-/// The value at `path`, in the dialog's shape.
-pub fn writeAt(jw: anytype, comptime T: type, target: *const T, path: []const std.json.Value) !void {
-    if (path.len == 0) return write(jw, T, target);
-    const key = try fieldKey(path[0]);
-    if (comptime isKeyedMap(T)) {
-        const child = target.childAtConst(key) orelse return error.UnknownPath;
-        return writeAt(jw, ChildOf(T), child, path[1..]);
-    } else {
-        inline for (comptime wire.savedFields(T)) |f| {
-            if (std.mem.eql(u8, key, f.name)) return writeFieldAt(jw, f.type, f.name, &@field(target, f.name), path[1..]);
-        }
-        return error.UnknownPath;
-    }
-}
-
-fn writeFieldAt(jw: anytype, comptime F: type, comptime name: []const u8, ptr: *const F, path: []const std.json.Value) !void {
-    if (path.len == 0) return writeValue(jw, F, name, ptr);
+fn writeFieldAt(json_writer: anytype, comptime F: type, comptime name: []const u8, field: *const F, path: []const std.json.Value) !void {
+    if (path.len == 0) return writeValue(json_writer, F, name, field);
     if (comptime wire.ListItem(F)) |Item| {
         if (comptime hasId(Item)) {
-            const index = try findItem(Item, ptr.items, path[0]);
-            return writeAt(jw, Item, &ptr.items[index], path[1..]);
+            const index = try findItem(Item, field.items, path[0]);
+            return writeAt(json_writer, Item, &field.items[index], path[1..]);
         } else return error.ListIsNotKeyed;
     }
-    if (comptime isKeyedMap(F)) return writeAt(jw, F, ptr, path);
+    if (comptime isKeyedMap(F)) return writeAt(json_writer, F, field, path);
     if (comptime OptionalStruct(F)) |N| {
-        if (ptr.*) |*v| return writeAt(jw, N, v, path);
-        return jw.write(null);
+        if (field.*) |*v| return writeAt(json_writer, N, v, path);
+        return json_writer.write(null);
     }
-    if (comptime isStruct(F)) return writeAt(jw, F, ptr, path);
+    if (comptime isStruct(F)) return writeAt(json_writer, F, field, path);
     return error.InvalidPath;
-}
-
-/// Returns the id an `insert` gave its item. Validation is the caller's, once a batch is applied.
-pub fn apply(comptime T: type, doc: *T, op: Op, context: Context) !?u32 {
-    const kind = std.meta.stringToEnum(Kind, op.op) orelse return error.UnknownOp;
-    return applyIn(T, doc, op.path, kind, op, context);
 }
 
 fn applyIn(comptime T: type, target: *T, path: []const std.json.Value, kind: Kind, op: Op, context: Context) !?u32 {
     if (path.len == 0) return error.InvalidPath;
     const key = try fieldKey(path[0]);
     if (comptime isKeyedMap(T)) {
-        const child = target.childAt(key) orelse return error.UnknownPath;
+        const child = target.childAt(key) orelse return error.MissingField;
         return applyIn(ChildOf(T), child, path[1..], kind, op, context);
     } else {
         inline for (comptime wire.savedFields(T)) |f| {
             if (std.mem.eql(u8, key, f.name)) return applyField(f.type, f.name, &@field(target, f.name), f.defaultValue(), path[1..], kind, op, context);
         }
-        return error.UnknownPath;
+        return error.MissingField;
     }
 }
 
-fn applyField(comptime F: type, comptime name: []const u8, ptr: *F, default: ?F, path: []const std.json.Value, kind: Kind, op: Op, context: Context) !?u32 {
+fn applyField(comptime F: type, comptime name: []const u8, field: *F, default: ?F, path: []const std.json.Value, kind: Kind, op: Op, context: Context) !?u32 {
     if (path.len == 0) {
         switch (kind) {
             .set => {
-                try setValue(F, name, ptr, default, op.value, context);
+                try setValue(F, name, field, default, op.value, context);
                 return null;
             },
             .insert => if (comptime wire.ListItem(F)) |Item| {
-                if (comptime hasId(Item)) return try insertItem(Item, ptr, op, context) else return error.ListIsNotKeyed;
+                if (comptime hasId(Item)) return try insertItem(Item, field, op, context) else return error.ListIsNotKeyed;
             } else return error.NotAList,
             .remove, .move => return error.InvalidPath,
         }
     }
     if (comptime wire.ListItem(F)) |Item| {
         if (comptime hasId(Item)) {
-            const index = try findItem(Item, ptr.items, path[0]);
-            if (path.len > 1) return applyIn(Item, &ptr.items[index], path[1..], kind, op, context);
+            const index = try findItem(Item, field.items, path[0]);
+            if (path.len > 1) return applyIn(Item, &field.items[index], path[1..], kind, op, context);
             switch (kind) {
-                .set => try replaceItem(Item, ptr, index, op.value, context),
+                .set => try replaceItem(Item, field, index, op.value, context),
                 .remove => {
-                    var removed = ptr.orderedRemove(index);
+                    var removed = field.orderedRemove(index);
                     wire.free(Item, &removed, context.allocator);
                 },
                 .move => {
                     const to = op.index orelse return error.MissingIndex;
-                    const item = ptr.orderedRemove(index);
-                    ptr.insertAssumeCapacity(@min(to, ptr.items.len), item);
+                    const item = field.orderedRemove(index);
+                    field.insertAssumeCapacity(@min(to, field.items.len), item);
                 },
                 .insert => return error.InvalidPath,
             }
             return null;
         } else return error.ListIsNotKeyed;
     }
-    if (comptime isKeyedMap(F)) return applyIn(F, ptr, path, kind, op, context);
+    if (comptime isKeyedMap(F)) return applyIn(F, field, path, kind, op, context);
     if (comptime OptionalStruct(F)) |N| {
         // Editing one field of an unset override starts it from the defaults, and zero where there are none (Position).
-        if (ptr.* == null) ptr.* = std.mem.zeroInit(N, .{});
-        return applyIn(N, &ptr.*.?, path, kind, op, context);
+        if (field.* == null) field.* = std.mem.zeroInit(N, .{});
+        return applyIn(N, &field.*.?, path, kind, op, context);
     }
-    if (comptime isStruct(F)) return applyIn(F, ptr, path, kind, op, context);
+    if (comptime isStruct(F)) return applyIn(F, field, path, kind, op, context);
     return error.InvalidPath;
 }
 
-fn setValue(comptime F: type, comptime name: []const u8, ptr: *F, default: ?F, json: std.json.Value, context: Context) !void {
+fn setValue(comptime F: type, comptime name: []const u8, field: *F, default: ?F, json: std.json.Value, context: Context) !void {
     const saved = std.json.parseFromValueLeaky(wire.FieldWire(F, name), context.arena, json, .{ .ignore_unknown_fields = true }) catch return error.InvalidValue;
     const fresh = try wire.fieldFromWire(F, saved, context.allocator);
-    wire.freeField(F, ptr, default, context.allocator);
-    ptr.* = fresh;
+    wire.freeField(F, field, default, context.allocator);
+    field.* = fresh;
 }
 
 fn replaceItem(comptime Item: type, list: *std.ArrayList(Item), index: usize, json: std.json.Value, context: Context) !void {
@@ -237,13 +237,13 @@ fn insertItem(comptime Item: type, list: *std.ArrayList(Item), op: Op, context: 
 
 fn findItem(comptime Item: type, items: []const Item, key: std.json.Value) !usize {
     const id: u32 = switch (key) {
-        .integer => |i| std.math.cast(u32, i) orelse return error.UnknownItem,
+        .integer => |i| std.math.cast(u32, i) orelse return error.MissingItem,
         else => return error.InvalidPath,
     };
     for (items, 0..) |item, i| {
         if (item.id == id) return i;
     }
-    return error.UnknownItem;
+    return error.MissingItem;
 }
 
 fn fieldKey(segment: std.json.Value) ![]const u8 {

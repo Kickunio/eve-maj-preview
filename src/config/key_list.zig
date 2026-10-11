@@ -43,12 +43,12 @@ pub const KeyList = struct {
 pub const KeyListWire = struct {
     value: KeyList,
 
-    pub fn jsonStringify(self: KeyListWire, jw: anytype) !void {
+    pub fn jsonStringify(self: KeyListWire, json_writer: anytype) !void {
         const keys = self.value.slice();
-        if (keys.len == 1) return writeKey(jw, keys[0]);
-        try jw.beginArray();
-        for (keys) |key| try writeKey(jw, key);
-        try jw.endArray();
+        if (keys.len == 1) return writeKey(json_writer, keys[0]);
+        try json_writer.beginArray();
+        for (keys) |key| try writeKey(json_writer, key);
+        try json_writer.endArray();
     }
 
     /// Lets config/readable.zig drop and report each unreadable key before this parser sees it.
@@ -85,10 +85,10 @@ fn appendParsed(list: *KeyList, text: []const u8) void {
     }
 }
 
-fn writeKey(jw: anytype, combined: u32) !void {
+fn writeKey(json_writer: anytype, combined: u32) !void {
     var buf: [10]u8 = undefined;
-    const s = std.mem.print(&buf, "0x{X:0>2}", .{combined}) catch unreachable;
-    try jw.write(s);
+    const text = std.mem.print(&buf, "0x{X:0>2}", .{combined}) catch unreachable;
+    try json_writer.write(text);
 }
 
 const testing = std.testing;

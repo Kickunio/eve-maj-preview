@@ -313,8 +313,13 @@ fn scanPotato() void {
         .found => |*found| found.arena.deinit(),
         .not_scanned, .failed => {},
     }
+    const environ_map = config.environMap() orelse {
+        slog.err("Failed to scan EVE settings profiles: the environment isn't loaded yet", .{});
+        g_potato = .failed;
+        return;
+    };
     var arena = std.heap.ArenaAllocator.init(g_allocator);
-    const profiles = ultra_potato.scanProfiles(arena.allocator(), files.g_io, config.environMap()) catch |err| {
+    const profiles = ultra_potato.scanProfiles(arena.allocator(), files.g_io, environ_map) catch |err| {
         arena.deinit();
         slog.err("Failed to scan EVE settings profiles: {}", .{err});
         g_potato = .failed;

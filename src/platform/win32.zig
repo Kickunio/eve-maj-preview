@@ -1399,6 +1399,13 @@ extern "shell32" fn SHGetKnownFolderPath(
     ppszPath: *?[*:0]u16,
 ) callconv(.c) c_long;
 
+pub const FOLDERID_Documents = GUID{
+    .Data1 = 0xFDD39AD0,
+    .Data2 = 0x238F,
+    .Data3 = 0x46AF,
+    .Data4 = [8]u8{ 0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7 },
+};
+
 /// Resolves a shell known-folder (e.g. Documents) to its current real path, backslash-separated as returned by Windows.
 pub fn getKnownFolderPath(allocator: std.mem.Allocator, folder_id: GUID) ![]u8 {
     var path_ptr: ?[*:0]u16 = null;
