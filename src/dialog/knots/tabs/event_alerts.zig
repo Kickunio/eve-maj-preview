@@ -5,6 +5,7 @@ const config = @import("../../../config.zig");
 const notification = @import("../../../notifications/notification.zig");
 const template = @import("../../../notifications/template.zig");
 const painter_mod = @import("../../../painter.zig");
+const overlay = @import("../../../thumbnail/overlay.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
 const host = @import("../host.zig");
@@ -24,8 +25,6 @@ const slog = log.Scoped("dialog_knots");
 
 /// The most a custom text box takes.
 const CUSTOM_TEXT_MAX_LENGTH = 100;
-/// Matches thumbnail/overlay.zig's MAX_LINES_PER_NOTIFICATION.
-const MAX_PREVIEW_LINES = 3;
 const NEWLINE_TOKEN = "\\n";
 
 /// Every type, by category, then as declared.
@@ -280,7 +279,7 @@ fn preview(context: *ui.Frame, notification_type: NotificationType, comptime fie
     var kept: std.ArrayList(u8) = .empty;
     var line_count: usize = 0;
     while (lines.next()) |line| : (line_count += 1) {
-        if (line_count == MAX_PREVIEW_LINES) break;
+        if (line_count == overlay.MAX_LINES_PER_NOTIFICATION) break;
         if (line_count > 0) try kept.append(context.arena(), '\n');
         try kept.appendSlice(context.arena(), line);
     }

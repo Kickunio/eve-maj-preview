@@ -182,10 +182,10 @@ fn roster(context: *ui.Frame, profile: ProfileRef, is_filling: bool) !void {
 
     if (widgets.reorderFinish(context, SPACE_ROW_KEY, items.len)) |moved| profile.move("thumbnailSpaces", moved.from, @max(moved.before, fixed_count));
     if (action == .add) {
-        const count = profile.ptr.thumbnailSpaces.items.len;
+        const previous_count = profile.ptr.thumbnailSpaces.items.len;
         profile.append("thumbnailSpaces", .{ .name = "New Space" });
         const added = profile.ptr.thumbnailSpaces.items;
-        if (added.len > count) g_selected_id = added[added.len - 1].id;
+        if (added.len > previous_count) g_selected_id = added[added.len - 1].id;
     }
 }
 
@@ -453,7 +453,7 @@ fn savedPositionMap(context: *ui.Frame, profile: ProfileRef) !void {
         const size = profile.ptr.handPlacedSize(character.name);
         // Scaled for the monitor the thumbnail sits on, as thumbnail/arrange.zig does.
         const scale = win32.dpiToScale(win32.dpiForPoint(.{ .x = position.x, .y = position.y }));
-        const rect = win32.RECT{
+        const rect: win32.RECT = .{
             .left = position.x,
             .top = position.y,
             .right = position.x + win32.scalePixels(size.width, scale),

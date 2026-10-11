@@ -47,13 +47,13 @@ pub fn show(context: *ui.Frame) !void {
     try bind.toggle(context, profile.child("hotkeys"), "resetGroupIndexOnNonGroupFocus", "Reset Cycle Position When Leaving a Group");
     try widgets.separator(context, .str("knots.groups.separator.reset"));
 
-    const count = profile.ptr.hotkeyGroups.items.len;
-    if (g_selected_index >= count) g_selected_index = count -| 1;
+    const group_count = profile.ptr.hotkeyGroups.items.len;
+    if (g_selected_index >= group_count) g_selected_index = group_count -| 1;
     const master_detail = Rect{ .key = .src(@src()), .style = &style.master_detail_fill };
     _ = try master_detail.open(context);
     try roster(context, profile);
     const stack = try widgets.openScrollPane(context, .str("knots.groups.detail"), style.detail_scroll);
-    if (count == 0) {
+    if (group_count == 0) {
         try widgets.paragraph(context, .src(@src()), "Add a hotkey group under the list to give a set of characters their own cycling keys.");
     } else {
         try detail(context, profile, g_selected_index);
@@ -89,14 +89,14 @@ fn roster(context: *ui.Frame, profile: ProfileRef) !void {
     // The selection follows the group it was on, not the slot.
     if (widgets.reorderFinish(context, GROUP_ROW_KEY, groups.len)) |moved| {
         const from = moved.from;
-        const was_selected = g_selected_index;
+        const previous_selected_index = g_selected_index;
         profile.move("hotkeyGroups", from, moved.before);
         const to = if (moved.before > from) moved.before - 1 else moved.before;
-        if (was_selected == from) {
+        if (previous_selected_index == from) {
             g_selected_index = to;
-        } else if (from < was_selected and to >= was_selected) {
+        } else if (from < previous_selected_index and to >= previous_selected_index) {
             g_selected_index -= 1;
-        } else if (from > was_selected and to <= was_selected) {
+        } else if (from > previous_selected_index and to <= previous_selected_index) {
             g_selected_index += 1;
         }
     }
@@ -208,25 +208,25 @@ fn members(context: *ui.Frame, group: GroupRef) !void {
         try widgets.paragraph(context, .src(@src()), "No characters in this group yet - add one below, or add every open client with the refresh button.");
     }
     var order = widgets.ReorderList.begin(context, MEMBER_ROW_KEY, names.len, 0);
-    var removed: ?usize = null;
+    var removed_index: ?usize = null;
     for (0..names.len) |member_index| {
         try widgets.reorderRowByHandle(context, MEMBER_ROW_KEY, member_index, memberHandleKey(member_index));
         if (!try order.next(context, member_index)) continue;
-        if (try memberRow(context, group, member_index, &style.member_row)) removed = member_index;
+        if (try memberRow(context, group, member_index, &style.member_row)) removed_index = member_index;
     }
     if (try order.end(context)) |lifted| {
         _ = try memberRow(context, group, lifted, try order.liftedStyle(context, MEMBERS_KEY, &style.member_row_lift));
     }
     try list.close(context);
-    if (removed) |member_index| group.remove("characters", member_index);
+    if (removed_index) |member_index| group.remove("characters", member_index);
     if (widgets.reorderFinish(context, MEMBER_ROW_KEY, names.len)) |moved| group.move("characters", moved.from, moved.before);
 
     const add_row = Rect{ .key = .src(@src()), .style = &style.inline_row };
     _ = try add_row.open(context);
     const is_focused = context.ui().focused(ADD_MEMBER_KEY.hash());
     try context.e(TextInput{ .key = ADD_MEMBER_KEY, .buf = &g_new_member, .style = &style.text_input, .placeholder = "Add character name\u{2026}" });
-    const add_clicked = (try context.interact(Button{ .key = .src(@src()), .label = "+ Add", .style = &style.plain_button })).clicked;
-    if (add_clicked or (is_focused and context.ui().input.containsKey(.enter))) addMember(group);
+    const is_add_clicked = (try context.interact(Button{ .key = .src(@src()), .label = "+ Add", .style = &style.plain_button })).clicked;
+    if (is_add_clicked or (is_focused and context.ui().input.containsKey(.enter))) addMember(group);
     if (try widgets.addOpenClientsButton(context, .src(@src()), &style.plain_button)) fillFromClients(context, group);
     try add_row.close(context);
     if (try suggest.openClients(context, ADD_MEMBER_KEY, g_new_member.items)) |picked| {
@@ -272,17 +272,17 @@ fn fillFromClients(context: *ui.Frame, group: GroupRef) void {
         status.show(.failure, "No open EVE clients found", .{});
         return;
     }
-    var added: usize = 0;
+    var added_count: usize = 0;
     for (names) |name| {
         const exists = for (group.ptr.characters.items) |member| {
             if (std.ascii.eqlIgnoreCase(member, name)) break true;
         } else false;
         if (exists) continue;
         group.appendString("characters", name);
-        added += 1;
+        added_count += 1;
     }
-    if (added > 0) {
-        status.show(.success, "Added {d} character(s) to hotkey group", .{added});
+    if (added_count > 0) {
+        status.show(.success, "Added {d} character(s) to hotkey group", .{added_count});
     } else {
         status.show(.info, "All open EVE clients are already in this group", .{});
     }

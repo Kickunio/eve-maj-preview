@@ -21,7 +21,7 @@ const NEW_FILTER_NAME = "New Filter";
 var g_allocator: std.mem.Allocator = undefined;
 var g_selected_index: usize = 0;
 /// Enable Window Filters isn't saved; it starts on whenever the profile has filters.
-var g_filters_enabled: ?bool = null;
+var g_are_filters_enabled: ?bool = null;
 /// The open "Pick Running Window" dropdown, under one filter.
 var g_picker: ?window_picker.Picker = null;
 
@@ -32,7 +32,7 @@ pub fn init(allocator: std.mem.Allocator) void {
 /// Once the window has closed.
 pub fn reset() void {
     window_picker.close(&g_picker);
-    g_filters_enabled = null;
+    g_are_filters_enabled = null;
     g_selected_index = 0;
 }
 
@@ -76,8 +76,8 @@ fn scanning(context: *ui.Frame) !void {
 fn windowFilters(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Window Filters", "Configure which applications to track. Each filter can match by window class name and executable name.", &style.section);
     const profile = session.profile();
-    var is_enabled = g_filters_enabled orelse (profile.ptr.windowFilters.items.len > 0);
-    if (try widgets.checkbox(context, .src(@src()), "Enable Window Filters", &is_enabled)) g_filters_enabled = is_enabled;
+    var is_enabled = g_are_filters_enabled orelse (profile.ptr.windowFilters.items.len > 0);
+    if (try widgets.checkbox(context, .src(@src()), "Enable Window Filters", &is_enabled)) g_are_filters_enabled = is_enabled;
     try widgets.hintText(context, .src(@src()), "When off, only EVE Online client windows are tracked.");
 
     const options = try widgets.openGroup(context, .src(@src()), is_enabled);
@@ -94,14 +94,14 @@ fn isBuiltIn(filter: *const config.WindowFilterConfig) bool {
 fn filterList(context: *ui.Frame, profile: ProfileRef) !void {
     const filters = profile.ptr.windowFilters.items;
     var first_editable: ?usize = null;
-    var selected_is_editable = false;
+    var is_selected_editable = false;
     for (filters, 0..) |*filter, index| {
         if (isBuiltIn(filter)) continue;
         if (first_editable == null) first_editable = index;
-        if (index == g_selected_index) selected_is_editable = true;
+        if (index == g_selected_index) is_selected_editable = true;
     }
     if (first_editable) |first| {
-        if (!selected_is_editable) g_selected_index = first;
+        if (!is_selected_editable) g_selected_index = first;
     }
     const master_detail = Rect{ .key = .src(@src()), .style = &style.master_detail };
     _ = try master_detail.open(context);
@@ -164,9 +164,9 @@ fn filterDetail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     try bind.csvBox(context, filter, "class_names", "e.g., trinityWindow");
     try classes.close(context);
     try widgets.hintText(context, ui.Key.str("knots.filter.classes.hint").indexed(index), "Optional - narrows the match further, but leaving this blank still matches by Executable Name below.");
-    const exes = try widgets.openBinding(context, ui.Key.str("knots.filter.exes").indexed(index), "Executable Names");
+    const executables = try widgets.openBinding(context, ui.Key.str("knots.filter.exes").indexed(index), "Executable Names");
     try bind.csvBox(context, filter, "executable_names", "e.g., exefile.exe");
-    try exes.close(context);
+    try executables.close(context);
     const detect = try widgets.openBinding(context, ui.Key.str("knots.filter.detect").indexed(index), "Detect");
     if (try widgets.glyphButton(context, ui.Key.str("knots.filter.pick").indexed(index), .refresh, "Pick Running Window", &style.plain_button, false)) window_picker.open(g_allocator, &g_picker, index);
     try detect.close(context);
@@ -181,7 +181,7 @@ fn picker(context: *ui.Frame, profile: ProfileRef, filter: FilterRef) !void {
     const chosen = try window_picker.select(context, &g_picker, .str("knots.filter.picker"), filter.index) orelse return;
     filter.setStrings("class_names", &.{chosen.class});
     filter.setStrings("executable_names", &.{chosen.exe});
-    const friendly = if (std.ascii.endsWithIgnoreCase(chosen.exe, ".exe")) chosen.exe[0 .. chosen.exe.len - 4] else chosen.exe;
+    const friendly = if (std.ascii.endsWithIgnoreCase(chosen.exe, ".exe")) chosen.exe[0 .. chosen.exe.len - ".exe".len] else chosen.exe;
     filter.set("name", friendly);
     addCharacterIfMissing(profile, friendly);
     window_picker.close(&g_picker);
@@ -214,10 +214,10 @@ fn carryRename(profile: ProfileRef, old_name: []const u8, new_name: []const u8) 
         const old_index = for (members, 0..) |member, at| {
             if (std.mem.eql(u8, member, old_name)) break at;
         } else continue;
-        const already_member = for (members) |member| {
+        const is_already_member = for (members) |member| {
             if (std.mem.eql(u8, member, new_name)) break true;
         } else false;
-        if (already_member) group.remove("characters", old_index) else group.setStringAt("characters", old_index, new_name);
+        if (is_already_member) group.remove("characters", old_index) else group.setStringAt("characters", old_index, new_name);
     }
 }
 

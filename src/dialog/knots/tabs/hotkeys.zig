@@ -1,7 +1,7 @@
 //! The configuration window's Hotkeys tab: how hotkeys behave, then every fixed binding by what it does, profile switching, and app and URL hotkeys; main thread only.
 const std = @import("std");
 const ui = @import("ui");
-const global_config = @import("../../../config/global.zig");
+const global_mod = @import("../../../config/global.zig");
 const key_list = @import("../../../config/key_list.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
@@ -132,13 +132,14 @@ pub fn show(context: *ui.Frame) !void {
     try outside.close(context);
 }
 
+/// `ref` has session.Ref's get and set for `field`.
 fn binding(context: *ui.Frame, ref: anytype, comptime field: []const u8, label: []const u8) !void {
     const row = try widgets.openBinding(context, .str("knots.hotkeys.binding:" ++ field), label);
     try hotkey.field(context, ref, field);
     try row.close(context);
 }
 
-/// A backward/forward set in one row, each half marked with its direction.
+/// A backward/forward set in one row, each half marked with its direction; `ref` has session.Ref's get and set for both fields.
 fn pair(context: *ui.Frame, ref: anytype, comptime previous: []const u8, comptime next: []const u8, label: []const u8) !void {
     const row = try widgets.openMarkedBinding(context, .str("knots.hotkeys.pair:" ++ previous), label, "\u{2190}");
     const halves = Rect{ .key = .str("knots.hotkeys.pair.halves:" ++ previous), .style = &style.inline_row_fit };
@@ -185,7 +186,7 @@ fn appHotkeys(context: *ui.Frame) !void {
 }
 
 /// Picking a window fills in its executable name.
-fn picker(context: *ui.Frame, entry: session.Ref(global_config.AppHotkeyConfig)) !void {
+fn picker(context: *ui.Frame, entry: session.Ref(global_mod.AppHotkeyConfig)) !void {
     const chosen = try window_picker.select(context, &g_picker, .str("knots.hotkeys.app.picker"), entry.index) orelse return;
     entry.set("executableName", chosen.exe);
     window_picker.close(&g_picker);

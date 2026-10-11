@@ -8,7 +8,7 @@ const chips = @import("thumbnails/chips.zig");
 const stage = @import("thumbnails/stage.zig");
 
 /// Thumbnails mode only.
-pub fn textOverlays(context: *ui.Frame) !void {
+pub fn show(context: *ui.Frame) !void {
     const thumbnail = session.profile().child("thumbnail");
     const section = try widgets.openSection(context, "Text Overlays", "Texts shown on each thumbnail, previewed at its size. Drag one to move it, or click it to turn it on or off and change its font and colours. Faded ones are off.", &style.section);
     try bind.toggle(context, thumbnail, "showText", "Show Text Overlays");

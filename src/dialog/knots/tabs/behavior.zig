@@ -23,7 +23,7 @@ const PROTOCOL_DOCS_URL = "https://github.com/mrmjstc/eve-maj-preview/blob/main/
 const Scan = struct {
     arena: std.heap.ArenaAllocator,
     names: []const []const u8,
-    selected: u32 = 0,
+    selected_index: u32 = 0,
 };
 
 const PotatoScan = union(enum) {
@@ -32,7 +32,7 @@ const PotatoScan = union(enum) {
     found: struct {
         arena: std.heap.ArenaAllocator,
         profiles: []const ultra_potato.Profile,
-        selected: u32 = 0,
+        selected_index: u32 = 0,
     },
 };
 
@@ -88,9 +88,9 @@ fn interaction(context: *ui.Frame) !void {
     const ref = session.profile().child("interaction");
     try bind.toggle(context, ref, "clickThrough", "Click Through");
     try widgets.hintText(context, .src(@src()), "Thumbnails and the client list ignore all mouse input and let clicks/drags pass through to whatever is behind them; disables click-to-focus, exclusion toggling, and dragging.");
-    const click_through = ref.get("clickThrough");
+    const is_click_through = ref.get("clickThrough");
 
-    const mouse_options = try widgets.openGroup(context, .src(@src()), !click_through);
+    const mouse_options = try widgets.openGroup(context, .src(@src()), !is_click_through);
     try bind.choice(context, ref, "clickTrigger", "Click Trigger");
     try widgets.hintText(context, .src(@src()), "Mouse Up avoids accidental drags from a quick click.");
     try bind.choice(context, ref, "hoverCursor", "Hover Cursor");
@@ -100,12 +100,12 @@ fn interaction(context: *ui.Frame) !void {
     try bind.choice(context, ref, "animationStyle", "Animation Style");
     try widgets.hintText(context, .src(@src()), "No Animation restores and minimizes clients instantly; Original Animation keeps Windows' native effect.");
 
-    if (session.showsThumbnails()) try hoverZoom(context, ref, click_through);
+    if (session.showsThumbnails()) try hoverZoom(context, ref, is_click_through);
     try section.close(context);
 }
 
-fn hoverZoom(context: *ui.Frame, ref: session.Ref(config.InteractionConfig), click_through: bool) !void {
-    const zoom_options = try widgets.openGroup(context, .src(@src()), !click_through);
+fn hoverZoom(context: *ui.Frame, ref: session.Ref(config.InteractionConfig), is_click_through: bool) !void {
+    const zoom_options = try widgets.openGroup(context, .src(@src()), !is_click_through);
     try bind.toggle(context, ref, "hoverZoomEnabled", "Zoom on Hover");
     try widgets.hintText(context, .src(@src()), "Shows an enlarged copy of a thumbnail, with its overlay text, while the cursor rests on it.");
     const zoom = try widgets.openGroup(context, .src(@src()), ref.get("hoverZoomEnabled"));
@@ -191,7 +191,7 @@ fn clearAll() void {
 
 /// The open client Set All copies from, or null when none is open.
 fn sourceSelect(context: *ui.Frame) !?[]const u8 {
-    const sources = &(g_sources orelse return null);
+    const sources = if (g_sources) |*scan| scan else return null;
     const key: ui.Key = .str("knots.positions.source");
     if (sources.names.len == 0) {
         const labels: []const []const u8 = &.{"No open EVE clients found"};
@@ -204,12 +204,12 @@ fn sourceSelect(context: *ui.Frame) !?[]const u8 {
         .key = key,
         .labels = sources.names,
         .values = values,
-        .initial_selected = sources.selected,
+        .initial_selected = sources.selected_index,
         .style = try widgets.fittedSelect(context, sources.names),
         .parts = .{ .popup = &style.select_popup },
     });
-    if (response.selected) |selected| sources.selected = selected.value;
-    return sources.names[@min(sources.selected, sources.names.len - 1)];
+    if (response.selected) |selected| sources.selected_index = selected.value;
+    return sources.names[@min(sources.selected_index, sources.names.len - 1)];
 }
 
 /// Keeps the picked client selected when it's still open.
@@ -224,20 +224,20 @@ fn scanSources() void {
 }
 
 fn scanOpenClients() !Scan {
-    const previous: ?[]const u8 = if (g_sources) |sources| if (sources.names.len > 0) sources.names[@min(sources.selected, sources.names.len - 1)] else null else null;
+    const previous: ?[]const u8 = if (g_sources) |sources| if (sources.names.len > 0) sources.names[@min(sources.selected_index, sources.names.len - 1)] else null else null;
     var arena = std.heap.ArenaAllocator.init(g_allocator);
     errdefer arena.deinit();
     // The scout's names only live for this frame, so they're copied into the scan's own arena.
     const names = try positions.openClients(arena.allocator());
     const copies = try arena.allocator().alloc([]const u8, names.len);
-    var selected: u32 = 0;
+    var selected_index: u32 = 0;
     for (names, copies, 0..) |name, *copy, index| {
         copy.* = try arena.allocator().dupe(u8, name);
         if (previous) |was| {
-            if (std.mem.eql(u8, was, name)) selected = @intCast(index);
+            if (std.mem.eql(u8, was, name)) selected_index = @intCast(index);
         }
     }
-    return .{ .arena = arena, .names = copies, .selected = selected };
+    return .{ .arena = arena, .names = copies, .selected_index = selected_index };
 }
 
 fn setAll(source: ?[]const u8) void {
@@ -291,19 +291,19 @@ fn potatoSelect(context: *ui.Frame) !?[]const []const u8 {
     }
     const arena = context.arena();
     const has_all = found.profiles.len > 1;
-    const count = found.profiles.len + @intFromBool(has_all);
-    const labels = try arena.alloc([]const u8, count);
-    const values = try arena.alloc(u32, count);
+    const option_count = found.profiles.len + @intFromBool(has_all);
+    const labels = try arena.alloc([]const u8, option_count);
+    const values = try arena.alloc(u32, option_count);
     if (has_all) labels[0] = "All Profiles";
     for (found.profiles, @intFromBool(has_all)..) |profile, index| labels[index] = profile.label;
     for (values, 0..) |*value, index| value.* = @intCast(index);
-    const response = try context.interact(SelectInput(u32){ .key = key, .labels = labels, .values = values, .initial_selected = found.selected, .style = try widgets.fittedSelect(context, labels), .parts = .{ .popup = &style.select_popup } });
-    if (response.selected) |selected| found.selected = selected.value;
+    const response = try context.interact(SelectInput(u32){ .key = key, .labels = labels, .values = values, .initial_selected = found.selected_index, .style = try widgets.fittedSelect(context, labels), .parts = .{ .popup = &style.select_popup } });
+    if (response.selected) |selected| found.selected_index = selected.value;
 
     const all_paths = try arena.alloc([]const u8, found.profiles.len);
     for (found.profiles, all_paths) |profile, *path| path.* = profile.path;
-    if (has_all and found.selected == 0) return all_paths;
-    const index = found.selected - @intFromBool(has_all);
+    if (has_all and found.selected_index == 0) return all_paths;
+    const index = found.selected_index - @intFromBool(has_all);
     return all_paths[index .. index + 1];
 }
 
@@ -336,21 +336,22 @@ fn applyPotato(paths: []const []const u8) void {
         status.show(.failure, "Failed: {}", .{err});
         return;
     };
-    var changed: usize = 0;
-    var already_set: usize = 0;
+    var changed_count: usize = 0;
+    var already_set_count: usize = 0;
     var first_failure: ?ultra_potato.ApplyResult = null;
     for (results) |result| {
         if (!result.succeeded) {
+            slog.warn("Failed to apply Ultra Potato Mode to '{s}': {s}", .{ result.path, result.error_message orelse "unknown error" });
             if (first_failure == null) first_failure = result;
-        } else if (result.changed) changed += 1 else already_set += 1;
+        } else if (result.changed) changed_count += 1 else already_set_count += 1;
     }
     if (first_failure) |failure| {
-        status.show(.failure, "Applied to {d}/{d}. Failed: {s} ({s})", .{ changed + already_set, results.len, failure.path, failure.error_message orelse "unknown error" });
-    } else if (changed > 0 and already_set > 0) {
-        status.show(.success, "Applied to {d}, already set on {d} profile(s).", .{ changed, already_set });
-    } else if (changed > 0) {
-        status.show(.success, "Applied to {d} profile(s).", .{changed});
+        status.show(.failure, "Applied to {d}/{d}. Failed: {s} ({s})", .{ changed_count + already_set_count, results.len, failure.path, failure.error_message orelse "unknown error" });
+    } else if (changed_count > 0 and already_set_count > 0) {
+        status.show(.success, "Applied to {d}, already set on {d} profile(s).", .{ changed_count, already_set_count });
+    } else if (changed_count > 0) {
+        status.show(.success, "Applied to {d} profile(s).", .{changed_count});
     } else {
-        status.show(.success, "Already applied to {d} profile(s).", .{already_set});
+        status.show(.success, "Already applied to {d} profile(s).", .{already_set_count});
     }
 }

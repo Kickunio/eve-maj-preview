@@ -44,7 +44,7 @@ pub fn show(context: *ui.Frame) !void {
     try displayMode(context, display);
     switch (display.get("viewMode")) {
         .Thumbnails => {
-            try text_overlays.textOverlays(context);
+            try text_overlays.show(context);
             try dimensions(context, thumbnail);
             try borders(context, thumbnail);
             try visibility(context, thumbnail);

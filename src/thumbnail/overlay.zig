@@ -26,7 +26,7 @@ const slog = log.Scoped("overlay");
 
 const OVERLAY_ALPHA = 255;
 /// Custom text can split a notification over lines (see notifications/template.zig).
-const MAX_LINES_PER_NOTIFICATION = 3;
+pub const MAX_LINES_PER_NOTIFICATION = 3;
 const MAX_NOTIFICATION_LINES = stack.CAPACITY * MAX_LINES_PER_NOTIFICATION;
 
 /// Character name, system, group badge, session timer, DPS in and out, mining (and its ISK line), bounty, and up to three resource lines.
