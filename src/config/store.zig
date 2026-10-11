@@ -27,8 +27,7 @@ pub const ProfileStore = struct {
         self.saved.deinit();
     }
 
-    /// A runtime change (drag, tray or panel toggle): applied to both copies and saved, so a dialog preview never reaches disk and neither Save nor Discard undoes it.
-    /// `patch` mirrors Config's nesting, e.g. `.{ .display = .{ .startX = 10 } }`.
+    /// A runtime change (drag, tray or panel toggle) saved to both copies, which Save and Discard can't undo; `patch` mirrors Config's nesting, e.g. `.{ .display = .{ .startX = 10 } }`.
     pub fn update(self: *ProfileStore, patch: anytype) void {
         assign(Config, &self.live, patch);
         assign(Config, &self.saved, patch);
@@ -68,8 +67,7 @@ pub const ProfileStore = struct {
         self.persist();
     }
 
-    /// `group_index` is into `saved`, which the hotkey manager reads; returns whether `character_name` is now in the group.
-    /// A temporary group's members are never saved.
+    /// `group_index` is into `saved`, which the hotkey manager reads; returns whether `character_name` is now in the group, never saving a temporary group's members.
     pub fn toggleGroupMember(self: *ProfileStore, group_index: usize, character_name: []const u8) !bool {
         if (group_index >= self.saved.hotkeyGroups.items.len) return error.InvalidGroupIndex;
         const group = &self.saved.hotkeyGroups.items[group_index];

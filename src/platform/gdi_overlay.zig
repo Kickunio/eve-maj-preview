@@ -335,7 +335,7 @@ pub fn truncateTextToFit(comptime buf_size: usize, dc: win32.HDC, out: *[buf_siz
 /// `background` may be null for a layered/owner-drawn window that paints its own background.
 pub fn registerWindowClass(
     instance: win32.HINSTANCE,
-    wnd_proc: *const fn (win32.HWND, win32.UINT, win32.WPARAM, win32.LPARAM) callconv(.c) win32.LRESULT,
+    window_proc: *const fn (win32.HWND, win32.UINT, win32.WPARAM, win32.LPARAM) callconv(.c) win32.LRESULT,
     class_name: [*:0]const u8,
     background: ?win32.HBRUSH,
 ) !void {
@@ -343,7 +343,7 @@ pub fn registerWindowClass(
     const window_class = win32.WNDCLASSEXA{
         .cbSize = @sizeOf(win32.WNDCLASSEXA),
         .style = 0,
-        .lpfnWndProc = wnd_proc,
+        .lpfnWndProc = window_proc,
         .cbClsExtra = 0,
         .cbWndExtra = 0,
         .hInstance = instance,

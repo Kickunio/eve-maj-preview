@@ -8,8 +8,7 @@ const Value = std.json.Value;
 const Draft = draft_mod.Draft;
 const Section = draft_mod.Section;
 
-/// Older versions keep app-wide settings in "global_Settings" and a profile's in "Thumbnail Settings"/"Hotkeys"; version 3 moved them
-/// into the profile ("Thumbnails Visuals", "Thumbnails Behavior", "Hotkeys Settings", "Game Logs Monitoring"), so both are read.
+/// Where each setting lives: older versions split app-wide and profile sections, and version 3 moved them all into the profile, so both layouts are read.
 const Source = struct {
     profile: ?Value,
     global: ?Value,

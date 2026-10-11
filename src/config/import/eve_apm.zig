@@ -147,7 +147,7 @@ fn qtFont(raw: ?[]const u8) ?Font {
     const text = unquote(raw) orelse return null;
     if (text.len == 0) return null;
     var parts = std.mem.splitScalar(u8, text, ',');
-    const family = std.mem.trim(u8, parts.next().?, " \t");
+    const family = std.mem.trim(u8, parts.first(), " \t");
     const size = values.parseIntLoose(parts.next());
     return .{
         .family = if (family.len > 0) family else null,
@@ -264,7 +264,7 @@ fn groupCount(draft: *Draft, ini: *const Ini) !usize {
 fn parseGroup(arena: std.mem.Allocator, raw: []const u8) !Group {
     var parts = std.mem.splitScalar(u8, unquote(raw).?, '|');
     var members: std.ArrayList([]const u8) = .empty;
-    var names = std.mem.splitScalar(u8, parts.next().?, ',');
+    var names = std.mem.splitScalar(u8, parts.first(), ',');
     while (names.next()) |name| {
         const trimmed = std.mem.trim(u8, name, " \t");
         if (trimmed.len > 0) try members.append(arena, trimmed);

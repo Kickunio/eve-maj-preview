@@ -38,8 +38,7 @@ pub const KeyList = struct {
     }
 };
 
-/// Saved as one "0x0278" string for a single key, the form profiles used before alternates, or as an array of them.
-/// Loading also accepts combos like "Ctrl+F9" from hand-edited profiles.
+/// One "0x0278" string, as profiles saved before alternates, or an array of them; loading also takes hand-edited combos like "Ctrl+F9".
 pub const KeyListWire = struct {
     value: KeyList,
 

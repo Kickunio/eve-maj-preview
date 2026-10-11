@@ -188,8 +188,7 @@ pub fn listBackups(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     return names;
 }
 
-/// An invalid or missing profile falls back to DEFAULT_PROFILE, and a malformed one to its defaults.
-/// A name differing from its file only in case takes the file's spelling.
+/// Falls back to DEFAULT_PROFILE when invalid or missing and to defaults when malformed; a name differing only in case takes the file's spelling.
 pub fn load(allocator: std.mem.Allocator, name: []const u8) !Config {
     validateName(name) catch {
         slog.warn("Refused profile name '{s}', falling back to default profile", .{name});

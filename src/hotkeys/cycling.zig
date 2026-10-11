@@ -82,8 +82,7 @@ const CharacterOrderCache = struct {
     }
 };
 
-/// Visits every index in [0, item_count) once, starting one step past `cursor`; a missing or stale cursor starts at the first index in the cycle's direction.
-/// Unless it `wraps`, stops at the last index in that direction instead of going round.
+/// Visits each index in [0, item_count) once from one step past `cursor`, or the first in its direction when that's stale, stopping at the end unless it `wraps`.
 pub const CycleOrder = struct {
     index: usize,
     item_count: usize,

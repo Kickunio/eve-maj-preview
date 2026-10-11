@@ -101,8 +101,7 @@ pub const HotkeyManager = struct {
         if (vk.isMouseHookVk(vk.extractVk(virtual_key))) mouse_hook.unregister(virtual_key) else keyboard_hook.unregister(virtual_key);
     }
 
-    /// Every key posts the same ID, so `action` is tracked once if any key registers.
-    /// Returns how many keys failed; failures are logged here, so callers only count them.
+    /// Tracks `action` once if any key registers, since they all post one ID; logs each failure itself and returns how many failed.
     fn registerKeys(self: *HotkeyManager, hwnd: win32.HWND, id: c_int, keys: KeyList, action: HotkeyAction, description: []const u8) usize {
         var key_name_buf: [32]u8 = undefined;
         var registered: KeyList = .empty;

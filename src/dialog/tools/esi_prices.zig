@@ -49,8 +49,7 @@ const PriceFetchContext = struct {
     results: *std.ArrayList(Price),
 };
 
-/// Looks up each ore name's Jita buy price via its compressed variant (readily liquid there) using the public ESI API - no key required.
-/// Names with no market match are left out. `allocator` must be thread-safe, since the requests run in parallel; the result is allocated from `arena`.
+/// Each ore's Jita buy price via its compressed variant, from the public ESI API, leaving out unmatched names; `allocator` must be thread-safe, and the result is in `arena`.
 pub fn fetchOrePrices(allocator: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, names: []const []const u8) !Prices {
     var client: std.http.Client = .{ .allocator = allocator, .io = io };
     defer client.deinit();
@@ -106,8 +105,7 @@ pub fn fetchOrePrices(allocator: std.mem.Allocator, arena: std.mem.Allocator, io
     return .{ .items = copied };
 }
 
-/// Resolves "Compressed <name>" -> ESI type_id for each ore name via the public (no-auth) ESI name resolver.
-/// Names with no market match are simply absent from the result. Caller frees both the keys and the map.
+/// ESI type IDs for each "Compressed <name>" from the public name resolver, leaving out unmatched names; the caller frees the keys and the map.
 fn resolveOreTypeIds(allocator: std.mem.Allocator, client: *std.http.Client, names: []const []const u8) !std.StringHashMap(i64) {
     var result: std.StringHashMap(i64) = .init(allocator);
     errdefer {
@@ -172,8 +170,7 @@ fn resolveOreTypeIds(allocator: std.mem.Allocator, client: *std.http.Client, nam
     return result;
 }
 
-/// Highest current Jita 4-4 buy order price for type_id (what a seller would instantly receive), or null if unavailable/illiquid.
-/// Only reads page 1 of the region's buy orders - fine for these commodity ore types, whose buy-order counts stay well under the 1000-order page size in practice.
+/// The highest Jita 4-4 buy order for type_id, or null if there's none; reads only page 1, which these ores' order counts stay well under.
 fn fetchJitaBuyPrice(allocator: std.mem.Allocator, client: *std.http.Client, type_id: i64) ?f64 {
     const url = allocator.print(ESI_BASE ++ "/markets/{d}/orders/?datasource=tranquility&order_type=buy&type_id={d}", .{ ESI_JITA_REGION_ID, type_id }) catch |err| {
         slog.warn("Failed to build ESI price URL for type_id {}: {}", .{ type_id, err });

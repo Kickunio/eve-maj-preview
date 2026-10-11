@@ -192,8 +192,8 @@ pub const ThumbnailWindow = struct {
         return self.visibility_state.isVisible();
     }
 
-    pub fn show(self: *const ThumbnailWindow, shown: bool) void {
-        const show_command: c_int = if (shown) win32.SW_SHOW else win32.SW_HIDE;
+    pub fn show(self: *const ThumbnailWindow, is_shown: bool) void {
+        const show_command: c_int = if (is_shown) win32.SW_SHOW else win32.SW_HIDE;
         _ = win32.ShowWindow(self.hwnd, show_command);
         _ = win32.ShowWindow(self.text_hwnd, show_command);
     }
@@ -259,12 +259,12 @@ pub fn registerClasses(instance: win32.HINSTANCE) !void {
 }
 
 /// Creates the thumbnail window showing `source_hwnd` through DWM and its text overlay, linked to each other and the source; both stay hidden until the first render shows them.
-pub fn create(allocator: std.mem.Allocator, instance: win32.HINSTANCE, source_hwnd: win32.HWND, character_name: []const u8, position: config_mod.Position, size: Size, opacity: u8, click_through: bool) !Handles {
+pub fn create(allocator: std.mem.Allocator, instance: win32.HINSTANCE, source_hwnd: win32.HWND, character_name: []const u8, position: config_mod.Position, size: Size, opacity: u8, is_click_through: bool) !Handles {
     const name_z = try allocator.dupeSentinel(u8, character_name, 0);
     defer allocator.free(name_z);
 
     // Needed on both windows since text_hwnd, being topmost, is the one that actually receives mouse messages.
-    const click_through_ex: win32.DWORD = if (click_through) win32.WS_EX_TRANSPARENT else 0;
+    const click_through_ex: win32.DWORD = if (is_click_through) win32.WS_EX_TRANSPARENT else 0;
 
     const hwnd = win32.CreateWindowExA(
         win32.WS_EX_TOPMOST | win32.WS_EX_TOOLWINDOW | win32.WS_EX_LAYERED | win32.WS_EX_NOACTIVATE | click_through_ex,

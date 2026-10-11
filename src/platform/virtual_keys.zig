@@ -233,8 +233,7 @@ fn parseBaseKey(key_text: []const u8) ?u32 {
     return null;
 }
 
-/// A combined value (see combineKey) from "F9", "Ctrl+Alt+F9", or the hex form older profiles saved ("0x0278").
-/// Null for anything that isn't a bindable key; the caller logs it, with the setting it came from, except a modifier used as its own key, which is logged here with why.
+/// A combined value (see combineKey) from "F9", "Ctrl+Alt+F9" or the old "0x0278" form; null when unbindable, which the caller logs, except a lone modifier, logged here.
 pub fn parseVirtualKey(key_text: []const u8) ?u32 {
     if (key_text.len == 0) return null;
 

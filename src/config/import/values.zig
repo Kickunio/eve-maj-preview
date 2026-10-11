@@ -177,8 +177,7 @@ pub fn legacyBaseKey(token: []const u8) ?u32 {
     return null;
 }
 
-/// An AutoHotkey-style hotkey (EVE-X Preview): modifier symbols "^!+#", "Ctrl & F1" combos, or a key name.
-/// Null for anything the app can't bind, such as the left or right mouse button.
+/// An EVE-X Preview AutoHotkey-style hotkey ("^!+#" modifiers, "Ctrl & F1" combos or a key name); null for what the app can't bind, such as the left or right mouse button.
 pub fn ahkHotkey(raw: ?[]const u8) ?u32 {
     var rest = std.mem.trim(u8, raw orelse return null, " \t");
     var modifiers: u32 = 0;
@@ -228,8 +227,7 @@ fn modifierWord(word: []const u8) ?u32 {
     return null;
 }
 
-/// A character's name from a key other tools file per-client settings under, with an "EVE - " window-title prefix dropped.
-/// Null for the placeholders their default configs ship ("Example Name1", "Cycle Group 1") and for entries that aren't characters (an exe path).
+/// The character a per-client key names, without an "EVE - " prefix; null for default placeholders ("Example Name1", "Cycle Group 1") and non-characters like an exe path.
 pub fn characterName(raw: []const u8) ?[]const u8 {
     var name = std.mem.trim(u8, raw, " \t");
     if (std.mem.startsWith(u8, name, "EVE - ")) name = std.mem.trim(u8, name["EVE - ".len..], " \t");

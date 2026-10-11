@@ -4,9 +4,7 @@ const log = @import("../log.zig");
 
 const POLL_MS: i64 = 50;
 
-/// `Engine` has `init() !Engine`, `run(*Engine, Command)` and `deinit(*Engine)`, all called on the worker thread.
-/// `Command` has `deinit(Command)`, which frees whatever it owns once it has run or been dropped at shutdown.
-/// `description` names the feature in log messages, e.g. "text-to-speech".
+/// `Engine` has `init`, `run` and `deinit`, called on the worker thread; `Command`'s `deinit` frees what it owns once run or dropped; `description` names the feature in logs.
 pub fn Worker(comptime Command: type, comptime Engine: type, comptime scope: []const u8, comptime description: []const u8) type {
     const slog = log.Scoped(scope);
 

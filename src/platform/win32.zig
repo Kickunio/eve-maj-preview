@@ -1058,8 +1058,7 @@ pub fn getClassNameBuf(hwnd: HWND, buffer: []u8) ?[]const u8 {
     return buffer[0..@intCast(class_len)];
 }
 
-/// Full executable path of process_id's owning process, or null if it can't be opened or queried.
-/// The returned slice borrows executable_path_buf.
+/// The full executable path of process_id, borrowing executable_path_buf; null if the process can't be opened or queried.
 pub fn queryProcessExecutablePath(process_id: DWORD, executable_path_buf: *[MAX_PATH:0]u8) ?[]const u8 {
     const handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id) orelse return null;
     defer _ = CloseHandle(handle);
@@ -1332,8 +1331,7 @@ const IShellItem = extern struct {
     }
 };
 
-/// Shows the Win32 "Select Folder" dialog with `title`, returning the chosen path (caller frees) or null if cancelled.
-/// `owner`, when given, keeps the picker above a topmost owner window (an owned window always draws above its owner, even a HWND_TOPMOST one).
+/// The folder the user picks (caller frees), or null if cancelled; a given `owner` keeps the picker above it, even when the owner is topmost.
 pub fn showFolderPicker(allocator: std.mem.Allocator, title: []const u8, owner: ?HWND) !?[]const u8 {
     try initDialogCom();
     defer CoUninitialize();
@@ -1418,8 +1416,7 @@ pub fn getKnownFolderPath(allocator: std.mem.Allocator, folder_id: GUID) ![]u8 {
     return std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.span(path_ptr.?));
 }
 
-/// Monotonic milliseconds since boot (GetTickCount64) — for elapsed-time/duration comparisons only, never wall-clock/calendar time.
-/// A distinct type (not a bare u64/i64) so a timestamp from a different clock source can't be silently compared against one of these.
+/// Monotonic milliseconds since boot, a type of its own so a wall-clock time can't be compared against it by mistake.
 pub const Ticks = struct {
     ms: u64 = 0,
 
@@ -1501,8 +1498,7 @@ pub inline fn lparamToPtr(comptime T: type, lParam: LPARAM) *T {
     return @ptrFromInt(@as(usize, @bitCast(lParam)));
 }
 
-/// Extract the triggering virtual-key code from a WM_HOTKEY message's lParam.
-/// Per MSDN: LOWORD(lParam) holds the modifier flags, HIWORD(lParam) the vk code.
+/// The virtual-key code a WM_HOTKEY lParam carries in its high word.
 pub inline fn hotkeyVkFromLparam(lParam: LPARAM) u32 {
     const bits: u32 = @truncate(@as(usize, @bitCast(lParam)));
     return bits >> 16;
@@ -1532,8 +1528,7 @@ pub inline fn getXButton(mouse_data: DWORD) WORD {
     return @truncate(mouse_data >> 16);
 }
 
-/// Extract the signed wheel delta (multiples of 120 = WHEEL_DELTA; positive = scrolled up,
-/// negative = scrolled down) from the high word of a WM_MOUSEWHEEL MSLLHOOKSTRUCT's mouseData
+/// The signed wheel delta in a MSLLHOOKSTRUCT's mouseData high word, in multiples of WHEEL_DELTA, positive scrolling up.
 pub inline fn getWheelDelta(mouse_data: DWORD) i16 {
     return @bitCast(@as(u16, @truncate(mouse_data >> 16)));
 }

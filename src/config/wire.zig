@@ -286,8 +286,7 @@ pub fn clone(comptime T: type, value: T, allocator: std.mem.Allocator) !T {
     return out;
 }
 
-/// `out` must still hold its defaults; on failure it holds only what was copied, so `deinit` frees it.
-/// Runtime fields are copied too when they hold no pointers (a list item's id); the caller sets the rest.
+/// `out` must hold its defaults, and on failure holds only what was copied, for `deinit`; runtime fields without pointers (a list item's id) are copied, and the caller sets the rest.
 pub fn cloneInto(comptime R: type, value: *const R, allocator: std.mem.Allocator, out: *R) !void {
     const info = @typeInfo(R).@"struct";
     inline for (info.field_names, info.field_types) |name, F| {
@@ -314,8 +313,7 @@ pub fn hasPointers(comptime T: type) bool {
     }
 }
 
-/// Parses `json_text` into `T` via std.json.Value, since Argb and KeyListWire only implement jsonParseFromValue.
-/// A value that doesn't fit its setting is dropped with a warning, so that setting keeps its default instead of the whole file failing.
+/// Parses via std.json.Value, which Argb and KeyListWire need, dropping a value that doesn't fit with a warning so that setting keeps its default.
 pub fn parse(comptime T: type, allocator: std.mem.Allocator, json_text: []const u8) !std.json.Parsed(T) {
     return parseMigrated(T, allocator, json_text, null);
 }

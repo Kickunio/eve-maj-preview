@@ -5,8 +5,7 @@ const notification = @import("notification.zig");
 const Notification = notification.Notification;
 const NotificationType = notification.NotificationType;
 
-/// Classifies an HTML-stripped gamelog line; null means it doesn't warrant a popup.
-/// Field slices borrow from `event_text`; ChatlogMonitor.queueNotification copies them.
+/// Classifies an HTML-stripped gamelog line, null if it needs no popup; field slices borrow from `event_text`.
 pub fn classify(event_text: []const u8) ?Notification {
     // EVE gamelog format: "[ timestamp ] (type) message"
     var text_start_index: usize = 0;

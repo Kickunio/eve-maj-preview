@@ -120,8 +120,7 @@ pub const Draft = struct {
         try self.setNumber("thumbnail.notifications.font_size", size);
     }
 
-    /// The character's entry in the draft, added the first time it's named.
-    /// Valid until the next item is added.
+    /// The character's entry in the draft, added the first time it's named; valid until the next item is added.
     pub fn character(self: *Draft, name: []const u8) !*ObjectMap {
         return self.item("characters", "name", name);
     }
@@ -153,7 +152,7 @@ pub const Draft = struct {
 fn setIn(arena: std.mem.Allocator, root: *ObjectMap, path: []const u8, value: Value) !void {
     var node = root;
     var it = std.mem.splitScalar(u8, path, '.');
-    var key = it.next().?;
+    var key = it.first();
     while (it.next()) |next| : (key = next) {
         const entry = try node.getOrPut(arena, key);
         if (!entry.found_existing or entry.value_ptr.* != .object) entry.value_ptr.* = .{ .object = .empty };
@@ -177,8 +176,7 @@ pub fn toValue(arena: std.mem.Allocator, comptime T: type, value: *const T, path
     return std.json.parseFromSliceLeaky(Value, arena, out.written(), .{});
 }
 
-/// The ops that bring `draft` into `doc`: fields are set, and list items are matched by name (case-insensitively), updated or added.
-/// An untouched, unnamed placeholder the dialog seeds into an empty list goes once the import names real entries.
+/// The ops that bring `draft` into `doc`, matching list items by name (case-insensitively) and dropping the dialog's untouched placeholder once real entries arrive.
 pub fn toOps(arena: std.mem.Allocator, draft: *const Draft, doc: *const Config) ![]const patch.Op {
     var ops: std.ArrayList(patch.Op) = .empty;
     var it = draft.root.iterator();

@@ -290,8 +290,7 @@ pub const GlobalConfig = struct {
         try self.save();
     }
 
-    /// Takes `edited`'s settings other than running_fields, leaving it holding the replaced values to free.
-    /// Only while the chatlog worker is stopped, since it reads the ore prices.
+    /// Takes `edited`'s settings but running_fields, leaving it holding the replaced values to free; only while the chatlog worker, which reads ore prices, is stopped.
     pub fn adopt(self: *GlobalConfig, edited: *GlobalConfig) void {
         inline for (comptime wire.savedFields(GlobalConfig)) |f| {
             if (comptime !isRunningField(f.name)) std.mem.swap(f.type, &@field(self, f.name), &@field(edited, f.name));

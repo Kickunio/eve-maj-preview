@@ -104,8 +104,7 @@ pub const Trackers = struct {
         if (label) |name| slog.debug("Cleaned up {s} tracker", .{name});
     }
 
-    /// Pushes each enabled tracker's values into the painter at its configured interval, checks alerts every ALERT_CHECK_INTERVAL_MS, then redraws what changed once.
-    /// `now_ms` is the tick's start, which keeps to the timer's schedule however long the tick's work took.
+    /// Pushes enabled trackers' values to the painter at their intervals, checks alerts, then redraws once; `now_ms` is the tick's start, so the schedule holds however long the work takes.
     pub fn tick(self: *Trackers, config: *const Config, windows: []const scout.EveWindow, now_ms: i64, tick_interval_ms: i64) void {
         if (self.combat) |t| pushThrottled(tracker_mod.CombatTracker, pushDps, t, config, windows, now_ms, tick_interval_ms, &self.last_dps_update_ms, config.combat.update_interval_ms);
         if (self.mining) |t| pushThrottled(tracker_mod.MiningTracker, pushMining, t, config, windows, now_ms, tick_interval_ms, &self.last_mining_update_ms, config.mining.update_interval_ms);

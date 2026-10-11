@@ -71,8 +71,8 @@ pub fn reset() void {
 }
 
 pub fn toggle(context: *ui.Frame, ref: anytype, comptime field: []const u8, label: []const u8) !void {
-    var value: bool = ref.get(field);
-    if (try widgets.checkbox(context, fieldKey(ref, field), label, &value)) ref.set(field, value);
+    var is_checked: bool = ref.get(field);
+    if (try widgets.checkbox(context, fieldKey(ref, field), label, &is_checked)) ref.set(field, is_checked);
 }
 
 /// In aligned rows the unit sits inside the box.

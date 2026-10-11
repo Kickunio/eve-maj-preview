@@ -269,8 +269,7 @@ fn normalizedSelection() win32.RECT {
     }, g_bounds);
 }
 
-/// Cuts `rect` out of the dim layer and outlines it; `fill` is the interior color.
-/// Clipped to the overlay, since fillRect skips a rect that runs past the buffer.
+/// Cuts `rect` out of the dim layer, fills it with `fill` and outlines it, clipped to the overlay since fillRect skips a rect that runs past the buffer.
 fn drawRegion(bitmap: *const gdi_overlay.OverlayBitmap, rect: win32.RECT, fill: u32, border: u32, outline: Outline) void {
     const visible = win32.clampRect(rect, g_virtual_screen);
     const signed_width = win32.rectWidth(visible);

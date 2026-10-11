@@ -33,8 +33,7 @@ const WindowSum = struct {
         }
     }
 
-    /// Total over the window, or for a younger streak what came after its first moment, rated to now or the newest event; null while too short to trust.
-    /// `ring_full_from_ms`, the oldest event a full ring kept, limits the window to the time it covers.
+    /// The window's total (a young streak's from its first moment) rated to now or the newest event, within what a full ring still covers; null while too short to trust.
     fn rate(self: WindowSum, streak_start_ms: i64, now_ms: i64, window_ms: i64, ring_full_from_ms: ?i64, warm_up: WarmUp) ?f32 {
         if (self.event_count == 0) return 0.0;
         if (ring_full_from_ms) |from_ms| {
@@ -61,8 +60,7 @@ const WindowSum = struct {
     }
 };
 
-/// A fixed ring of recent events, so recording one never allocates, with the streak and recency every rate is measured from.
-/// `Event` needs a `timestamp_ms: i64` field.
+/// A fixed ring of recent events, so recording never allocates, with the streak and recency rates are measured from; `Event` needs a `timestamp_ms: i64` field.
 fn Ring(comptime Event: type) type {
     return struct {
         entries: [RING_CAPACITY]Event = undefined,
@@ -286,8 +284,7 @@ pub const CombatTracker = Tracker(CombatWindow);
 pub const MiningTracker = Tracker(MiningWindow);
 pub const BountyTracker = Tracker(BountyWindow);
 
-/// One Window per character, locked: the main thread reads it and checks alerts while the chatlog worker adds events and removes characters.
-/// `Window` needs `fn init(window_seconds: u32) Window`, an `addEntry` method and a `ring` field.
+/// One locked Window per character, read by the main thread and fed by the chatlog worker; `Window` needs `init(window_seconds: u32)`, `addEntry` and a `ring` field.
 pub fn Tracker(comptime Window: type) type {
     return struct {
         allocator: std.mem.Allocator,

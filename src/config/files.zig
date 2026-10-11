@@ -49,8 +49,7 @@ pub fn environmentVariable(name: []const u8) ?[]const u8 {
     return environ_map.get(name);
 }
 
-/// Creates DATA_DIR and log.LOG_DIR, then moves files older versions kept beside the exe into them; never replaces one already there.
-/// Call once the cwd is the exe folder and before anything logs, so the old log can still be moved.
+/// Moves files older versions kept beside the exe into DATA_DIR and log.LOG_DIR, never replacing one; call once the cwd is the exe folder, before anything logs.
 pub fn migrateLegacyLayout() void {
     const cwd = std.Io.Dir.cwd();
     for ([_][]const u8{ DATA_DIR, log.LOG_DIR }) |dir| {

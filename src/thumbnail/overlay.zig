@@ -159,8 +159,7 @@ const MeasuredText = struct {
 pub const RenderCache = struct {
     /// Recreated only on resize.
     bitmap: ?gdi_overlay.OverlayBitmap = null,
-    /// Last rendered settings; Painter.renderThumbnail compares against it to skip redundant redraws.
-    /// Borrows the thumbnail's own strings (system name, badge label, name), so whatever frees one must set this to null.
+    /// Last rendered settings, to skip redundant redraws; borrows the thumbnail's strings, so whatever frees one must set this to null.
     settings: ?RenderSettings = null,
     character_name: MeasuredText = .{},
     system_name: MeasuredText = .{},
