@@ -1,4 +1,5 @@
 //! The configuration window's Appearance tab: how clients are shown, then that mode's settings, texts and system colours; main thread only.
+
 const ui = @import("ui");
 const win32 = @import("../../../platform/win32.zig");
 const config = @import("../../../config.zig");
@@ -19,8 +20,6 @@ const DisplayRef = session.Ref(config.DisplayConfig);
 /// The boxes can go up to the setting's own maximum.
 const MAX_SIZE_SLIDER = 1280;
 
-const Ratio = struct { label: []const u8, ratio: ?f32 };
-
 /// The first matches a running client; the last is whatever the size boxes say.
 const RATIOS = [_]Ratio{
     .{ .label = "Match EVE", .ratio = null },
@@ -37,6 +36,8 @@ const RATIO_LABELS = blk: {
 };
 const MATCH_CLIENT_INDEX = 0;
 const CUSTOM_INDEX = RATIOS.len - 1;
+
+const Ratio = struct { label: []const u8, ratio: ?f32 };
 
 pub fn show(context: *ui.Frame) !void {
     const thumbnail = session.profile().child("thumbnail");

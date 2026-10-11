@@ -1,4 +1,5 @@
 //! What EVE's log lines and file names say, with no I/O.
+
 const std = @import("std");
 const gamelog_events = @import("../notifications/gamelog_events.zig");
 
@@ -63,6 +64,7 @@ pub const LineAssembler = struct {
         if (rest.len > 0) try self.hold(allocator, rest, handler);
     }
 
+    /// `handler` has `onLine([]const u8)` and `onLongLine(usize)`.
     fn hold(self: *LineAssembler, allocator: std.mem.Allocator, bytes: []const u8, handler: anytype) !void {
         if (self.is_skipping) return;
         if (self.partial.items.len + bytes.len > self.max_length) {
@@ -116,36 +118,6 @@ pub fn parseGameLine(line: []const u8) GameLine {
     return .{};
 }
 
-/// `text` starts at "EVE System > Channel changed to Local"; the system follows the colon.
-fn localSystem(text: []const u8) ?[]const u8 {
-    const colon = std.mem.findScalar(u8, text, ':') orelse return null;
-    return nonEmpty(untilLineEnd(text[colon + 1 ..]));
-}
-
-/// `text` starts at "Jumping from A to B".
-fn jumpDestination(text: []const u8) ?[]const u8 {
-    const to = std.mem.find(u8, text, " to ") orelse return null;
-    return nonEmpty(untilLineEnd(text[to + " to ".len ..]));
-}
-
-/// The last " to ", since a station's name can contain one.
-fn undockDestination(text: []const u8) ?[]const u8 {
-    const line = untilLineEnd(text);
-    const to = std.mem.findLast(u8, line, " to ") orelse return null;
-    var system = std.mem.trimEnd(u8, line[to + " to ".len ..], ". ");
-    if (std.mem.endsWith(u8, system, " solar system")) system = system[0 .. system.len - " solar system".len];
-    return nonEmpty(std.mem.trim(u8, system, " \t"));
-}
-
-fn untilLineEnd(text: []const u8) []const u8 {
-    const end = std.mem.findAny(u8, text, "\r\n\x00") orelse text.len;
-    return std.mem.trim(u8, text[0..end], " \t");
-}
-
-fn nonEmpty(text: []const u8) ?[]const u8 {
-    return if (text.len == 0) null else text;
-}
-
 /// The latest genuine Local change, skipping any a player typed.
 pub fn lastSystemInChat(text: []const u8) ?SystemMatch {
     var end = text.len;
@@ -172,15 +144,6 @@ pub fn lastSystemInGame(text: []const u8) ?SystemMatch {
         }
         end = line_start;
     }
-}
-
-/// "[ time ] ", optionally followed by EVE's "(None) " tag.
-fn isTimestampPrefix(prefix: []const u8) bool {
-    const stamped = std.mem.trimStart(u8, prefix, "\u{FEFF}");
-    if (!std.mem.startsWith(u8, stamped, "[ ")) return false;
-    const close = std.mem.find(u8, stamped, " ] ") orelse return false;
-    const rest = stamped[close + " ] ".len ..];
-    return rest.len == 0 or std.mem.eql(u8, rest, NONE_TAG);
 }
 
 /// YYYYMMDDHHMMSS, or 0; looks only 64 bytes back, so a chunk cut mid-line can't borrow an earlier line's bracket.
@@ -249,14 +212,53 @@ pub fn characterIdFromFileName(file_name: []const u8) ?[]const u8 {
     return id;
 }
 
-fn withoutTxt(file_name: []const u8) []const u8 {
-    return if (std.mem.endsWith(u8, file_name, ".txt")) file_name[0 .. file_name.len - ".txt".len] else file_name;
-}
-
 pub fn listenerName(header: []const u8) ?[]const u8 {
     const needle = "Listener:";
     const match_index = std.mem.find(u8, header, needle) orelse return null;
     return nonEmpty(untilLineEnd(header[match_index + needle.len ..]));
+}
+
+/// `text` starts at "EVE System > Channel changed to Local"; the system follows the colon.
+fn localSystem(text: []const u8) ?[]const u8 {
+    const colon = std.mem.findScalar(u8, text, ':') orelse return null;
+    return nonEmpty(untilLineEnd(text[colon + 1 ..]));
+}
+
+/// `text` starts at "Jumping from A to B".
+fn jumpDestination(text: []const u8) ?[]const u8 {
+    const to = std.mem.find(u8, text, " to ") orelse return null;
+    return nonEmpty(untilLineEnd(text[to + " to ".len ..]));
+}
+
+/// The last " to ", since a station's name can contain one.
+fn undockDestination(text: []const u8) ?[]const u8 {
+    const line = untilLineEnd(text);
+    const to = std.mem.findLast(u8, line, " to ") orelse return null;
+    var system = std.mem.trimEnd(u8, line[to + " to ".len ..], ". ");
+    if (std.mem.endsWith(u8, system, " solar system")) system = system[0 .. system.len - " solar system".len];
+    return nonEmpty(std.mem.trim(u8, system, " \t"));
+}
+
+fn untilLineEnd(text: []const u8) []const u8 {
+    const end = std.mem.findAny(u8, text, "\r\n\x00") orelse text.len;
+    return std.mem.trim(u8, text[0..end], " \t");
+}
+
+fn nonEmpty(text: []const u8) ?[]const u8 {
+    return if (text.len == 0) null else text;
+}
+
+/// "[ time ] ", optionally followed by EVE's "(None) " tag.
+fn isTimestampPrefix(prefix: []const u8) bool {
+    const stamped = std.mem.trimStart(u8, prefix, "\u{FEFF}");
+    if (!std.mem.startsWith(u8, stamped, "[ ")) return false;
+    const close = std.mem.find(u8, stamped, " ] ") orelse return false;
+    const rest = stamped[close + " ] ".len ..];
+    return rest.len == 0 or std.mem.eql(u8, rest, NONE_TAG);
+}
+
+fn withoutTxt(file_name: []const u8) []const u8 {
+    return if (std.mem.endsWith(u8, file_name, ".txt")) file_name[0 .. file_name.len - ".txt".len] else file_name;
 }
 
 const testing = std.testing;

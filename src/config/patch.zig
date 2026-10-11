@@ -82,7 +82,7 @@ pub fn writeAt(json_writer: anytype, comptime T: type, target: *const T, path: [
     }
 }
 
-/// Returns the id an `insert` gave its item. Validation is the caller's, once a batch is applied.
+/// The id an `insert` gave its item; validation is the caller's, once a batch is applied.
 pub fn apply(comptime T: type, document: *T, op: Op, context: Context) !?u32 {
     const kind = std.meta.stringToEnum(Kind, op.op) orelse return error.InvalidOp;
     return applyIn(T, document, op.path, kind, op, context);

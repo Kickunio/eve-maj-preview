@@ -43,7 +43,7 @@ pub fn applyScreenEdgeSnapping(x: i32, y: i32, width: i32, height: i32, threshol
     return .{ .x = snapped_x, .y = snapped_y };
 }
 
-/// Updates `snapped_x`/`snapped_y` toward the nearest edge of `other_rect` if closer than the current best (`min_x_distance`/`min_y_distance`), which callers seed with the threshold. Shared by live-thumbnail and ghost-position edge snapping.
+/// Moves `snapped_x`/`snapped_y` toward `other_rect`'s nearest edge when it beats the best so far (`min_x_distance`/`min_y_distance`, seeded with the threshold).
 fn snapAxesToRect(snapped_x: *i32, snapped_y: *i32, width: i32, height: i32, other_rect: win32.RECT, min_x_distance: *i32, min_y_distance: *i32) void {
     // Recalculated per call, since snapped_x/y may have changed on a prior call in the same loop.
     const snapped_right = snapped_x.* + width;

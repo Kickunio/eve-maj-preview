@@ -1,4 +1,5 @@
 //! Decoding EVE's UTF-16 LE chatlogs, only ever whole characters.
+
 const std = @import("std");
 
 /// How much of `data` is whole characters: drops an odd trailing byte, and a trailing high surrogate whose pair hasn't been written yet.
@@ -11,7 +12,7 @@ pub fn completeLen(data: []const u8) usize {
     return len;
 }
 
-/// `out` needs 3 bytes per UTF-16 unit and `units` one per byte pair; an unpaired surrogate becomes U+FFFD rather than losing the rest. Null for no whole unit.
+/// Null for no whole unit; `out` needs 3 bytes per UTF-16 unit, `units` one per byte pair, and an unpaired surrogate becomes U+FFFD rather than losing the rest.
 pub fn decodeInto(units: []u16, out: []u8, data: []const u8) ?[]u8 {
     const unit_count = data.len / 2;
     if (unit_count == 0) return null;
@@ -32,18 +33,6 @@ pub fn decode(allocator: std.mem.Allocator, units: *std.ArrayList(u16), out: *st
     return decodeInto(units.items, out.items, data);
 }
 
-fn replaceUnpairedSurrogates(units: []u16) void {
-    var i: usize = 0;
-    while (i < units.len) : (i += 1) {
-        const unit = units[i];
-        if (std.unicode.utf16IsHighSurrogate(unit) and i + 1 < units.len and std.unicode.utf16IsLowSurrogate(units[i + 1])) {
-            i += 1;
-        } else if (std.unicode.utf16IsHighSurrogate(unit) or std.unicode.utf16IsLowSurrogate(unit)) {
-            units[i] = std.unicode.replacement_character;
-        }
-    }
-}
-
 /// Without decoding; `data` must start on a character boundary.
 pub fn containsAscii(data: []const u8, pattern: []const u8) bool {
     if (data.len < pattern.len * 2) return false;
@@ -54,6 +43,18 @@ pub fn containsAscii(data: []const u8, pattern: []const u8) bool {
         } else return true;
     }
     return false;
+}
+
+fn replaceUnpairedSurrogates(units: []u16) void {
+    var i: usize = 0;
+    while (i < units.len) : (i += 1) {
+        const unit = units[i];
+        if (std.unicode.utf16IsHighSurrogate(unit) and i + 1 < units.len and std.unicode.utf16IsLowSurrogate(units[i + 1])) {
+            i += 1;
+        } else if (std.unicode.utf16IsHighSurrogate(unit) or std.unicode.utf16IsLowSurrogate(unit)) {
+            units[i] = std.unicode.replacement_character;
+        }
+    }
 }
 
 const testing = std.testing;

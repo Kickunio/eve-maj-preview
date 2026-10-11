@@ -7,7 +7,7 @@ const slog = log.Scoped("config");
 
 pub const MAX_KEYS = 4;
 
-/// Each key is a combined value (see vk.combineKey). Holds no pointers, so it copies and clones as a plain value.
+/// Each key is a combined value (see vk.combineKey), with no pointers, so it copies and clones as a plain value.
 pub const KeyList = struct {
     keys: [MAX_KEYS]u32 = @splat(0),
     len: u8 = 0,

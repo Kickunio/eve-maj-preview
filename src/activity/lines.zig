@@ -1,4 +1,5 @@
 //! Parsers for the gamelog's combat, mining and bounty lines; no I/O.
+
 const std = @import("std");
 
 /// Room for one gamelog line's text once its HTML is stripped.
@@ -9,8 +10,6 @@ const DASH = " - ";
 
 const THOUSANDS_SEPARATORS = [_][]const u8{ ",", " ", "\u{00A0}", "\u{202F}" };
 
-const Entity = struct { name: []const u8, char: u8 };
-
 const ENTITIES = [_]Entity{
     .{ .name = "&lt;", .char = '<' },
     .{ .name = "&gt;", .char = '>' },
@@ -19,6 +18,8 @@ const ENTITIES = [_]Entity{
     .{ .name = "&#39;", .char = '\'' },
     .{ .name = "&apos;", .char = '\'' },
 };
+
+const Entity = struct { name: []const u8, char: u8 };
 
 /// Raw unit count plus the mined ore/ice/gas name, copied by value since parseMiningLine's buffer is stack-local.
 pub const ParsedMiningEvent = struct {
@@ -31,7 +32,7 @@ pub const ParsedMiningEvent = struct {
     }
 };
 
-/// `stripped_line` has its HTML stripped already, and `weapon` borrows from it. An incoming miss is a zero-amount hit, so it still counts for the Taking Damage alert; outgoing misses are dropped.
+/// `weapon` borrows from the already-stripped line; an incoming miss counts as a zero-amount hit for Taking Damage, and an outgoing one is dropped.
 pub fn parseCombatLine(stripped_line: []const u8) ?struct { amount: u32, is_incoming: bool, weapon: []const u8 } {
     const combat_prefix = "(combat)";
     const combat_index = std.mem.find(u8, stripped_line, combat_prefix) orelse return null;
@@ -99,16 +100,16 @@ pub fn parseBountyLine(line: []const u8) ?f32 {
     var found_digit = false;
     var i: usize = 0;
     while (i < stripped.len) {
-        const c = stripped[i];
-        if (std.ascii.isDigit(c)) {
-            amount = appendDigit(u64, amount, c) orelse return null;
+        const byte = stripped[i];
+        if (std.ascii.isDigit(byte)) {
+            amount = appendDigit(u64, amount, byte) orelse return null;
             found_digit = true;
             i += 1;
         } else if (found_digit) {
             const separator_len = thousandsSeparatorLen(stripped[i..]);
             if (separator_len == 0) break;
             i += separator_len;
-        } else if (c == ' ' or c == '\t') {
+        } else if (byte == ' ' or byte == '\t') {
             i += 1;
         } else {
             return null;
@@ -163,13 +164,13 @@ pub fn stripHtml(html: []const u8, out_buf: []u8) []const u8 {
     var in_tag = false;
     var i: usize = 0;
     while (i < html.len and out_len < out_buf.len) : (i += 1) {
-        const c = html[i];
-        switch (c) {
+        const byte = html[i];
+        switch (byte) {
             '<' => in_tag = true,
             '>' => in_tag = false,
             else => if (!in_tag) {
-                out_buf[out_len] = c;
-                if (c == '&') {
+                out_buf[out_len] = byte;
+                if (byte == '&') {
                     if (decodeEntity(html[i..])) |entity| {
                         out_buf[out_len] = entity.char;
                         i += entity.len - 1;

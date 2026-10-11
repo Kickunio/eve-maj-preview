@@ -1,4 +1,5 @@
 //! The configuration window's Characters tab: a reorderable roster beside the selected character's details; main thread only.
+
 const std = @import("std");
 const ui = @import("ui");
 const config = @import("../../../config.zig");
@@ -31,8 +32,6 @@ const POSITION_MARKER_SIZE = 6;
 /// The thumbnail's name colour is saved without alpha, which a swatch reads as transparent.
 const OPAQUE = 0xFF000000;
 
-const Flag = struct { field: []const u8, label: []const u8 };
-
 const FLAGS = [_]Flag{
     .{ .field = "excludeFromMinimize", .label = "Exclude from Auto-Minimize" },
     .{ .field = "excludeFromCloseAll", .label = "Exclude from Close All" },
@@ -40,6 +39,8 @@ const FLAGS = [_]Flag{
     .{ .field = "hideThumbnail", .label = "Hide Thumbnail" },
     .{ .field = "notificationsMuted", .label = "Mute Notifications" },
 };
+
+const Flag = struct { field: []const u8, label: []const u8 };
 
 var g_selected_index: usize = 0;
 

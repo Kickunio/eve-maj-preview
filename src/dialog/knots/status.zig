@@ -1,9 +1,10 @@
 //! The configuration window's status line: the outcome of the last action, shown in the footer until the next one; main thread only.
+
 const std = @import("std");
 
-pub const Kind = enum { info, success, failure };
-
 const MAX_LENGTH = 160;
+
+pub const Kind = enum { info, success, failure };
 
 var g_buf: [MAX_LENGTH]u8 = undefined;
 var g_length: usize = 0;

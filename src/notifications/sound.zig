@@ -1,4 +1,5 @@
 //! Sound alerts: WAV or MP3 decoded by Media Foundation and played through waveOut on a worker thread.
+
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const worker = @import("worker.zig");
@@ -22,18 +23,6 @@ const MF_MT_SUBTYPE = windows.GUID{
     .Data2 = 0x42e8,
     .Data3 = 0x4714,
     .Data4 = [8]u8{ 0xb7, 0x4b, 0xcb, 0x29, 0xd7, 0x2c, 0x35, 0xe5 },
-};
-const MFMediaType_Audio = windows.GUID{
-    .Data1 = 0x73647561,
-    .Data2 = 0x0000,
-    .Data3 = 0x0010,
-    .Data4 = [8]u8{ 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 },
-};
-const MFAudioFormat_PCM = windows.GUID{
-    .Data1 = 0x00000001,
-    .Data2 = 0x0000,
-    .Data3 = 0x0010,
-    .Data4 = [8]u8{ 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 },
 };
 const MF_MT_AUDIO_NUM_CHANNELS = windows.GUID{
     .Data1 = 0x37e48bf5,
@@ -74,6 +63,19 @@ extern "winmm" fn waveOutUnprepareHeader(hwo: HANDLE, header: *WAVEHDR, size: u3
 extern "winmm" fn waveOutWrite(hwo: HANDLE, header: *WAVEHDR, size: u32) callconv(.c) u32;
 extern "winmm" fn waveOutClose(hwo: HANDLE) callconv(.c) u32;
 extern "winmm" fn waveOutSetVolume(hwo: ?HANDLE, volume: u32) callconv(.c) u32;
+
+const MFMediaType_Audio = windows.GUID{
+    .Data1 = 0x73647561,
+    .Data2 = 0x0000,
+    .Data3 = 0x0010,
+    .Data4 = [8]u8{ 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 },
+};
+const MFAudioFormat_PCM = windows.GUID{
+    .Data1 = 0x00000001,
+    .Data2 = 0x0000,
+    .Data3 = 0x0010,
+    .Data4 = [8]u8{ 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 },
+};
 
 // Vtables follow mingw-w64's mfobjects.h/mfreadwrite.h: Microsoft's docs list methods alphabetically, not in ABI order.
 const IMFMediaType = extern struct {

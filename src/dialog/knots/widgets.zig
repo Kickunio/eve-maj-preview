@@ -1,4 +1,5 @@
 //! The configuration window's layout pieces and low-level controls; main thread only.
+
 const std = @import("std");
 const ui = @import("ui");
 const style = @import("style.zig");
@@ -15,9 +16,6 @@ const Button = ui.component.Button;
 const Tooltip = ui.component.Tooltip;
 const Dialog = ui.component.Dialog;
 const Color = ui.Color;
-
-/// A laid-out element's rectangle, in window coordinates.
-pub const Box = @FieldType(ui.State.Measured, "box");
 
 /// Most sections a tab has; past this they still draw, but miss their hint button.
 const MAX_SECTIONS = 32;
@@ -40,6 +38,9 @@ const SELECT_MAX_WIDTH: f32 = 300;
 const SELECT_MIN_WIDTH: f32 = 170;
 /// Space between a dropdown's longest option and its arrow.
 const SELECT_ARROW_GAP: f32 = 12;
+
+/// A laid-out element's rectangle, in window coordinates.
+pub const Box = @FieldType(ui.State.Measured, "box");
 
 /// Section ids.
 const SectionList = struct {

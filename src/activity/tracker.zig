@@ -1,4 +1,5 @@
 //! Per-character combat, mining and bounty rates over a sliding window.
+
 const std = @import("std");
 const log = @import("../log.zig");
 
@@ -60,84 +61,6 @@ const WindowSum = struct {
     }
 };
 
-/// A fixed ring of recent events, so recording never allocates, with the streak and recency rates are measured from; `Event` needs a `timestamp_ms: i64` field.
-fn Ring(comptime Event: type) type {
-    return struct {
-        entries: [RING_CAPACITY]Event = undefined,
-        /// Next write slot, wraps mod RING_CAPACITY.
-        head: usize = 0,
-        /// Valid entry count, saturates at RING_CAPACITY.
-        entry_count: usize = 0,
-        window_ms: i64,
-        last_hit_ms: i64 = 0,
-        streak_start_ms: i64 = 0,
-
-        const Self = @This();
-
-        fn init(window_seconds: u32) Self {
-            return .{ .window_ms = @as(i64, window_seconds) * std.time.ms_per_s };
-        }
-
-        /// Overwrites the oldest event once full; a whole window of quiet before it starts a new streak.
-        fn push(self: *Self, event: Event) void {
-            self.entries[self.head] = event;
-            self.head = (self.head + 1) % RING_CAPACITY;
-            if (self.entry_count < RING_CAPACITY) self.entry_count += 1;
-            if (self.isQuiet(self.window_ms, event.timestamp_ms)) self.streak_start_ms = event.timestamp_ms;
-            if (event.timestamp_ms > self.last_hit_ms) self.last_hit_ms = event.timestamp_ms;
-        }
-
-        /// Nothing has landed in the `window_ms` before now_ms.
-        fn isQuiet(self: *const Self, window_ms: i64, now_ms: i64) bool {
-            return self.last_hit_ms == 0 or now_ms - self.last_hit_ms >= window_ms;
-        }
-
-        /// The events in the `window_ms` before now_ms, newest first.
-        fn recent(self: *const Self, window_ms: i64, now_ms: i64) Recent {
-            return .{ .ring = self, .cutoff_ms = now_ms - window_ms, .oldest_ms = now_ms };
-        }
-
-        const Recent = struct {
-            ring: *const Self,
-            cutoff_ms: i64,
-            index: usize = 0,
-            oldest_ms: i64,
-
-            fn next(self: *Recent) ?*const Event {
-                if (self.index == self.ring.entry_count) return null;
-                const entry = &self.ring.entries[(self.ring.head + RING_CAPACITY - 1 - self.index) % RING_CAPACITY];
-                // The ring is in time order, so every older entry has expired too.
-                if (entry.timestamp_ms < self.cutoff_ms) return null;
-                self.index += 1;
-                self.oldest_ms = entry.timestamp_ms;
-                return entry;
-            }
-
-            /// Once iterated: the oldest event kept, if the ring filled up inside the window; see WindowSum.rate.
-            fn ringFullFrom(self: *const Recent) ?i64 {
-                return if (self.index == RING_CAPACITY) self.oldest_ms else null;
-            }
-        };
-
-        /// `field` per second over the window ending at now_ms; see WindowSum.rate.
-        fn rate(self: *const Self, comptime field: []const u8, now_ms: i64, warm_up: WindowSum.WarmUp) ?f32 {
-            if (self.isQuiet(self.window_ms, now_ms)) return 0.0;
-            var sum: WindowSum = .{};
-            var it = self.recent(self.window_ms, now_ms);
-            while (it.next()) |entry| sum.add(@field(entry, field), entry.timestamp_ms, self.streak_start_ms);
-            return sum.rate(self.streak_start_ms, now_ms, self.window_ms, it.ringFullFrom(), warm_up);
-        }
-
-        fn countRecent(self: *const Self, window_ms: i64, now_ms: i64) usize {
-            if (self.isQuiet(window_ms, now_ms)) return 0;
-            var it = self.recent(window_ms, now_ms);
-            var event_count: usize = 0;
-            while (it.next()) |_| event_count += 1;
-            return event_count;
-        }
-    };
-}
-
 pub const CombatEvent = struct {
     timestamp_ms: i64,
     amount: u32,
@@ -164,7 +87,7 @@ pub const CombatWindow = struct {
         if (hit.is_incoming and hit.counts_for_alert and hit.timestamp_ms > self.last_incoming_hit_ms) self.last_incoming_hit_ms = hit.timestamp_ms;
     }
 
-    /// Fires when incoming damage has landed since the last alert; repeat-rate is the Notifications tab's throttle, not this. Stays silent once combat stops instead of repeating on a timer.
+    /// Fires once per burst of incoming damage and stays silent once combat stops; how often it repeats is the Notifications tab's throttle.
     pub fn checkDamageAlert(self: *CombatWindow) bool {
         if (self.last_incoming_hit_ms == 0) return false;
         if (self.last_incoming_hit_ms <= self.last_damage_alert_ms) return false;
@@ -172,7 +95,7 @@ pub const CombatWindow = struct {
         return true;
     }
 
-    /// Per second; null when the span is too short to trust a rate; see WindowSum.rate. Hits arrive irregularly, so warm-up runs to now.
+    /// Per second, or null while the span is too short to trust (see WindowSum.rate); warm-up runs to now, since hits arrive irregularly.
     pub fn computeDps(self: *const CombatWindow, now_ms: i64) Dps {
         const ring = &self.ring;
         if (ring.isQuiet(ring.window_ms, now_ms)) return .{ .incoming = 0.0, .outgoing = 0.0 };
@@ -219,7 +142,7 @@ pub const MiningWindow = struct {
         return self.ring.countRecent(window_ms, now_ms);
     }
 
-    /// m3 per second; see WindowSum.rate. Yields come in cycles, so warm-up runs to the newest.
+    /// m3 per second (see WindowSum.rate); warm-up runs to the newest yield, since yields come in cycles.
     pub fn computeRate(self: *const MiningWindow, now_ms: i64) ?f32 {
         return self.ring.rate("m3", now_ms, .to_newest);
     }
@@ -361,6 +284,84 @@ pub fn Tracker(comptime Window: type) type {
             errdefer self.allocator.free(key);
             try self.windows.put(key, Window.init(self.window_seconds));
             return self.windows.getPtr(character_name).?;
+        }
+    };
+}
+
+/// A fixed ring of recent events, so recording never allocates, with the streak and recency rates are measured from; `Event` needs a `timestamp_ms: i64` field.
+fn Ring(comptime Event: type) type {
+    return struct {
+        entries: [RING_CAPACITY]Event = undefined,
+        /// Next write slot, wraps mod RING_CAPACITY.
+        head: usize = 0,
+        /// Valid entry count, saturates at RING_CAPACITY.
+        entry_count: usize = 0,
+        window_ms: i64,
+        last_hit_ms: i64 = 0,
+        streak_start_ms: i64 = 0,
+
+        const Self = @This();
+
+        fn init(window_seconds: u32) Self {
+            return .{ .window_ms = @as(i64, window_seconds) * std.time.ms_per_s };
+        }
+
+        /// Overwrites the oldest event once full; a whole window of quiet before it starts a new streak.
+        fn push(self: *Self, event: Event) void {
+            self.entries[self.head] = event;
+            self.head = (self.head + 1) % RING_CAPACITY;
+            if (self.entry_count < RING_CAPACITY) self.entry_count += 1;
+            if (self.isQuiet(self.window_ms, event.timestamp_ms)) self.streak_start_ms = event.timestamp_ms;
+            if (event.timestamp_ms > self.last_hit_ms) self.last_hit_ms = event.timestamp_ms;
+        }
+
+        /// Nothing has landed in the `window_ms` before now_ms.
+        fn isQuiet(self: *const Self, window_ms: i64, now_ms: i64) bool {
+            return self.last_hit_ms == 0 or now_ms - self.last_hit_ms >= window_ms;
+        }
+
+        /// The events in the `window_ms` before now_ms, newest first.
+        fn recent(self: *const Self, window_ms: i64, now_ms: i64) Recent {
+            return .{ .ring = self, .cutoff_ms = now_ms - window_ms, .oldest_ms = now_ms };
+        }
+
+        const Recent = struct {
+            ring: *const Self,
+            cutoff_ms: i64,
+            index: usize = 0,
+            oldest_ms: i64,
+
+            fn next(self: *Recent) ?*const Event {
+                if (self.index == self.ring.entry_count) return null;
+                const entry = &self.ring.entries[(self.ring.head + RING_CAPACITY - 1 - self.index) % RING_CAPACITY];
+                // The ring is in time order, so every older entry has expired too.
+                if (entry.timestamp_ms < self.cutoff_ms) return null;
+                self.index += 1;
+                self.oldest_ms = entry.timestamp_ms;
+                return entry;
+            }
+
+            /// Once iterated: the oldest event kept, if the ring filled up inside the window; see WindowSum.rate.
+            fn ringFullFrom(self: *const Recent) ?i64 {
+                return if (self.index == RING_CAPACITY) self.oldest_ms else null;
+            }
+        };
+
+        /// `field` per second over the window ending at now_ms; see WindowSum.rate.
+        fn rate(self: *const Self, comptime field: []const u8, now_ms: i64, warm_up: WindowSum.WarmUp) ?f32 {
+            if (self.isQuiet(self.window_ms, now_ms)) return 0.0;
+            var sum: WindowSum = .{};
+            var it = self.recent(self.window_ms, now_ms);
+            while (it.next()) |entry| sum.add(@field(entry, field), entry.timestamp_ms, self.streak_start_ms);
+            return sum.rate(self.streak_start_ms, now_ms, self.window_ms, it.ringFullFrom(), warm_up);
+        }
+
+        fn countRecent(self: *const Self, window_ms: i64, now_ms: i64) usize {
+            if (self.isQuiet(window_ms, now_ms)) return 0;
+            var it = self.recent(window_ms, now_ms);
+            var event_count: usize = 0;
+            while (it.next()) |_| event_count += 1;
+            return event_count;
         }
     };
 }

@@ -133,6 +133,7 @@ pub const LogFile = struct {
         return file;
     }
 
+    /// `handler` has `onLine([]const u8)` and `onLongLine(usize)`.
     fn readAppended(self: *LogFile, allocator: std.mem.Allocator, io: std.Io, file: std.Io.File, backoff: Backoff, handler: anytype) !void {
         const stat = try file.stat(io);
         const size = stat.size;

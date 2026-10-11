@@ -1,4 +1,5 @@
 //! Profile files on disk: where they live, loading with fallbacks, saving, creating defaults, and the backups kept when one is deleted or unreadable.
+
 const std = @import("std");
 const files = @import("files.zig");
 const config_mod = @import("../config.zig");
@@ -77,30 +78,6 @@ pub fn deleteBackup(allocator: std.mem.Allocator, backup: []const u8) !void {
     slog.info("Deleted profile backup '{s}'", .{backup});
 }
 
-/// `backup`'s path in PROFILES_DIR/backup, once it's checked to be a plain file name; caller owns the result.
-fn backupPath(allocator: std.mem.Allocator, backup: []const u8) ![]u8 {
-    try validateName(backup);
-    return std.Io.Dir.path.join(allocator, &.{ files.PROFILES_DIR, BACKUP_DIR, backup });
-}
-
-fn copyFrom(allocator: std.mem.Allocator, source_path: []const u8, target: []const u8, accent_color: ?u32) !void {
-    try validateName(target);
-    const target_path = try path(allocator, target);
-    defer allocator.free(target_path);
-
-    const cwd = std.Io.Dir.cwd();
-    cwd.copyFile(source_path, cwd, target_path, files.g_io, .{ .replace = false }) catch |err| switch (err) {
-        error.PathAlreadyExists => return error.ProfileAlreadyExists,
-        else => return err,
-    };
-
-    const color = accent_color orelse return;
-    var config = try load(allocator, target);
-    defer config.deinit();
-    config.accentColor = color;
-    try save(&config, allocator, target_path);
-}
-
 /// Any profile but the default one, which the app falls back to.
 pub fn checkDeletable(name: []const u8) !void {
     try validateName(name);
@@ -119,29 +96,6 @@ pub fn deleteToBackup(allocator: std.mem.Allocator, name: []const u8) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.rename(profile_path, cwd, backup_path, files.g_io);
     slog.info("Moved profile '{s}' to {s}", .{ name, backup_path });
-}
-
-/// `<unix time>_<name>` in PROFILES_DIR/backup, creating the folder; caller owns the result.
-fn newBackupPath(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    const backup_dir = try path(allocator, BACKUP_DIR);
-    defer allocator.free(backup_dir);
-    try files.createDirIfMissing(backup_dir);
-    return allocator.print("{s}{c}{d}_{s}", .{ backup_dir, std.Io.Dir.path.sep, std.Io.Clock.real.now(files.g_io).toSeconds(), name });
-}
-
-/// Keeps a copy of a profile that couldn't be read, since running on defaults saves over it.
-fn backUpUnreadable(allocator: std.mem.Allocator, profile_path: []const u8, name: []const u8) void {
-    const backup_path = newBackupPath(allocator, name) catch |err| {
-        slog.err("Failed to back up unreadable profile '{s}': {}", .{ name, err });
-        return;
-    };
-    defer allocator.free(backup_path);
-    const cwd = std.Io.Dir.cwd();
-    cwd.copyFile(profile_path, cwd, backup_path, files.g_io, .{}) catch |err| {
-        slog.err("Failed to back up unreadable profile '{s}' to '{s}': {}", .{ name, backup_path, err });
-        return;
-    };
-    slog.warn("Backed up unreadable profile '{s}' to '{s}'", .{ name, backup_path });
 }
 
 /// Splits a backup's `<unix time>_<name>.json` file name (see newBackupPath) into its profile name and time.
@@ -219,28 +173,6 @@ pub fn load(allocator: std.mem.Allocator, name: []const u8) !Config {
     };
 }
 
-fn loadFile(allocator: std.mem.Allocator, profile_path: []const u8, name: []const u8) !Config {
-    const content = std.Io.Dir.cwd().readFileAlloc(files.g_io, profile_path, allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
-        if (err != error.FileNotFound) slog.err("Failed to read config file '{s}': {}", .{ profile_path, err });
-        return err;
-    };
-    defer allocator.free(content);
-
-    return Config.buildConfigFromJson(allocator, content, name) catch |err| {
-        slog.err("Failed to parse config file '{s}', falling back to defaults: {}", .{ profile_path, err });
-        backUpUnreadable(allocator, profile_path, name);
-        return Config.getDefaultsWithProfile(allocator, name);
-    };
-}
-
-/// Borrows from `names`.
-fn listedSpelling(names: []const []const u8, name: []const u8) ?[]const u8 {
-    for (names) |listed| {
-        if (std.ascii.eqlIgnoreCase(listed, name)) return listed;
-    }
-    return null;
-}
-
 /// The profile file names in PROFILES_DIR, e.g. "default.json"; caller owns the list and its strings.
 pub fn list(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     var names: std.ArrayList([]const u8) = .empty;
@@ -290,6 +222,75 @@ pub fn writeDefault(allocator: std.mem.Allocator, name: []const u8, accent_color
     const profile_path = try path(allocator, name);
     defer allocator.free(profile_path);
     try save(&config, allocator, profile_path);
+}
+
+/// `backup`'s path in PROFILES_DIR/backup, once it's checked to be a plain file name; caller owns the result.
+fn backupPath(allocator: std.mem.Allocator, backup: []const u8) ![]u8 {
+    try validateName(backup);
+    return std.Io.Dir.path.join(allocator, &.{ files.PROFILES_DIR, BACKUP_DIR, backup });
+}
+
+fn copyFrom(allocator: std.mem.Allocator, source_path: []const u8, target: []const u8, accent_color: ?u32) !void {
+    try validateName(target);
+    const target_path = try path(allocator, target);
+    defer allocator.free(target_path);
+
+    const cwd = std.Io.Dir.cwd();
+    cwd.copyFile(source_path, cwd, target_path, files.g_io, .{ .replace = false }) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.ProfileAlreadyExists,
+        else => return err,
+    };
+
+    const color = accent_color orelse return;
+    var config = try load(allocator, target);
+    defer config.deinit();
+    config.accentColor = color;
+    try save(&config, allocator, target_path);
+}
+
+/// `<unix time>_<name>` in PROFILES_DIR/backup, creating the folder; caller owns the result.
+fn newBackupPath(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    const backup_dir = try path(allocator, BACKUP_DIR);
+    defer allocator.free(backup_dir);
+    try files.createDirIfMissing(backup_dir);
+    return allocator.print("{s}{c}{d}_{s}", .{ backup_dir, std.Io.Dir.path.sep, std.Io.Clock.real.now(files.g_io).toSeconds(), name });
+}
+
+/// Keeps a copy of a profile that couldn't be read, since running on defaults saves over it.
+fn backUpUnreadable(allocator: std.mem.Allocator, profile_path: []const u8, name: []const u8) void {
+    const backup_path = newBackupPath(allocator, name) catch |err| {
+        slog.err("Failed to back up unreadable profile '{s}': {}", .{ name, err });
+        return;
+    };
+    defer allocator.free(backup_path);
+    const cwd = std.Io.Dir.cwd();
+    cwd.copyFile(profile_path, cwd, backup_path, files.g_io, .{}) catch |err| {
+        slog.err("Failed to back up unreadable profile '{s}' to '{s}': {}", .{ name, backup_path, err });
+        return;
+    };
+    slog.warn("Backed up unreadable profile '{s}' to '{s}'", .{ name, backup_path });
+}
+
+fn loadFile(allocator: std.mem.Allocator, profile_path: []const u8, name: []const u8) !Config {
+    const content = std.Io.Dir.cwd().readFileAlloc(files.g_io, profile_path, allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
+        if (err != error.FileNotFound) slog.err("Failed to read config file '{s}': {}", .{ profile_path, err });
+        return err;
+    };
+    defer allocator.free(content);
+
+    return Config.buildConfigFromJson(allocator, content, name) catch |err| {
+        slog.err("Failed to parse config file '{s}', falling back to defaults: {}", .{ profile_path, err });
+        backUpUnreadable(allocator, profile_path, name);
+        return Config.getDefaultsWithProfile(allocator, name);
+    };
+}
+
+/// Borrows from `names`.
+fn listedSpelling(names: []const []const u8, name: []const u8) ?[]const u8 {
+    for (names) |listed| {
+        if (std.ascii.eqlIgnoreCase(listed, name)) return listed;
+    }
+    return null;
 }
 
 fn ensureDir(allocator: std.mem.Allocator) !void {

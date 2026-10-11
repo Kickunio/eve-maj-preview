@@ -536,7 +536,7 @@ pub const ChatlogMonitor = struct {
 
         // Only jumps notify: undock and Local detection report the same arrival and would fire it twice.
         if (source == .jump) self.queueNotification(file.character_name, .{ .notification_type = .SystemChange, .target = system });
-        // 0: live lines arrive in order, so need no staleness check. Undocks and Local changes aren't travel.
+        // 0, since live lines arrive in order; undocks and Local changes aren't travel.
         self.queueSystemUpdate(file.character_name, system, 0, is_jump);
         slog.info("System change ({s}): {s} -> {s}", .{ @tagName(source), file.character_name, system });
     }

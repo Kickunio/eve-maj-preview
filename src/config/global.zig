@@ -210,6 +210,7 @@ pub const GlobalConfig = struct {
         return null;
     }
 
+    /// `table` is a slice of entries with a `name` field.
     fn findOre(table: anytype, name: []const u8, comptime is_exact: bool) ?@TypeOf(table[0]) {
         for (table) |entry| {
             const is_match = if (is_exact) std.mem.eql(u8, entry.name, name) else isGradeVariant(name, entry.name);

@@ -1,11 +1,11 @@
 //! Brings a window to the foreground from a hook-dispatched hotkey, borrowing WM_HOTKEY's foreground rights through an unreachable "conduit" hotkey.
 const win32 = @import("win32.zig");
-const virtual_keys = @import("virtual_keys.zig");
+const vk = @import("virtual_keys.zig");
 const log = @import("../log.zig");
 
 const slog = log.Scoped("focus_grant");
 
-const FOCUS_GRANT_VK: win32.UINT = virtual_keys.VK_FOCUS_GRANT;
+const FOCUS_GRANT_VK: win32.UINT = vk.VK_FOCUS_GRANT;
 const FOCUS_GRANT_ID_BASE: c_int = 9000;
 // MOD_ALT|MOD_CONTROL|MOD_SHIFT|MOD_WIN occupy bits 0-3, so every value 0-15 is already a valid combo.
 const FOCUS_GRANT_COMBO_COUNT: u32 = 16;

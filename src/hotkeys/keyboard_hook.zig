@@ -1,4 +1,5 @@
 //! Keyboard hotkeys through WH_KEYBOARD_LL, which unlike RegisterHotKey can bind a bare modifier; matches post WM_HOTKEY like mouse_hook.zig's.
+
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const vk = @import("../platform/virtual_keys.zig");
@@ -46,10 +47,6 @@ pub fn deinit() void {
     g_swallow_release = null;
 }
 
-fn clearSwallowState() void {
-    if (g_swallow_release) |*map| map.clearRetainingCapacity();
-}
-
 /// Distinguishes a repeat WM_HOTKEY from a new press; vk_code == 0 (mouse-button hotkeys) is always fresh.
 pub fn trackPress(allocator: std.mem.Allocator, vk_code: u32) bool {
     if (vk_code == 0) return true;
@@ -85,6 +82,10 @@ pub fn armWinKeyCapture() void {
 pub fn disarmWinKeyCapture() void {
     g_is_capturing_win_key = false;
     if (g_hook.isEmpty()) g_hook.uninstall();
+}
+
+fn clearSwallowState() void {
+    if (g_swallow_release) |*map| map.clearRetainingCapacity();
 }
 
 /// WH_KEYBOARD_LL reports the side-specific vk for Ctrl/Alt/Shift/Win (e.g. VK_LSHIFT), never the generic one.

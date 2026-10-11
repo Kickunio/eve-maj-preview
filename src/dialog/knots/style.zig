@@ -136,7 +136,7 @@ pub const tab_label: Style = .{ .font = FONT_SEMIBOLD, .foreground = .{ .color =
 pub const tab_label_lit: Style = .{ .font = FONT_SEMIBOLD, .foreground = .{ .color = TEXT } };
 pub const tab_glyph: Style = .{ .width = .fixed(glyphs.TAB_SIZE), .height = .fixed(glyphs.TAB_SIZE) };
 
-/// The tab's content when it scrolls. Vertical padding is on the column, so the pane's height compares straight against it.
+/// The tab's content when it scrolls, with vertical padding on the column so the pane's height compares straight against it.
 pub const content_scroll: ScrollPane = .{
     .pane = &content_scroll_pane,
     .scrolling = &content_scroll_pane.with(.{ .padding = .init(0, SCROLLBAR_GUTTER, 0, 8) }),
@@ -501,7 +501,7 @@ pub const color_picker: Style = .{
 pub const color_swatch: Style = .{ .width = .fixed(20), .height = .fixed(20) };
 /// color_picker_swatch's colour, filling it inside its 1px border, with the corners nested in its own.
 pub const color_swatch_fill: Style = .{ .width = .fixed(CONTROL_HEIGHT - 2), .height = .fixed(CONTROL_HEIGHT - 2), .radius = .{ .fixed = 5 } };
-/// A picker drawn without its hex: just the swatch, centred. Its popup still has a hex box.
+/// A picker drawn as just its swatch, centred, without the hex its popup still shows.
 pub const color_picker_swatch: Style = color_picker.with(.{
     .width = .fixed(CONTROL_HEIGHT),
     .height = .fixed(CONTROL_HEIGHT),

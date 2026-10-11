@@ -46,7 +46,7 @@ const BUTTON_TEXT_PADDING: i32 = 12;
 const BUTTON_MARGIN: i32 = 8;
 const BUTTON_RADIUS: i32 = 3;
 const BUTTON_FONT_PX: i32 = 12;
-/// Monospace faces, first installed wins. GDI doesn't embolden Cascadia Code's variable-font weights, so its bold is the separate SemiBold face.
+/// Monospace faces, first installed wins; bold is Cascadia Code's separate SemiBold face, since GDI doesn't embolden its variable-font weights.
 const BUTTON_FONTS = [_]ButtonFont{
     .{ .name = "Cascadia Code SemiBold", .weight = win32.FW_SEMIBOLD },
     .{ .name = "Cascadia Code", .weight = win32.FW_BOLD },
@@ -442,7 +442,7 @@ fn scaled(css_px: i32) i32 {
     return win32.scalePixels(css_px, g_ui_scale);
 }
 
-/// Wide enough for the longer translated label; CJK glyphs count double. Estimated, since layout also runs from hit testing where there's no DC to measure with.
+/// Estimated wide enough for the longer translated label, CJK glyphs counting double, since hit testing lays out without a DC to measure with.
 fn buttonWidthCss() i32 {
     var widest: i32 = 0;
     for ([_][]const u8{ labelText(&g_labels.save), labelText(&g_labels.cancel) }) |label| {

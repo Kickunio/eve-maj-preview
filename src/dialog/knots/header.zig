@@ -1,4 +1,5 @@
 //! The configuration window's header: the app mark, which profile the window edits, the profile buttons and their prompts; main thread only.
+
 const std = @import("std");
 const ui = @import("ui");
 const config = @import("../../config.zig");
@@ -112,6 +113,21 @@ pub fn show(context: *ui.Frame) !void {
     try switchPrompt(context);
     try namePrompt(context);
     try confirmPrompt(context);
+}
+
+/// From the Import dialog: names the profile `backup` (a backup file name) is restored as, starting from `display_name`.
+pub fn openRestorePrompt(backup: []const u8, display_name: []const u8) void {
+    clearRestore();
+    g_restore_backup = g_allocator.dupe(u8, backup) catch |err| {
+        slog.err("Failed to open the restore prompt: {}", .{err});
+        return;
+    };
+    g_restore_label = g_allocator.dupe(u8, display_name) catch |err| {
+        slog.err("Failed to open the restore prompt: {}", .{err});
+        clearRestore();
+        return;
+    };
+    openNamePrompt(.restore, display_name);
 }
 
 fn profileSelect(context: *ui.Frame) !void {
@@ -249,21 +265,6 @@ fn submitName(prompt: NamePrompt) void {
         .restore => if (g_restore_backup) |backup| profiles.requestRestore(file_name, backup, accent),
     }
     g_is_name_open = false;
-}
-
-/// From the Import dialog: names the profile `backup` (a backup file name) is restored as, starting from `display_name`.
-pub fn openRestorePrompt(backup: []const u8, display_name: []const u8) void {
-    clearRestore();
-    g_restore_backup = g_allocator.dupe(u8, backup) catch |err| {
-        slog.err("Failed to open the restore prompt: {}", .{err});
-        return;
-    };
-    g_restore_label = g_allocator.dupe(u8, display_name) catch |err| {
-        slog.err("Failed to open the restore prompt: {}", .{err});
-        clearRestore();
-        return;
-    };
-    openNamePrompt(.restore, display_name);
 }
 
 fn clearRestore() void {

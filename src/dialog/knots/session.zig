@@ -267,7 +267,7 @@ pub fn isDirty() bool {
     return g_is_profile_dirty or g_is_global_dirty;
 }
 
-/// Restarts subsystems, so only between frames. Saving a draft also makes it the running profile.
+/// Restarts subsystems, so only between frames; saving a draft also makes it the running profile.
 pub fn save() !void {
     refreshDirty();
     slog.info("Saving configuration (profile dirty: {}, global dirty: {})", .{ g_is_profile_dirty, g_is_global_dirty });

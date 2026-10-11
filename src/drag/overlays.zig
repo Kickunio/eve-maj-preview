@@ -22,7 +22,7 @@ pub const GhostGroup = struct {
     names: []const u8,
 };
 
-/// A topmost, click-through overlay outlining every other saved position while a thumbnail or panel is dragged. Created lazily, hidden (not destroyed) between drags.
+/// A topmost, click-through overlay outlining every other saved position during a drag, created on first use and hidden between drags.
 pub const GhostOverlay = struct {
     allocator: std.mem.Allocator,
     hwnd: ?win32.HWND = null,

@@ -1,4 +1,5 @@
 //! What an import brings in: a partial profile in its saved shape, and notes for the user; `toOps` turns it into edit ops (see config/patch.zig) against the profile being edited.
+
 const std = @import("std");
 const config = @import("../../config.zig");
 const patch = @import("../patch.zig");
@@ -149,18 +150,6 @@ pub const Draft = struct {
     }
 };
 
-fn setIn(arena: std.mem.Allocator, root: *ObjectMap, path: []const u8, value: Value) !void {
-    var node = root;
-    var it = std.mem.splitScalar(u8, path, '.');
-    var key = it.first();
-    while (it.next()) |next| : (key = next) {
-        const entry = try node.getOrPut(arena, key);
-        if (!entry.found_existing or entry.value_ptr.* != .object) entry.value_ptr.* = .{ .object = .empty };
-        node = &entry.value_ptr.object;
-    }
-    try node.put(arena, key, value);
-}
-
 pub fn isChosen(chosen: []const []const u8, id: []const u8) bool {
     for (chosen) |chosen_id| {
         if (std.mem.eql(u8, chosen_id, id)) return true;
@@ -196,6 +185,18 @@ pub fn toOps(arena: std.mem.Allocator, draft: *const Draft, doc: *const Config) 
         }
     }
     return ops.items;
+}
+
+fn setIn(arena: std.mem.Allocator, root: *ObjectMap, path: []const u8, value: Value) !void {
+    var node = root;
+    var it = std.mem.splitScalar(u8, path, '.');
+    var key = it.first();
+    while (it.next()) |next| : (key = next) {
+        const entry = try node.getOrPut(arena, key);
+        if (!entry.found_existing or entry.value_ptr.* != .object) entry.value_ptr.* = .{ .object = .empty };
+        node = &entry.value_ptr.object;
+    }
+    try node.put(arena, key, value);
 }
 
 fn findMergedList(name: []const u8) ?MergedList {

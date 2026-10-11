@@ -1,4 +1,5 @@
 //! The Import Settings dialog: reading another preview tool's file or an EVE-Maj profile, and choosing its sections and where they go; main thread only.
+
 const std = @import("std");
 const ui = @import("ui");
 const config = @import("../../config.zig");
@@ -96,11 +97,6 @@ pub fn loadFile(path: []const u8) void {
     analyze(null);
 }
 
-fn readFile(path: []const u8) !void {
-    g_file_text = try std.Io.Dir.cwd().readFileAlloc(files.g_io, path, arena(), .limited(MAX_FILE_SIZE));
-    g_file_name = try arena().dupe(u8, std.fs.path.basename(path));
-}
-
 pub fn show(context: *ui.Frame) !void {
     // Cleared a frame after closing, not on the frame that closes it: that frame's text still borrows from the arena until it's drawn.
     if (!g_is_open) return clearArena();
@@ -115,6 +111,19 @@ pub fn show(context: *ui.Frame) !void {
     }
     try buttons(context);
     try dialog.close(context);
+}
+
+/// Applies the chosen sections to the profile the window edits; called again by the header's action once a new profile exists.
+pub fn applyImport() void {
+    applyChosen() catch |err| {
+        slog.err("Failed to import settings: {}", .{err});
+        status.show(.failure, "Import failed: {t}", .{err});
+    };
+}
+
+fn readFile(path: []const u8) !void {
+    g_file_text = try std.Io.Dir.cwd().readFileAlloc(files.g_io, path, arena(), .limited(MAX_FILE_SIZE));
+    g_file_name = try arena().dupe(u8, std.fs.path.basename(path));
 }
 
 fn fileStep(context: *ui.Frame) !void {
@@ -211,14 +220,6 @@ fn runImport() void {
         return;
     }
     host.importIntoNewProfile(name, widgets.argbFromColor(g_new_accent));
-}
-
-/// Applies the chosen sections to the profile the window edits; called again by the header's action once a new profile exists.
-pub fn applyImport() void {
-    applyChosen() catch |err| {
-        slog.err("Failed to import settings: {}", .{err});
-        status.show(.failure, "Import failed: {t}", .{err});
-    };
 }
 
 fn applyChosen() !void {

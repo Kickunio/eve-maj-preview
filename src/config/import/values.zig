@@ -1,4 +1,5 @@
 //! Reading loosely typed values out of other tools' settings files, and the key and colour spellings they share.
+
 const std = @import("std");
 const vk = @import("../../platform/virtual_keys.zig");
 const key_list = @import("../key_list.zig");
@@ -215,18 +216,6 @@ pub fn ahkHotkey(raw: ?[]const u8) ?u32 {
     return vk.combineKey(vk_code, modifiers);
 }
 
-fn modifierWord(word: []const u8) ?u32 {
-    const words = [_]struct { []const u8, u32 }{
-        .{ "ctrl", vk.MOD_CONTROL }, .{ "control", vk.MOD_CONTROL }, .{ "alt", vk.MOD_ALT },
-        .{ "shift", vk.MOD_SHIFT },  .{ "win", vk.MOD_WIN },         .{ "lwin", vk.MOD_WIN },
-        .{ "rwin", vk.MOD_WIN },
-    };
-    for (words) |entry| {
-        if (std.ascii.eqlIgnoreCase(word, entry[0])) return entry[1];
-    }
-    return null;
-}
-
 /// The character a per-client key names, without an "EVE - " prefix; null for default placeholders ("Example Name1", "Cycle Group 1") and non-characters like an exe path.
 pub fn characterName(raw: []const u8) ?[]const u8 {
     var name = std.mem.trim(u8, raw, " \t");
@@ -251,6 +240,18 @@ pub fn profileName(arena: std.mem.Allocator, text: []const u8, max_length: usize
         if (std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == ' ') try out.append(arena, c);
     }
     return out.items;
+}
+
+fn modifierWord(word: []const u8) ?u32 {
+    const words = [_]struct { []const u8, u32 }{
+        .{ "ctrl", vk.MOD_CONTROL }, .{ "control", vk.MOD_CONTROL }, .{ "alt", vk.MOD_ALT },
+        .{ "shift", vk.MOD_SHIFT },  .{ "win", vk.MOD_WIN },         .{ "lwin", vk.MOD_WIN },
+        .{ "rwin", vk.MOD_WIN },
+    };
+    for (words) |entry| {
+        if (std.ascii.eqlIgnoreCase(word, entry[0])) return entry[1];
+    }
+    return null;
 }
 
 const testing = std.testing;

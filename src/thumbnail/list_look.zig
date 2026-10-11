@@ -1,4 +1,5 @@
 //! The client list panel's look, shared with its config preview and the History Panel: sizes, palette, colour rules and stat text; no I/O.
+
 const std = @import("std");
 const types = @import("../config/types.zig");
 const activity = @import("../config/activity.zig");
@@ -43,10 +44,10 @@ pub const BADGE_ALERT: u32 = 0xFFFF8833;
 pub const BADGE_INACTIVE: u32 = 0xFF7FB3D9;
 pub const BADGE_MINIMIZED: u32 = 0xFF3D5566;
 pub const BADGE_EXCLUDED: u32 = 0xFF6B6E75;
+pub const STAT_COUNT = std.enums.values(Stat).len;
 
 /// What the right-hand slot shows besides a notification or the system, in the order it writes them.
 pub const Stat = enum { incoming_dps, outgoing_dps, mining_rate, bounty_rate };
-pub const STAT_COUNT = std.enums.values(Stat).len;
 
 /// One stat in the right-hand slot: mining in m3 per minute, bounty in ISK per the configured period; null while still being measured.
 pub const StatReading = struct {

@@ -1,4 +1,5 @@
 //! Display labels the configuration window derives from setting names; no I/O.
+
 const std = @import("std");
 
 /// Where a tag spelled as words isn't clear enough, keyed by "<enum name>.<tag>".
@@ -37,16 +38,6 @@ pub fn enumLabels(comptime E: type) [std.enums.values(E).len][]const u8 {
     return labels;
 }
 
-fn tagLabel(comptime E: type, comptime tag: []const u8) []const u8 {
-    return OVERRIDES.get(shortTypeName(E) ++ "." ++ tag) orelse spellOut(tag);
-}
-
-fn shortTypeName(comptime E: type) []const u8 {
-    const full = @typeName(E);
-    const dot = std.mem.findScalarLast(u8, full, '.') orelse return full;
-    return full[dot + 1 ..];
-}
-
 /// "TopLeft" -> "Top Left", "EVEFocus" -> "EVE Focus", "next_profile" -> "Next profile".
 pub fn spellOut(comptime tag: []const u8) []const u8 {
     comptime {
@@ -65,6 +56,16 @@ pub fn spellOut(comptime tag: []const u8) []const u8 {
         }
         return out;
     }
+}
+
+fn tagLabel(comptime E: type, comptime tag: []const u8) []const u8 {
+    return OVERRIDES.get(shortTypeName(E) ++ "." ++ tag) orelse spellOut(tag);
+}
+
+fn shortTypeName(comptime E: type) []const u8 {
+    const full = @typeName(E);
+    const dot = std.mem.findScalarLast(u8, full, '.') orelse return full;
+    return full[dot + 1 ..];
 }
 
 test "spellOut splits camel case and snake case into words" {

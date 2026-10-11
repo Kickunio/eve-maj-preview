@@ -1,4 +1,5 @@
 //! Imports settings from other preview tools and other EVE-Maj profiles: `analyze` lists a file's sections, `build` turns the chosen ones into edits.
+
 const std = @import("std");
 const values = @import("values.zig");
 const draft_mod = @import("draft.zig");
@@ -31,33 +32,6 @@ const Source = union(enum) {
     eveo: Value,
     apm: eve_apm.Ini,
 };
-
-/// Null for a file none of the formats recognise.
-fn detect(arena: std.mem.Allocator, raw_text: []const u8) !?Source {
-    const text = textOf(raw_text);
-    if (std.json.parseFromSliceLeaky(Value, arena, text, .{ .duplicate_field_behavior = .use_last })) |root| {
-        if (root != .object) return null;
-        if (own.isFile(root)) return .{ .maj = root };
-        if (eve_x.isFile(root)) return .{ .evex = root };
-        if (eve_o.isFile(root)) return .{ .eveo = root };
-        return null;
-    } else |_| {}
-    const ini = try eve_apm.Ini.parse(arena, text);
-    if (ini.sections.count() == 0) return null;
-    return .{ .apm = ini };
-}
-
-fn textOf(raw_text: []const u8) []const u8 {
-    return if (std.mem.startsWith(u8, raw_text, UTF8_BOM)) raw_text[UTF8_BOM.len..] else raw_text;
-}
-
-/// EVE-X keeps several profiles; the one to import is `requested` if it has it.
-fn evexProfile(root: Value, requested: ?[]const u8) ?[]const u8 {
-    if (requested) |name| {
-        if (values.objectAt(values.objectAt(root, "_Profiles"), name) != null) return name;
-    }
-    return eve_x.defaultProfile(root);
-}
 
 /// `{format, profiles, sourceProfile, defaultName, sections}`, with `format` null for a file that isn't recognised.
 pub fn analyze(json_writer: *std.json.Stringify, arena: std.mem.Allocator, text: []const u8, file_name: []const u8, source_profile: ?[]const u8) !void {
@@ -110,4 +84,31 @@ pub fn build(arena: std.mem.Allocator, text: []const u8, source_profile: ?[]cons
     // Imported positions come from a different setup, so ghost outlines of them would only clutter drags.
     if (chosen.len > 0) try draft.setBool("snapping.showGhostPositionBorders", false);
     return .{ .ops = try draft_mod.toOps(arena, &draft, doc), .notes = draft.notes.items, .skipped = draft.skipped.items };
+}
+
+/// Null for a file none of the formats recognise.
+fn detect(arena: std.mem.Allocator, raw_text: []const u8) !?Source {
+    const text = textOf(raw_text);
+    if (std.json.parseFromSliceLeaky(Value, arena, text, .{ .duplicate_field_behavior = .use_last })) |root| {
+        if (root != .object) return null;
+        if (own.isFile(root)) return .{ .maj = root };
+        if (eve_x.isFile(root)) return .{ .evex = root };
+        if (eve_o.isFile(root)) return .{ .eveo = root };
+        return null;
+    } else |_| {}
+    const ini = try eve_apm.Ini.parse(arena, text);
+    if (ini.sections.count() == 0) return null;
+    return .{ .apm = ini };
+}
+
+fn textOf(raw_text: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, raw_text, UTF8_BOM)) raw_text[UTF8_BOM.len..] else raw_text;
+}
+
+/// EVE-X keeps several profiles; the one to import is `requested` if it has it.
+fn evexProfile(root: Value, requested: ?[]const u8) ?[]const u8 {
+    if (requested) |name| {
+        if (values.objectAt(values.objectAt(root, "_Profiles"), name) != null) return name;
+    }
+    return eve_x.defaultProfile(root);
 }

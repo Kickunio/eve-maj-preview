@@ -1,4 +1,5 @@
 //! The configuration window's Placement tab: the placement mode and a screen preview, then hand-placement settings or a list of thumbnail spaces beside the selected one's details; main thread only.
+
 const std = @import("std");
 const ui = @import("ui");
 const win32 = @import("../../../platform/win32.zig");
@@ -21,12 +22,12 @@ const DisplayRef = session.Ref(config.DisplayConfig);
 const SpaceRef = session.Ref(config.ThumbnailSpace);
 const ScreenMap = screen_map.ScreenMap;
 
+const SPACE_ROW_KEY: ui.Key = .str("knots.space.row");
+const CHIP_COLUMNS: [3]GridTrack = @splat(.{ .fr = 1 });
+
 // knots doesn't export its grid types by name.
 const GridTemplate = @typeInfo(@FieldType(ui.Style, "grid")).optional.child;
 const GridTrack = @typeInfo(@FieldType(GridTemplate, "rows")).pointer.child;
-
-const SPACE_ROW_KEY: ui.Key = .str("knots.space.row");
-const CHIP_COLUMNS: [3]GridTrack = @splat(.{ .fr = 1 });
 
 /// A pill in a space's Holds grid.
 const Chip = struct {

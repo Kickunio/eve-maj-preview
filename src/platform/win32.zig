@@ -1121,7 +1121,7 @@ pub fn isExplorerOwned(hwnd: HWND) bool {
     return std.ascii.eqlIgnoreCase(executable_path[executable_path.len - suffix.len ..], suffix);
 }
 
-/// Full path of the current process's own executable. Replaces std.fs.selfExecutablePath, removed in Zig 0.16.
+/// The current process's executable path, replacing std.fs.selfExecutablePath, which Zig 0.16 removed.
 pub fn selfExecutablePath(buf: []u8) ![]const u8 {
     const len = GetModuleFileNameA(null, @ptrCast(buf.ptr), @intCast(buf.len));
     if (len == 0) return error.GetModuleFileNameFailed;
@@ -1129,7 +1129,7 @@ pub fn selfExecutablePath(buf: []u8) ![]const u8 {
     return buf[0..@intCast(len)];
 }
 
-/// Directory containing the current process's own executable. Replaces std.fs.selfExecutableDirPath, removed in Zig 0.16.
+/// The directory of the current process's executable, replacing std.fs.selfExecutableDirPath, which Zig 0.16 removed.
 pub fn selfExecutableDirPath(buf: []u8) ![]const u8 {
     const full_path = try selfExecutablePath(buf);
     return std.Io.Dir.path.dirname(full_path) orelse return error.MissingDirname;
@@ -1490,6 +1490,7 @@ pub inline fn lparamY(lParam: LPARAM) i32 {
     return @as(i16, @truncate(lParam >> 16));
 }
 
+/// `ptr` is any pointer.
 pub inline fn ptrToLparam(ptr: anytype) LPARAM {
     return @as(LPARAM, @bitCast(@intFromPtr(ptr)));
 }

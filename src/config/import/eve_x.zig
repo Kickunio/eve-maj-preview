@@ -116,8 +116,8 @@ pub fn colorsHint(draft: *Draft, color_count: usize, hotkey_count: usize) !draft
 }
 
 pub fn hasText(text: ?[]const u8) bool {
-    const t = text orelse return false;
-    return std.mem.trim(u8, t, " \t").len > 0;
+    const raw = text orelse return false;
+    return std.mem.trim(u8, raw, " \t").len > 0;
 }
 
 pub fn build(draft: *Draft, root: Value, profile_name: []const u8, chosen: []const []const u8) !void {

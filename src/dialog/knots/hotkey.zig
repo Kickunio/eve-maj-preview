@@ -298,6 +298,7 @@ fn sized(context: *ui.Frame, base: *const ui.Style, width: ?*const ui.Style) !*c
     return box_style;
 }
 
+/// `ref` has session.Ref's get and set for `field_name`.
 fn manualBox(context: *ui.Frame, edit: *ManualEdit, ref: anytype, comptime field_name: []const u8, key: ui.Key, width: ?*const ui.Style) !void {
     const box_key = key.indexed(5);
     const is_focused = context.ui().focused(box_key.hash());

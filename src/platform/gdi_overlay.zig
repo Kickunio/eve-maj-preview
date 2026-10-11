@@ -87,7 +87,7 @@ pub const ButtonFace = struct {
     border_px: usize,
 };
 
-/// A topmost, click-through two-line hint box centered in given bounds, shared by dragging and region select. Created lazily, hidden (not destroyed) between uses.
+/// A topmost, click-through two-line hint box centred in given bounds for dragging and region select, created on first use and hidden between uses.
 pub const HintBox = struct {
     hwnd: ?win32.HWND = null,
     bitmap: ?OverlayBitmap = null,
@@ -240,7 +240,7 @@ pub fn drawText(comptime buf_size: usize, dc: win32.HDC, x: i32, y: i32, text: [
     _ = win32.TextOutA(dc, x, y, &buf, @intCast(copy_len));
 }
 
-/// Null if `name` isn't installed, since CreateFontA silently substitutes another face. Matches by prefix because GDI can report a weight variant of a variable font (e.g. "Cascadia Code SemiBold") as the face.
+/// Null if `name` isn't installed, which CreateFontA would hide by substituting a face; matched by prefix, as GDI may name a variable font's weight ("Cascadia Code SemiBold").
 pub fn createInstalledFont(dc: win32.HDC, name: [:0]const u8, height_px: i32, weight: c_int) ?win32.HFONT {
     const font = win32.CreateFontA(-height_px, 0, 0, 0, weight, 0, 0, 0, win32.DEFAULT_CHARSET, win32.OUT_DEFAULT_PRECIS, win32.CLIP_DEFAULT_PRECIS, win32.CLEARTYPE_QUALITY, win32.DEFAULT_PITCH, name.ptr) orelse return null;
 

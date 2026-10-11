@@ -47,7 +47,7 @@ pub const NotifiedQueue = struct {
         };
     }
 
-    /// Names notified within retention_ms, oldest first. The strings borrow the queue's storage and are valid only until the next track call; the caller frees the list itself with out_allocator.
+    /// Names notified within retention_ms, oldest first, borrowing the queue's storage until the next track call; the caller frees the list with out_allocator.
     pub fn namesWithin(self: *const NotifiedQueue, out_allocator: std.mem.Allocator, retention_ms: u64) !std.ArrayList([]const u8) {
         const now = win32.Ticks.now();
         var result: std.ArrayList([]const u8) = .empty;

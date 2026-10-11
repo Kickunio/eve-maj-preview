@@ -1,4 +1,5 @@
 //! Virtual-key codes, and the combined key+modifier value hotkeys are stored as, with its names and parsing.
+
 const std = @import("std");
 const win32 = @import("win32.zig");
 const log = @import("../log.zig");
@@ -70,8 +71,6 @@ const MODIFIER_BIT_OFFSET: u5 = 8;
 
 const VK_MASK: u32 = 0xFF;
 const MOD_MASK: u32 = 0x0F;
-
-pub const KeyName = struct { vk_code: u32, name: []const u8 };
 
 /// Every key a binding can use, in the spelling it's shown and typed in; the config dialog's recorder offers exactly these.
 pub const KEY_NAMES: []const KeyName = blk: {
@@ -147,6 +146,8 @@ pub const MODIFIER_NAMES = [_]struct { flag: u32, name: []const u8 }{
     .{ .flag = MOD_WIN, .name = "Win" },
 };
 
+pub const KeyName = struct { vk_code: u32, name: []const u8 };
+
 pub fn extractVk(combined: u32) u32 {
     return combined & VK_MASK;
 }
@@ -196,43 +197,6 @@ pub fn writeVirtualKey(writer: anytype, combined: u32) !void {
     }
 }
 
-fn parseModifierToken(token: []const u8) ?u32 {
-    if (std.ascii.eqlIgnoreCase(token, "ctrl") or std.ascii.eqlIgnoreCase(token, "control")) return MOD_CONTROL;
-    if (std.ascii.eqlIgnoreCase(token, "alt")) return MOD_ALT;
-    if (std.ascii.eqlIgnoreCase(token, "shift")) return MOD_SHIFT;
-    if (std.ascii.eqlIgnoreCase(token, "win") or std.ascii.eqlIgnoreCase(token, "lwin") or std.ascii.eqlIgnoreCase(token, "rwin")) return MOD_WIN;
-    return null;
-}
-
-/// A name from KEY_NAMES, or one of the aliases hand-edited profiles may use (a shifted OEM character, "Control", "LWin", "RWin").
-fn parseBaseKey(key_text: []const u8) ?u32 {
-    for (KEY_NAMES) |key| {
-        if (std.ascii.eqlIgnoreCase(key.name, key_text)) return key.vk_code;
-    }
-
-    if (key_text.len == 1) {
-        // '+' itself is never a valid base key here since it's the modifier-combo delimiter; only '=' maps to VK_OEM_PLUS.
-        const shifted_vk: ?u32 = switch (key_text[0]) {
-            ':' => VK_OEM_1,
-            '<' => VK_OEM_COMMA,
-            '_' => VK_OEM_MINUS,
-            '>' => VK_OEM_PERIOD,
-            '?' => VK_OEM_2,
-            '~' => VK_OEM_3,
-            '{' => VK_OEM_4,
-            '|' => VK_OEM_5,
-            '}' => VK_OEM_6,
-            '"' => VK_OEM_7,
-            else => null,
-        };
-        if (shifted_vk) |vk_code| return vk_code;
-    }
-    if (std.ascii.eqlIgnoreCase(key_text, "control")) return VK_CONTROL;
-    if (std.ascii.eqlIgnoreCase(key_text, "lwin") or std.ascii.eqlIgnoreCase(key_text, "rwin")) return VK_LWIN;
-
-    return null;
-}
-
 /// A combined value (see combineKey) from "F9", "Ctrl+Alt+F9" or the old "0x0278" form; null when unbindable, which the caller logs, except a lone modifier, logged here.
 pub fn parseVirtualKey(key_text: []const u8) ?u32 {
     if (key_text.len == 0) return null;
@@ -278,6 +242,43 @@ pub fn parseVirtualKey(key_text: []const u8) ?u32 {
     }
 
     return parseBaseKey(key_text);
+}
+
+fn parseModifierToken(token: []const u8) ?u32 {
+    if (std.ascii.eqlIgnoreCase(token, "ctrl") or std.ascii.eqlIgnoreCase(token, "control")) return MOD_CONTROL;
+    if (std.ascii.eqlIgnoreCase(token, "alt")) return MOD_ALT;
+    if (std.ascii.eqlIgnoreCase(token, "shift")) return MOD_SHIFT;
+    if (std.ascii.eqlIgnoreCase(token, "win") or std.ascii.eqlIgnoreCase(token, "lwin") or std.ascii.eqlIgnoreCase(token, "rwin")) return MOD_WIN;
+    return null;
+}
+
+/// A name from KEY_NAMES, or one of the aliases hand-edited profiles may use (a shifted OEM character, "Control", "LWin", "RWin").
+fn parseBaseKey(key_text: []const u8) ?u32 {
+    for (KEY_NAMES) |key| {
+        if (std.ascii.eqlIgnoreCase(key.name, key_text)) return key.vk_code;
+    }
+
+    if (key_text.len == 1) {
+        // '+' itself is never a valid base key here since it's the modifier-combo delimiter; only '=' maps to VK_OEM_PLUS.
+        const shifted_vk: ?u32 = switch (key_text[0]) {
+            ':' => VK_OEM_1,
+            '<' => VK_OEM_COMMA,
+            '_' => VK_OEM_MINUS,
+            '>' => VK_OEM_PERIOD,
+            '?' => VK_OEM_2,
+            '~' => VK_OEM_3,
+            '{' => VK_OEM_4,
+            '|' => VK_OEM_5,
+            '}' => VK_OEM_6,
+            '"' => VK_OEM_7,
+            else => null,
+        };
+        if (shifted_vk) |vk_code| return vk_code;
+    }
+    if (std.ascii.eqlIgnoreCase(key_text, "control")) return VK_CONTROL;
+    if (std.ascii.eqlIgnoreCase(key_text, "lwin") or std.ascii.eqlIgnoreCase(key_text, "rwin")) return VK_LWIN;
+
+    return null;
 }
 
 const testing = std.testing;

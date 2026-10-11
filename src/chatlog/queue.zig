@@ -16,7 +16,7 @@ pub const Command = union(enum) {
     }
 };
 
-/// Worker to main thread, which resolves the hwnd: only the main thread may touch Scout and Painter. Names are owned; freed in deinit.
+/// Worker to main thread, which resolves the hwnd since only it may touch Scout and Painter. Owned; freed in deinit.
 pub const SystemUpdate = struct {
     character_name: []const u8,
     system_name: []const u8,
@@ -31,7 +31,7 @@ pub const SystemUpdate = struct {
     }
 };
 
-/// Worker to main thread: when a character's session began, by its gamelog's name. The name is owned; freed in deinit.
+/// Worker to main thread: when a character's session began, from its gamelog's name. Owned; freed in deinit.
 pub const SessionStart = struct {
     character_name: []const u8,
     /// UTC Unix seconds.
@@ -42,7 +42,7 @@ pub const SessionStart = struct {
     }
 };
 
-/// Worker to main thread, where the text is rendered from per-type config. The name is owned; freed in deinit.
+/// Worker to main thread, which renders the text from per-type config. Owned; freed in deinit.
 pub const NotificationEvent = struct {
     character_name: []const u8,
     /// source/target are owned copies.

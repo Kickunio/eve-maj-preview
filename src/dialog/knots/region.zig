@@ -1,4 +1,5 @@
 //! Drawing a thumbnail space on screen with the app's region overlay, and storing the result in the edited profile; main thread only.
+
 const std = @import("std");
 const win32 = @import("../../platform/win32.zig");
 const painter_mod = @import("../../painter.zig");
@@ -65,6 +66,16 @@ pub fn cancel() void {
     g_target_space_id = null;
 }
 
+/// The space's rectangle, or null while it's unset, which greys out Edit and Clear.
+pub fn rect(space_id: u32) ?win32.RECT {
+    const space = find(space_id) orelse return null;
+    return spaces.rect(space.ptr);
+}
+
+pub fn clear(space_id: u32) void {
+    setRect(space_id, null, null, null, null);
+}
+
 /// From the overlay once it closes.
 fn onSelected(result: region_select.Status, selected: win32.RECT) void {
     const space_id = g_target_space_id orelse return;
@@ -80,16 +91,6 @@ fn onSelected(result: region_select.Status, selected: win32.RECT) void {
     }
     setRect(space_id, selected.left, selected.top, win32.rectWidth(selected), win32.rectHeight(selected));
     status.show(.success, "Space region set", .{});
-}
-
-/// The space's rectangle, or null while it's unset, which greys out Edit and Clear.
-pub fn rect(space_id: u32) ?win32.RECT {
-    const space = find(space_id) orelse return null;
-    return spaces.rect(space.ptr);
-}
-
-pub fn clear(space_id: u32) void {
-    setRect(space_id, null, null, null, null);
 }
 
 fn find(space_id: u32) ?session.Ref(config.ThumbnailSpace) {

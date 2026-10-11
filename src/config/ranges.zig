@@ -65,7 +65,7 @@ fn clampField(comptime R: type, comptime name: []const u8, field: anytype) void 
     const bounds = @field(R.ranges, name);
     const clamped = std.math.clamp(field.*, @as(T, bounds[0]), @as(T, bounds[1]));
     if (clamped == field.*) return;
-    slog.warn("{s}.{s} {d} out of range, clamping to {d}", .{ comptime shortTypeName(R), name, field.*, clamped });
+    slog.warn("'{s}.{s}' {d} out of range, clamping to {d}", .{ comptime shortTypeName(R), name, field.*, clamped });
     field.* = clamped;
 }
 

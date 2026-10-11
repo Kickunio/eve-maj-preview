@@ -1,4 +1,5 @@
 //! Form controls bound to one setting each, whose `ref` is always a session.Ref: they read it every frame and write it through `Ref.set`; main thread only.
+
 const std = @import("std");
 const ui = @import("ui");
 const style = @import("style.zig");
@@ -10,18 +11,18 @@ const TextInput = ui.component.TextInput;
 const ColorPicker = ui.component.ColorPicker;
 const SelectInput = ui.component.SelectInput;
 
+/// The font dropdowns offer these; a font set by hand in the profile is offered too.
+const FONT_OPTIONS = [_][]const u8{
+    "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", "Lucida Console", "Monaco",          "Menlo",  "Arial",         "Verdana",
+    "Tahoma",        "Trebuchet MS",  "Segoe UI", "Calibri",     "Georgia",        "Times New Roman", "Impact", "Comic Sans MS",
+};
+
 /// A text or number box's own copy of its text, which follows the setting until the user starts typing.
 const TextState = struct {
     /// Owned; freed in reset.
     text: std.ArrayList(u8) = .empty,
     /// Set while the box has focus, so leaving it applies what was typed.
     is_editing: bool = false,
-};
-
-/// The font dropdowns offer these; a font set by hand in the profile is offered too.
-const FONT_OPTIONS = [_][]const u8{
-    "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", "Lucida Console", "Monaco",          "Menlo",  "Arial",         "Verdana",
-    "Tahoma",        "Trebuchet MS",  "Segoe UI", "Calibri",     "Georgia",        "Times New Roman", "Impact", "Comic Sans MS",
 };
 
 pub const NumberOptions = struct {
@@ -92,7 +93,7 @@ pub fn number(context: *ui.Frame, ref: anytype, comptime field: []const u8, labe
     try row.close(context);
 }
 
-/// Just the box, for a row holding several, e.g. width × height. An optional setting is unset by clearing the box.
+/// Just the box, for a row holding several (e.g. width × height); clearing it unsets an optional setting.
 pub fn numberBox(context: *ui.Frame, ref: anytype, comptime field: []const u8, options: NumberOptions) !void {
     try styledNumberBox(context, ref, field, options, &style.number_input);
 }

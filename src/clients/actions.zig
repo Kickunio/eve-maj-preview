@@ -1,4 +1,5 @@
 //! Actions on every EVE client at once: minimize, close, and move to saved positions.
+
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const config_mod = @import("../config.zig");
@@ -43,15 +44,6 @@ pub fn clampOntoScreen(position: config_mod.Position) config_mod.Position {
     const corner_monitor = win32.nearestMonitor(.{ .x = position.x, .y = position.y }) orelse return position;
     if (corner_monitor == monitor or win32.monitorDpi(corner_monitor) == win32.monitorDpi(monitor)) return position;
     return clampToRect(position, monitor_rect);
-}
-
-fn clampToRect(position: config_mod.Position, rect: win32.RECT) config_mod.Position {
-    const max_x = @max(rect.left, rect.right - SCREEN_EDGE_MARGIN);
-    const max_y = @max(rect.top, rect.bottom - SCREEN_EDGE_MARGIN);
-    return .{
-        .x = std.math.clamp(position.x, rect.left, max_x),
-        .y = std.math.clamp(position.y, rect.top, max_y),
-    };
 }
 
 /// Moves a window's top-left corner to `position`, restoring it first if minimized/maximized.
@@ -140,4 +132,13 @@ pub fn closeAllClients(eve_windows: []const scout.EveWindow, config: *const conf
     } else {
         slog.debug("No EVE clients to close", .{});
     }
+}
+
+fn clampToRect(position: config_mod.Position, rect: win32.RECT) config_mod.Position {
+    const max_x = @max(rect.left, rect.right - SCREEN_EDGE_MARGIN);
+    const max_y = @max(rect.top, rect.bottom - SCREEN_EDGE_MARGIN);
+    return .{
+        .x = std.math.clamp(position.x, rect.left, max_x),
+        .y = std.math.clamp(position.y, rect.top, max_y),
+    };
 }

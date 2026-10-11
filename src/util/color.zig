@@ -83,7 +83,7 @@ pub const AutoColors = struct {
     }
 };
 
-/// Picks the palette color farthest (in OKLab) from every color in `taken`; with nothing taken, `seed_string` picks the starting point and breaks ties, so the result is deterministic. Returns 0xRRGGBB.
+/// The palette colour (0xRRGGBB) farthest in OKLab from everything in `taken`; `seed_string` picks the start and breaks ties, so the result is deterministic.
 pub fn pickDistinctColor(seed_string: []const u8, taken: []const u32) u32 {
     const candidates = DISTINCT_PALETTE.candidates[0..DISTINCT_PALETTE.count];
     const count = candidates.len;
