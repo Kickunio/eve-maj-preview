@@ -307,7 +307,7 @@ fn stringAt(value: std.json.Value, name: []const u8) ?[]const u8 {
 fn translate(allocator: std.mem.Allocator, note: importer.Text) ![]const u8 {
     var out: []const u8 = try allocator.dupe(u8, lang.text(note.key, note.key));
     for (note.parameters) |parameter| {
-        const value = if (parameter.translate) lang.text(parameter.value, parameter.value) else parameter.value;
+        const value = if (parameter.should_translate) lang.text(parameter.value, parameter.value) else parameter.value;
         out = try replace(allocator, out, parameter.name, value);
     }
     return out;

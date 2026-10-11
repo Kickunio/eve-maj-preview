@@ -1,12 +1,12 @@
 //! EVE-X Preview and its fork EVE-MultiPreview: a JSON file of named profiles under "_Profiles".
 const std = @import("std");
 const values = @import("values.zig");
-const draft = @import("draft.zig");
+const draft_mod = @import("draft.zig");
 const config = @import("../../config.zig");
 
 const Value = std.json.Value;
-const Draft = draft.Draft;
-const Section = draft.Section;
+const Draft = draft_mod.Draft;
+const Section = draft_mod.Section;
 
 /// Older versions keep app-wide settings in "global_Settings" and a profile's in "Thumbnail Settings"/"Hotkeys"; version 3 moved them
 /// into the profile ("Thumbnails Visuals", "Thumbnails Behavior", "Hotkeys Settings", "Game Logs Monitoring"), so both are read.
@@ -33,8 +33,7 @@ const Source = struct {
     }
 
     /// The first of these settings the file has.
-    fn first(self: Source, places: []const struct { ?Value, []const u8 }) ?Value {
-        _ = self;
+    fn first(_: Source, places: []const struct { ?Value, []const u8 }) ?Value {
         for (places) |place| {
             if (values.get(place[0], place[1])) |v| return v;
         }
@@ -50,7 +49,7 @@ const Source = struct {
         return values.objectAt(self.global, "ThumbnailStartLocation") orelse values.objectAt(self.behavior, "ThumbnailStartLocation");
     }
 
-    fn colorsActive(self: Source) bool {
+    fn areColorsActive(self: Source) bool {
         const active = values.get(values.objectAt(self.profile, "Custom Colors"), "cColorActive") orelse return false;
         return switch (active) {
             .bool => |b| b,
@@ -90,55 +89,55 @@ fn globals(root: Value) ?Value {
 }
 
 fn countNames(names: []const Value) usize {
-    var n: usize = 0;
+    var name_count: usize = 0;
     for (names) |name| {
-        if (name == .string and values.characterName(name.string) != null) n += 1;
+        if (name == .string and values.characterName(name.string) != null) name_count += 1;
     }
-    return n;
+    return name_count;
 }
 
 fn countHotkeys(entries: []const Value) usize {
-    var n: usize = 0;
+    var hotkey_count: usize = 0;
     for (entries) |entry| {
         if (entry != .object) continue;
         for (entry.object.keys()) |name| {
-            if (values.characterName(name) != null) n += 1;
+            if (values.characterName(name) != null) hotkey_count += 1;
         }
     }
-    return n;
+    return hotkey_count;
 }
 
 fn countPositions(all: ?Value) usize {
-    const p = all orelse return 0;
-    var n: usize = 0;
-    for (p.object.keys()) |key| {
-        if (values.characterName(key) != null) n += 1;
+    const positions = all orelse return 0;
+    var position_count: usize = 0;
+    for (positions.object.keys()) |key| {
+        if (values.characterName(key) != null) position_count += 1;
     }
-    return n;
+    return position_count;
 }
 
-pub fn sections(d: *Draft, root: Value, profile_name: []const u8) ![]const Section {
-    const s = Source.init(root, profile_name);
-    const position_count = countPositions(values.objectAt(s.profile, "Thumbnail Positions"));
-    const colors = if (s.colorsActive()) countNames(values.arrayAt(s.customColors(), "CharNames")) else 0;
-    const hotkeys = countHotkeys(s.characterHotkeys());
-    const groups = values.count(values.objectAt(s.profile, "Hotkey Groups"));
+pub fn sections(draft: *Draft, root: Value, profile_name: []const u8) ![]const Section {
+    const source = Source.init(root, profile_name);
+    const position_count = countPositions(values.objectAt(source.profile, "Thumbnail Positions"));
+    const color_count = if (source.areColorsActive()) countNames(values.arrayAt(source.customColors(), "CharNames")) else 0;
+    const hotkey_count = countHotkeys(source.characterHotkeys());
+    const group_count = values.count(values.objectAt(source.profile, "Hotkey Groups"));
 
-    const has_appearance = values.count(s.visuals) > 0 or s.startLocation() != null or
-        values.has(s.global, "ShowSystemName") or values.has(s.global, "HideActiveThumbnail");
-    const has_auto_minimize = values.has(s.client, "MinimizeInactiveClients") or
-        countNames(values.arrayAt(s.client, "Dont_Minimize_Clients")) > 0 or
-        values.jsonNumber(values.get(s.global, "Minimize_Delay")) != null;
-    const has_snapping = s.first(&.{ .{ s.global, "ThumbnailSnap" }, .{ s.behavior, "ThumbnailSnap" }, .{ s.global, "ThumbnailSnap_Distance" }, .{ s.behavior, "ThumbnailSnap_Distance" } }) != null or
-        nonEmpty(suspendHotkey(s));
-    const has_global_hotkeys = s.first(&.{ .{ s.global, "HideShowThumbnailsHotkey" }, .{ s.hotkeys, "HideThumbnailsHotkey" }, .{ s.global, "CycleWhileHeld" }, .{ s.global, "LockPositions" }, .{ s.hotkeys, "Close_All_EVE_Win_Hotkey" } }) != null;
-    const has_chatlog = s.first(&.{ .{ s.global, "EnableChatLogMonitoring" }, .{ s.global, "EnableGameLogMonitoring" }, .{ s.global, "ChatLogDirectory" }, .{ s.global, "GameLogDirectory" }, .{ s.logs, "gameLogsMonitoringEnabled" } }) != null;
+    const has_appearance = values.count(source.visuals) > 0 or source.startLocation() != null or
+        values.has(source.global, "ShowSystemName") or values.has(source.global, "HideActiveThumbnail");
+    const has_auto_minimize = values.has(source.client, "MinimizeInactiveClients") or
+        countNames(values.arrayAt(source.client, "Dont_Minimize_Clients")) > 0 or
+        values.jsonNumber(values.get(source.global, "Minimize_Delay")) != null;
+    const has_snapping = source.first(&.{ .{ source.global, "ThumbnailSnap" }, .{ source.behavior, "ThumbnailSnap" }, .{ source.global, "ThumbnailSnap_Distance" }, .{ source.behavior, "ThumbnailSnap_Distance" } }) != null or
+        hasText(suspendHotkey(source));
+    const has_global_hotkeys = source.first(&.{ .{ source.global, "HideShowThumbnailsHotkey" }, .{ source.hotkeys, "HideThumbnailsHotkey" }, .{ source.global, "CycleWhileHeld" }, .{ source.global, "LockPositions" }, .{ source.hotkeys, "Close_All_EVE_Win_Hotkey" } }) != null;
+    const has_chatlog = source.first(&.{ .{ source.global, "EnableChatLogMonitoring" }, .{ source.global, "EnableGameLogMonitoring" }, .{ source.global, "ChatLogDirectory" }, .{ source.global, "GameLogDirectory" }, .{ source.logs, "gameLogsMonitoringEnabled" } }) != null;
 
-    return d.arena.dupe(Section, &.{
+    return draft.arena.dupe(Section, &.{
         .{ .id = "thumbnailAppearance", .title = "dynamic.import.evex.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.evex.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.evex.characterPositions.title", .hint = try d.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
-        .{ .id = "characterColorsHotkeys", .title = "dynamic.import.evex.characterColorsHotkeys.title", .hint = try colorsHint(d, colors, hotkeys), .available = colors + hotkeys > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.evex.hotkeyGroups.title", .hint = try d.countText("dynamic.import.hotkeyGroupsCountHint", groups), .available = groups > 0 },
+        .{ .id = "characterPositions", .title = "dynamic.import.evex.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
+        .{ .id = "characterColorsHotkeys", .title = "dynamic.import.evex.characterColorsHotkeys.title", .hint = try colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "dynamic.import.evex.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
         .{ .id = "autoMinimize", .title = "dynamic.import.evex.autoMinimize.title", .hint = .{ .key = "dynamic.import.evex.autoMinimize.hint" }, .available = has_auto_minimize },
         .{ .id = "snapping", .title = "dynamic.import.evex.snapping.title", .hint = .{ .key = "dynamic.import.evex.snapping.hint" }, .available = has_snapping },
         .{ .id = "globalHotkeys", .title = "dynamic.import.apm.globalHotkeys.title", .hint = .{ .key = "dynamic.import.evex.globalHotkeys.hint" }, .available = has_global_hotkeys },
@@ -146,227 +145,227 @@ pub fn sections(d: *Draft, root: Value, profile_name: []const u8) ![]const Secti
     });
 }
 
-pub fn colorsHint(d: *Draft, colors: usize, hotkeys: usize) !draft.Text {
-    return d.text("dynamic.import.characterColorsHotkeysHint", &.{ .{ .name = "colors", .value = try d.format(colors) }, .{ .name = "hotkeys", .value = try d.format(hotkeys) } });
+pub fn colorsHint(draft: *Draft, color_count: usize, hotkey_count: usize) !draft_mod.Text {
+    return draft.text("dynamic.import.characterColorsHotkeysHint", &.{ .{ .name = "colors", .value = try draft.format(color_count) }, .{ .name = "hotkeys", .value = try draft.format(hotkey_count) } });
 }
 
-pub fn nonEmpty(text: ?[]const u8) bool {
+pub fn hasText(text: ?[]const u8) bool {
     const t = text orelse return false;
     return std.mem.trim(u8, t, " \t").len > 0;
 }
 
-fn suspendHotkey(s: Source) ?[]const u8 {
-    const v = s.first(&.{ .{ s.global, "Suspend_Hotkeys_Hotkey" }, .{ s.hotkeys, "Suspend_Hotkeys_Hotkey" } }) orelse return null;
-    return if (v == .string) v.string else null;
+fn suspendHotkey(source: Source) ?[]const u8 {
+    const value = source.first(&.{ .{ source.global, "Suspend_Hotkeys_Hotkey" }, .{ source.hotkeys, "Suspend_Hotkeys_Hotkey" } }) orelse return null;
+    return if (value == .string) value.string else null;
 }
 
-pub fn build(d: *Draft, root: Value, profile_name: []const u8, chosen: []const []const u8) !void {
-    const s = Source.init(root, profile_name);
-    if (draft.isChosen(chosen, "thumbnailAppearance")) try appearance(d, s);
-    if (draft.isChosen(chosen, "characterPositions")) try characterPositions(d, s);
-    if (draft.isChosen(chosen, "characterColorsHotkeys")) try colorsAndHotkeys(d, s);
-    if (draft.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(d, s);
-    if (draft.isChosen(chosen, "autoMinimize")) try autoMinimize(d, s);
-    if (draft.isChosen(chosen, "snapping")) try snapping(d, s);
-    if (draft.isChosen(chosen, "globalHotkeys")) try globalHotkeys(d, s);
-    if (draft.isChosen(chosen, "chatlog")) try chatlog(d, s);
+pub fn build(draft: *Draft, root: Value, profile_name: []const u8, chosen: []const []const u8) !void {
+    const source = Source.init(root, profile_name);
+    if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, source);
+    if (draft_mod.isChosen(chosen, "characterPositions")) try characterPositions(draft, source);
+    if (draft_mod.isChosen(chosen, "characterColorsHotkeys")) try colorsAndHotkeys(draft, source);
+    if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, source);
+    if (draft_mod.isChosen(chosen, "autoMinimize")) try autoMinimize(draft, source);
+    if (draft_mod.isChosen(chosen, "snapping")) try snapping(draft, source);
+    if (draft_mod.isChosen(chosen, "globalHotkeys")) try globalHotkeys(draft, source);
+    if (draft_mod.isChosen(chosen, "chatlog")) try chatlog(draft, source);
 }
 
-fn appearance(d: *Draft, s: Source) !void {
-    const vis = s.visuals;
-    try d.setNumber("thumbnail.borderWidth", values.number(values.get(vis, "ClientHighligtBorderthickness")));
-    try d.setColor("thumbnail.borderColor", values.rgbColor(values.stringAt(vis, "ClientHighligtColor")));
-    if (values.get(vis, "ShowClientHighlightBorder")) |v| try d.setBool("thumbnail.showBorderWhenFocused", values.truthy(v));
+fn appearance(draft: *Draft, source: Source) !void {
+    const visuals = source.visuals;
+    try draft.setNumber("thumbnail.borderWidth", values.number(values.get(visuals, "ClientHighligtBorderthickness")));
+    try draft.setColor("thumbnail.borderColor", values.rgbColor(values.stringAt(visuals, "ClientHighligtColor")));
+    if (values.get(visuals, "ShowClientHighlightBorder")) |v| try draft.setBool("thumbnail.showBorderWhenFocused", values.truthy(v));
 
-    try d.setNumber("thumbnail.inactiveBorderWidth", values.number(values.get(vis, "InactiveClientBorderthickness")));
-    try d.setColor("thumbnail.inactiveBorderColor", values.rgbColor(values.stringAt(vis, "InactiveClientBorderColor")));
-    if (values.get(vis, "ShowAllColoredBorders")) |v| try d.setBool("thumbnail.showBorderWhenInactive", values.truthy(v));
+    try draft.setNumber("thumbnail.inactiveBorderWidth", values.number(values.get(visuals, "InactiveClientBorderthickness")));
+    try draft.setColor("thumbnail.inactiveBorderColor", values.rgbColor(values.stringAt(visuals, "InactiveClientBorderColor")));
+    if (values.get(visuals, "ShowAllColoredBorders")) |v| try draft.setBool("thumbnail.showBorderWhenInactive", values.truthy(v));
 
-    if (values.get(vis, "ShowThumbnailTextOverlay")) |v| try d.setBool("thumbnail.showText", values.truthy(v));
-    try d.setColor("thumbnail.characterNameColor", values.rgbColor(values.stringAt(vis, "ThumbnailTextColor")));
-    const font = values.stringAt(vis, "ThumbnailTextFont");
-    try d.setOverlayFont(if (nonEmpty(font)) font else null, values.number(values.get(vis, "ThumbnailTextSize")));
-    const margins = values.objectAt(vis, "ThumbnailTextMargins");
-    try d.setNumber("thumbnail.characterNameOffsetX", values.number(values.get(margins, "x")));
-    try d.setNumber("thumbnail.characterNameOffsetY", values.number(values.get(margins, "y")));
+    if (values.get(visuals, "ShowThumbnailTextOverlay")) |v| try draft.setBool("thumbnail.showText", values.truthy(v));
+    try draft.setColor("thumbnail.characterNameColor", values.rgbColor(values.stringAt(visuals, "ThumbnailTextColor")));
+    const font = values.stringAt(visuals, "ThumbnailTextFont");
+    try draft.setOverlayFont(if (hasText(font)) font else null, values.number(values.get(visuals, "ThumbnailTextSize")));
+    const margins = values.objectAt(visuals, "ThumbnailTextMargins");
+    try draft.setNumber("thumbnail.characterNameOffsetX", values.number(values.get(margins, "x")));
+    try draft.setNumber("thumbnail.characterNameOffsetY", values.number(values.get(margins, "y")));
 
-    if (values.number(values.get(vis, "ThumbnailOpacity"))) |percent| try d.setNumber("thumbnail.thumbnailOpacity", values.opacityFromPercent(percent));
-    if (s.first(&.{ .{ vis, "HideThumbnailsOnLostFocus" }, .{ s.behavior, "HideThumbnailsOnLostFocus" } })) |v| try d.setBool("thumbnail.hideWhenNoEveFocus", values.truthy(v));
+    if (values.number(values.get(visuals, "ThumbnailOpacity"))) |percent| try draft.setNumber("thumbnail.thumbnailOpacity", values.opacityFromPercent(percent));
+    if (source.first(&.{ .{ visuals, "HideThumbnailsOnLostFocus" }, .{ source.behavior, "HideThumbnailsOnLostFocus" } })) |v| try draft.setBool("thumbnail.hideWhenNoEveFocus", values.truthy(v));
 
-    const start = s.startLocation();
-    try d.setNumber("thumbnail.width", values.number(values.get(start, "width")));
-    try d.setNumber("thumbnail.height", values.number(values.get(start, "height")));
+    const start = source.startLocation();
+    try draft.setNumber("thumbnail.width", values.number(values.get(start, "width")));
+    try draft.setNumber("thumbnail.height", values.number(values.get(start, "height")));
 
-    try d.setBool("thumbnail.showSystemName", values.flag(values.get(s.global, "ShowSystemName")));
-    try d.setBool("thumbnail.activeThumbnailHidden", values.flag(s.first(&.{ .{ s.global, "HideActiveThumbnail" }, .{ s.behavior, "HideThumbForActiveWin" } })));
-    try d.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
+    try draft.setBool("thumbnail.showSystemName", values.flag(values.get(source.global, "ShowSystemName")));
+    try draft.setBool("thumbnail.activeThumbnailHidden", values.flag(source.first(&.{ .{ source.global, "HideActiveThumbnail" }, .{ source.behavior, "HideThumbForActiveWin" } })));
+    try draft.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
 }
 
-fn characterPositions(d: *Draft, s: Source) !void {
-    const all = values.objectAt(s.profile, "Thumbnail Positions") orelse return;
-    var imported: usize = 0;
-    var skipped: usize = 0;
+fn characterPositions(draft: *Draft, source: Source) !void {
+    const all = values.objectAt(source.profile, "Thumbnail Positions") orelse return;
+    var imported_count: usize = 0;
+    var skipped_count: usize = 0;
     var it = all.object.iterator();
     while (it.next()) |entry| {
         const name = values.characterName(entry.key_ptr.*) orelse {
-            skipped += 1;
+            skipped_count += 1;
             continue;
         };
-        const p = entry.value_ptr.*;
-        const character = try d.character(name);
-        if (values.number(values.get(p, "x"))) |x| {
-            if (values.number(values.get(p, "y"))) |y| try putPosition(d, character, x, y);
+        const position = entry.value_ptr.*;
+        const character = try draft.character(name);
+        if (values.number(values.get(position, "x"))) |x| {
+            if (values.number(values.get(position, "y"))) |y| try putPosition(draft, character, x, y);
         }
-        if (values.number(values.get(p, "width"))) |w| try d.put(character, "thumbnailSize.width", values.numberValue(w));
-        if (values.number(values.get(p, "height"))) |h| try d.put(character, "thumbnailSize.height", values.numberValue(h));
-        imported += 1;
+        if (values.number(values.get(position, "width"))) |width| try draft.put(character, "thumbnailSize.width", values.numberValue(width));
+        if (values.number(values.get(position, "height"))) |height| try draft.put(character, "thumbnailSize.height", values.numberValue(height));
+        imported_count += 1;
     }
-    try d.noteCount("dynamic.import.importedPositionsWithSizeNote", "n", imported);
-    if (skipped > 0) try d.noteCount("dynamic.import.skippedPlaceholderNote", "n", skipped);
+    try draft.noteCount("dynamic.import.importedPositionsWithSizeNote", "n", imported_count);
+    if (skipped_count > 0) try draft.noteCount("dynamic.import.skippedPlaceholderNote", "n", skipped_count);
 }
 
 /// EVE-X ran DPI-unaware, so its positions are in a 96-DPI space Windows scaled for it.
-pub fn putPosition(d: *Draft, character: *std.json.ObjectMap, x: f64, y: f64) !void {
+pub fn putPosition(draft: *Draft, character: *std.json.ObjectMap, x: f64, y: f64) !void {
     const legacy: config.Position = .{ .x = std.math.lossyCast(i32, @round(x)), .y = std.math.lossyCast(i32, @round(y)) };
     const position = legacy.scaleFromLegacyDpiUnaware();
-    try d.put(character, "position.x", .{ .integer = position.x });
-    try d.put(character, "position.y", .{ .integer = position.y });
+    try draft.put(character, "position.x", .{ .integer = position.x });
+    try draft.put(character, "position.y", .{ .integer = position.y });
 }
 
-fn colorsAndHotkeys(d: *Draft, s: Source) !void {
-    if (s.colorsActive()) {
-        const colors = s.customColors();
+fn colorsAndHotkeys(draft: *Draft, source: Source) !void {
+    if (source.areColorsActive()) {
+        const colors = source.customColors();
         const names = values.arrayAt(colors, "CharNames");
         const active = values.arrayAt(colors, "Bordercolor");
         const inactive = values.arrayAt(colors, "IABordercolor");
-        var imported: usize = 0;
+        var imported_count: usize = 0;
         for (names, 0..) |raw, i| {
             if (raw != .string) continue;
             const name = values.characterName(raw.string) orelse continue;
-            const character = try d.character(name);
+            const character = try draft.character(name);
             if (i < active.len and active[i] == .string) {
-                if (values.rgbColor(active[i].string)) |c| try d.put(character, "borderColors.activeBorderColor", try values.colorValue(d.arena, c));
+                if (values.rgbColor(active[i].string)) |c| try draft.put(character, "borderColors.activeBorderColor", try values.colorValue(draft.arena, c));
             }
             if (i < inactive.len and inactive[i] == .string) {
-                if (values.rgbColor(inactive[i].string)) |c| try d.put(character, "borderColors.inactiveBorderColor", try values.colorValue(d.arena, c));
+                if (values.rgbColor(inactive[i].string)) |c| try draft.put(character, "borderColors.inactiveBorderColor", try values.colorValue(draft.arena, c));
             }
-            imported += 1;
+            imported_count += 1;
         }
-        if (imported > 0) try d.noteCount("dynamic.import.evex.importedBorderColorsForCharsNote", "n", imported);
-        if (values.arrayAt(colors, "TextColor").len > 0) try d.note("dynamic.import.evex.textColorNotSupportedNote", &.{});
+        if (imported_count > 0) try draft.noteCount("dynamic.import.evex.importedBorderColorsForCharsNote", "n", imported_count);
+        if (values.arrayAt(colors, "TextColor").len > 0) try draft.note("dynamic.import.evex.textColorNotSupportedNote", &.{});
     }
 
-    const entries = s.characterHotkeys();
-    var converted: usize = 0;
-    var total: usize = 0;
+    const entries = source.characterHotkeys();
+    var converted_count: usize = 0;
+    var total_count: usize = 0;
     for (entries) |entry| {
         if (entry != .object) continue;
         var it = entry.object.iterator();
         while (it.next()) |hotkey| {
             const name = values.characterName(hotkey.key_ptr.*) orelse continue;
-            total += 1;
+            total_count += 1;
             const raw = if (hotkey.value_ptr.* == .string) hotkey.value_ptr.string else "";
-            const character = try d.character(name);
+            const character = try draft.character(name);
             if (values.ahkHotkey(raw)) |combined| {
-                try d.put(character, "hotkey", try values.keyValue(d.arena, combined));
-                converted += 1;
+                try draft.put(character, "hotkey", try values.keyValue(draft.arena, combined));
+                converted_count += 1;
             } else {
-                try d.note("dynamic.import.evex.hotkeySkippedNote", &.{ .{ .name = "name", .value = name }, .{ .name = "raw", .value = raw } });
+                try draft.note("dynamic.import.evex.hotkeySkippedNote", &.{ .{ .name = "name", .value = name }, .{ .name = "raw", .value = raw } });
             }
         }
     }
-    if (total > 0) try d.note("dynamic.import.convertedHotkeysNote", &.{ .{ .name = "converted", .value = try d.format(converted) }, .{ .name = "total", .value = try d.format(total) } });
+    if (total_count > 0) try draft.note("dynamic.import.convertedHotkeysNote", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
 }
 
-fn hotkeyGroups(d: *Draft, s: Source) !void {
-    const groups = values.objectAt(s.profile, "Hotkey Groups") orelse return;
-    const first_note = d.notes.items.len;
+fn hotkeyGroups(draft: *Draft, source: Source) !void {
+    const groups = values.objectAt(source.profile, "Hotkey Groups") orelse return;
+    const first_note = draft.notes.items.len;
     var it = groups.object.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
-        const g = entry.value_ptr.*;
-        const group = try d.item("hotkeyGroups", "name", name);
-        var members = std.json.Array.init(d.arena);
-        for (values.arrayAt(g, "Characters")) |member| {
+        const group_settings = entry.value_ptr.*;
+        const group = try draft.item("hotkeyGroups", "name", name);
+        var members: std.json.Array = .init(draft.arena);
+        for (values.arrayAt(group_settings, "Characters")) |member| {
             if (member == .string) try members.append(member);
         }
-        try d.put(group, "characters", .{ .array = members });
-        try groupKey(d, group, "forwardKey", name, values.stringAt(g, "ForwardsHotkey"), "dynamic.import.hotkeyGroupForwardKeyFailedNote");
-        try groupKey(d, group, "backwardKey", name, values.stringAt(g, "BackwardsHotkey"), "dynamic.import.hotkeyGroupBackwardKeyFailedNote");
+        try draft.put(group, "characters", .{ .array = members });
+        try groupKey(draft, group, "forwardKey", name, values.stringAt(group_settings, "ForwardsHotkey"), "dynamic.import.hotkeyGroupForwardKeyFailedNote");
+        try groupKey(draft, group, "backwardKey", name, values.stringAt(group_settings, "BackwardsHotkey"), "dynamic.import.hotkeyGroupBackwardKeyFailedNote");
     }
-    try d.notes.insert(d.arena, first_note, try d.countText("dynamic.import.hotkeyGroupsImportedNote", groups.object.count()));
+    try draft.notes.insert(draft.arena, first_note, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", groups.object.count()));
 }
 
-fn groupKey(d: *Draft, group: *std.json.ObjectMap, field: []const u8, name: []const u8, raw: ?[]const u8, failed_note: []const u8) !void {
-    if (!nonEmpty(raw)) {
-        try d.put(group, field, .null);
+fn groupKey(draft: *Draft, group: *std.json.ObjectMap, field: []const u8, name: []const u8, raw: ?[]const u8, failed_note: []const u8) !void {
+    if (!hasText(raw)) {
+        try draft.put(group, field, .null);
         return;
     }
     if (values.ahkHotkey(raw)) |combined| {
-        try d.put(group, field, try values.keyValue(d.arena, combined));
+        try draft.put(group, field, try values.keyValue(draft.arena, combined));
     } else {
-        try d.put(group, field, .null);
-        try d.note(failed_note, &.{ .{ .name = "name", .value = name }, .{ .name = "key", .value = raw.? } });
+        try draft.put(group, field, .null);
+        try draft.note(failed_note, &.{ .{ .name = "name", .value = name }, .{ .name = "key", .value = raw.? } });
     }
 }
 
-fn autoMinimize(d: *Draft, s: Source) !void {
-    if (values.get(s.client, "MinimizeInactiveClients")) |v| try d.setBool("autoMinimize.enabled", values.truthy(v));
-    try d.setNumber("autoMinimize.delayMs", values.number(s.first(&.{ .{ s.global, "Minimize_Delay" }, .{ s.client, "Minimize_Delay" } })));
-    for (values.arrayAt(s.client, "Dont_Minimize_Clients")) |raw| {
+fn autoMinimize(draft: *Draft, source: Source) !void {
+    if (values.get(source.client, "MinimizeInactiveClients")) |v| try draft.setBool("autoMinimize.enabled", values.truthy(v));
+    try draft.setNumber("autoMinimize.delayMs", values.number(source.first(&.{ .{ source.global, "Minimize_Delay" }, .{ source.client, "Minimize_Delay" } })));
+    for (values.arrayAt(source.client, "Dont_Minimize_Clients")) |raw| {
         if (raw != .string) continue;
         const name = values.characterName(raw.string) orelse continue;
-        try d.put(try d.character(name), "excludeFromMinimize", .{ .bool = true });
+        try draft.put(try draft.character(name), "excludeFromMinimize", .{ .bool = true });
     }
-    try d.note("dynamic.import.autoMinimizeImportedNote", &.{});
+    try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
 }
 
-fn snapping(d: *Draft, s: Source) !void {
-    if (s.first(&.{ .{ s.global, "ThumbnailSnap" }, .{ s.behavior, "ThumbnailSnap" } })) |v| try d.setBool("snapping.enabled", values.truthy(v));
-    try d.setNumber("snapping.threshold", values.number(s.first(&.{ .{ s.global, "ThumbnailSnap_Distance" }, .{ s.behavior, "ThumbnailSnap_Distance" } })));
-    const raw = suspendHotkey(s);
-    if (nonEmpty(raw)) {
+fn snapping(draft: *Draft, source: Source) !void {
+    if (source.first(&.{ .{ source.global, "ThumbnailSnap" }, .{ source.behavior, "ThumbnailSnap" } })) |v| try draft.setBool("snapping.enabled", values.truthy(v));
+    try draft.setNumber("snapping.threshold", values.number(source.first(&.{ .{ source.global, "ThumbnailSnap_Distance" }, .{ source.behavior, "ThumbnailSnap_Distance" } })));
+    const raw = suspendHotkey(source);
+    if (hasText(raw)) {
         if (values.ahkHotkey(raw)) |combined| {
-            try d.setKeys("hotkeys.hotkeySuspend", .one(combined));
+            try draft.setKeys("hotkeys.hotkeySuspend", .one(combined));
         } else {
-            try d.note("dynamic.import.evex.suspendHotkeyFailedNote", &.{.{ .name = "key", .value = raw.? }});
+            try draft.note("dynamic.import.evex.suspendHotkeyFailedNote", &.{.{ .name = "key", .value = raw.? }});
         }
     }
-    try d.note("dynamic.import.snappingImportedNote", &.{});
+    try draft.note("dynamic.import.snappingImportedNote", &.{});
 }
 
-fn globalHotkeys(d: *Draft, s: Source) !void {
-    try actionHotkey(d, s.first(&.{ .{ s.global, "HideShowThumbnailsHotkey" }, .{ s.hotkeys, "HideThumbnailsHotkey" } }), "hotkeys.hotkeyToggleVisibility", "dynamic.import.apm.actionLabel.toggleVisibility");
-    try actionHotkey(d, values.get(s.hotkeys, "Close_All_EVE_Win_Hotkey"), "hotkeys.hotkeyCloseAll", "dynamic.import.apm.actionLabel.closeAll");
-    try d.setBool("hotkeys.allowHotkeyAutoRepeat", values.flag(values.get(s.global, "CycleWhileHeld")));
-    if (values.flag(values.get(s.global, "LockPositions"))) |locked| try d.setBool("interaction.enableDragging", !locked);
-    try d.note("dynamic.import.apm.globalHotkeysImportedNote", &.{});
+fn globalHotkeys(draft: *Draft, source: Source) !void {
+    try actionHotkey(draft, source.first(&.{ .{ source.global, "HideShowThumbnailsHotkey" }, .{ source.hotkeys, "HideThumbnailsHotkey" } }), "hotkeys.hotkeyToggleVisibility", "dynamic.import.apm.actionLabel.toggleVisibility");
+    try actionHotkey(draft, values.get(source.hotkeys, "Close_All_EVE_Win_Hotkey"), "hotkeys.hotkeyCloseAll", "dynamic.import.apm.actionLabel.closeAll");
+    try draft.setBool("hotkeys.allowHotkeyAutoRepeat", values.flag(values.get(source.global, "CycleWhileHeld")));
+    if (values.flag(values.get(source.global, "LockPositions"))) |locked| try draft.setBool("interaction.enableDragging", !locked);
+    try draft.note("dynamic.import.apm.globalHotkeysImportedNote", &.{});
 }
 
-fn actionHotkey(d: *Draft, raw: ?Value, path: []const u8, label: []const u8) !void {
-    const v = raw orelse return;
-    if (v != .string or !nonEmpty(v.string)) return;
-    if (values.ahkHotkey(v.string)) |combined| {
-        try d.setKeys(path, .one(combined));
+fn actionHotkey(draft: *Draft, raw: ?Value, path: []const u8, label: []const u8) !void {
+    const value = raw orelse return;
+    if (value != .string or !hasText(value.string)) return;
+    if (values.ahkHotkey(value.string)) |combined| {
+        try draft.setKeys(path, .one(combined));
     } else {
-        try d.note("dynamic.import.apm.globalHotkeyUnsupportedNote", &.{.{ .name = "label", .value = label, .translate = true }});
+        try draft.note("dynamic.import.apm.globalHotkeyUnsupportedNote", &.{.{ .name = "label", .value = label, .should_translate = true }});
     }
 }
 
-fn chatlog(d: *Draft, s: Source) !void {
-    const chat = values.flag(values.get(s.global, "EnableChatLogMonitoring"));
-    const game = values.flag(values.get(s.global, "EnableGameLogMonitoring"));
-    if (chat != null or game != null) {
-        try d.setBool("chatlog.enabled", (chat orelse false) or (game orelse false));
+fn chatlog(draft: *Draft, source: Source) !void {
+    const is_chatlog_enabled = values.flag(values.get(source.global, "EnableChatLogMonitoring"));
+    const is_gamelog_enabled = values.flag(values.get(source.global, "EnableGameLogMonitoring"));
+    if (is_chatlog_enabled != null or is_gamelog_enabled != null) {
+        try draft.setBool("chatlog.enabled", (is_chatlog_enabled orelse false) or (is_gamelog_enabled orelse false));
     } else {
-        try d.setBool("chatlog.enabled", values.flag(values.get(s.logs, "gameLogsMonitoringEnabled")));
+        try draft.setBool("chatlog.enabled", values.flag(values.get(source.logs, "gameLogsMonitoringEnabled")));
     }
-    try setDirectory(d, "chatlog.chatlogDir", values.stringAt(s.global, "ChatLogDirectory") orelse values.stringAt(s.logs, "chatLogsDirectory"));
-    try setDirectory(d, "chatlog.gamelogDir", values.stringAt(s.global, "GameLogDirectory") orelse values.stringAt(s.logs, "gameLogsDirectory"));
-    try d.note("dynamic.import.apm.chatlogImportedNote", &.{});
+    try setDirectory(draft, "chatlog.chatlogDir", values.stringAt(source.global, "ChatLogDirectory") orelse values.stringAt(source.logs, "chatLogsDirectory"));
+    try setDirectory(draft, "chatlog.gamelogDir", values.stringAt(source.global, "GameLogDirectory") orelse values.stringAt(source.logs, "gameLogsDirectory"));
+    try draft.note("dynamic.import.apm.chatlogImportedNote", &.{});
 }
 
-fn setDirectory(d: *Draft, path: []const u8, raw: ?[]const u8) !void {
-    if (!nonEmpty(raw)) return;
-    try d.setString(path, std.mem.trim(u8, raw.?, " \t"));
+fn setDirectory(draft: *Draft, path: []const u8, raw: ?[]const u8) !void {
+    if (!hasText(raw)) return;
+    try draft.setString(path, std.mem.trim(u8, raw.?, " \t"));
 }

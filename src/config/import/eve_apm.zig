@@ -2,18 +2,18 @@
 const std = @import("std");
 const vk = @import("../../platform/virtual_keys.zig");
 const values = @import("values.zig");
-const draft = @import("draft.zig");
+const draft_mod = @import("draft.zig");
 const eve_x = @import("eve_x.zig");
 const key_list = @import("../key_list.zig");
 
-const Draft = draft.Draft;
+const Draft = draft_mod.Draft;
 const KeyList = key_list.KeyList;
-const Section = draft.Section;
+const Section = draft_mod.Section;
 
 /// EVE-APM's OverlayPosition, and EVE-O's ZoomAnchor, list the anchors in TextPosition's order.
 const POSITIONS_IN_ORDER = [_][]const u8{ "TopLeft", "TopCenter", "TopRight", "LeftCenter", "Center", "RightCenter", "BottomLeft", "BottomCenter", "BottomRight" };
 
-/// Only the first four of EVE-APM's border styles look alike here; the rest are glow and animated effects.
+/// Only the first SUPPORTED_BORDER_STYLE_COUNT of EVE-APM's border styles look alike here; the rest are glow and animated effects.
 const BORDER_STYLES = [_][]const u8{ "Solid", "Dashed", "Dotted", "DashDot", "FadedEdges", "CornerAccents", "RoundedCorners", "Neon", "Shimmer", "ThickThin", "ElectricArc", "Rainbow", "BreathingGlow", "DoubleGlow", "Zigzag" };
 
 /// "mining_started" has no notification type here and is reported as unsupported.
@@ -28,11 +28,17 @@ const EVENT_TYPES = [_]struct { []const u8, []const u8 }{
     .{ "convo_request", "ConversationInvite" },
 };
 
+const SUPPORTED_BORDER_STYLE_COUNT = 4;
+
+/// The mouse buttons thumbnails use themselves, which `vk` has no names for.
+const VK_LBUTTON = 0x01;
+const VK_RBUTTON = 0x02;
+
 const Keys = std.array_hash_map.String([]const u8);
 
 const Font = struct { family: ?[]const u8, size: ?f64 };
 
-const Tuple = struct { enabled: bool, vk_code: ?i64, ctrl: bool, alt: bool, shift: bool };
+const Tuple = struct { is_enabled: bool, vk_code: ?i64, has_ctrl: bool, has_alt: bool, has_shift: bool };
 
 const Group = struct { members: []const []const u8, forward: ?[]const u8, backward: ?[]const u8 };
 
@@ -55,9 +61,9 @@ pub const Ini = struct {
                 current = name;
                 continue;
             }
-            const keys = ini.sections.getPtr(current orelse continue).?;
-            const eq = std.mem.findScalar(u8, line, '=') orelse continue;
-            try keys.put(arena, std.mem.trim(u8, line[0..eq], " \t"), std.mem.trim(u8, line[eq + 1 ..], " \t"));
+            const keys = ini.sections.getPtr(current orelse continue) orelse continue;
+            const equals_index = std.mem.findScalar(u8, line, '=') orelse continue;
+            try keys.put(arena, std.mem.trim(u8, line[0..equals_index], " \t"), std.mem.trim(u8, line[equals_index + 1 ..], " \t"));
         }
         return ini;
     }
@@ -110,20 +116,20 @@ fn appendCodepoint(arena: std.mem.Allocator, out: *std.ArrayList(u8), codepoint:
 }
 
 fn unquote(raw: ?[]const u8) ?[]const u8 {
-    const t = std.mem.trim(u8, raw orelse return null, " \t");
-    if (t.len >= 2 and t[0] == '"' and t[t.len - 1] == '"') return t[1 .. t.len - 1];
-    return t;
+    const trimmed = std.mem.trim(u8, raw orelse return null, " \t");
+    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') return trimmed[1 .. trimmed.len - 1];
+    return trimmed;
 }
 
 fn qtBool(raw: ?[]const u8) ?bool {
-    const t = std.mem.trim(u8, raw orelse return null, " \t");
-    return std.ascii.eqlIgnoreCase(t, "true");
+    const trimmed = std.mem.trim(u8, raw orelse return null, " \t");
+    return std.ascii.eqlIgnoreCase(trimmed, "true");
 }
 
 /// QVariant's unset value.
 fn isInvalid(raw: ?[]const u8) bool {
-    const t = std.mem.trim(u8, raw orelse return true, " \t");
-    return t.len == 0 or std.mem.eql(u8, t, "@Invalid()");
+    const trimmed = std.mem.trim(u8, raw orelse return true, " \t");
+    return trimmed.len == 0 or std.mem.eql(u8, trimmed, "@Invalid()");
 }
 
 fn qtPoint(raw: ?[]const u8) ?struct { x: i64, y: i64 } {
@@ -150,9 +156,9 @@ fn qtFont(raw: ?[]const u8) ?Font {
 }
 
 fn number(raw: ?[]const u8) ?f64 {
-    const t = std.mem.trim(u8, raw orelse return null, " \t");
-    if (t.len == 0) return null;
-    return std.fmt.parseFloat(f64, t) catch null;
+    const trimmed = std.mem.trim(u8, raw orelse return null, " \t");
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
 fn intValue(raw: ?[]const u8) ?f64 {
@@ -165,42 +171,41 @@ fn parseTuple(raw: ?[]const u8) ?Tuple {
     if (text.len == 0) return null;
     var fields: [5]?i64 = .{ null, null, null, null, null };
     var parts = std.mem.splitScalar(u8, text, ',');
-    var n: usize = 0;
-    while (parts.next()) |part| : (n += 1) {
-        if (n < fields.len) fields[n] = values.parseIntLoose(part);
+    var field_count: usize = 0;
+    while (parts.next()) |part| : (field_count += 1) {
+        if (field_count < fields.len) fields[field_count] = values.parseIntLoose(part);
     }
-    if (n < 2) return null;
-    const set = struct {
-        fn f(v: ?i64) bool {
-            return (v orelse 0) != 0;
-        }
-    }.f;
-    return .{ .enabled = set(fields[0]), .vk_code = fields[1], .ctrl = set(fields[2]), .alt = set(fields[3]), .shift = set(fields[4]) };
+    if (field_count < 2) return null;
+    return .{ .is_enabled = isNonZero(fields[0]), .vk_code = fields[1], .has_ctrl = isNonZero(fields[2]), .has_alt = isNonZero(fields[3]), .has_shift = isNonZero(fields[4]) };
+}
+
+fn isNonZero(field: ?i64) bool {
+    return (field orelse 0) != 0;
 }
 
 /// Whether something was bound at all, so a binding that can't be converted is reported rather than dropped.
 fn isBound(raw: ?[]const u8) bool {
-    const t = parseTuple(raw) orelse return false;
-    return t.enabled and (t.vk_code orelse 0) > 0;
+    const tuple = parseTuple(raw) orelse return false;
+    return tuple.is_enabled and (tuple.vk_code orelse 0) > 0;
 }
 
 /// Null for an unbound tuple and for the left and right mouse buttons, which thumbnails use themselves.
 fn tupleHotkey(raw: ?[]const u8) ?u32 {
-    const t = parseTuple(raw) orelse return null;
-    if (!t.enabled) return null;
-    const code = t.vk_code orelse return null;
-    if (code <= 0 or code > 0xFF or code == 0x01 or code == 0x02) return null;
+    const tuple = parseTuple(raw) orelse return null;
+    if (!tuple.is_enabled) return null;
+    const code = tuple.vk_code orelse return null;
+    if (code <= 0 or code > 0xFF or code == VK_LBUTTON or code == VK_RBUTTON) return null;
     var modifiers: u32 = 0;
-    if (t.ctrl) modifiers |= vk.MOD_CONTROL;
-    if (t.alt) modifiers |= vk.MOD_ALT;
-    if (t.shift) modifiers |= vk.MOD_SHIFT;
+    if (tuple.has_ctrl) modifiers |= vk.MOD_CONTROL;
+    if (tuple.has_alt) modifiers |= vk.MOD_ALT;
+    if (tuple.has_shift) modifiers |= vk.MOD_SHIFT;
     return vk.combineKey(@intCast(code), modifiers);
 }
 
-pub fn anchorName(n: ?f64) ?[]const u8 {
-    const i = n orelse return null;
-    if (i < 0 or i >= POSITIONS_IN_ORDER.len) return null;
-    return POSITIONS_IN_ORDER[@intFromFloat(i)];
+pub fn anchorName(index: ?f64) ?[]const u8 {
+    const position = index orelse return null;
+    if (position < 0 or position >= POSITIONS_IN_ORDER.len) return null;
+    return POSITIONS_IN_ORDER[@intFromFloat(position)];
 }
 
 fn eventType(event: []const u8) ?[]const u8 {
@@ -212,16 +217,16 @@ fn eventType(event: []const u8) ?[]const u8 {
 
 /// "<process>.exe::<title>" entries come from EVE-APM's overlay for non-EVE windows and aren't characters.
 fn isNonEveWindow(name: []const u8) bool {
-    const sep = std.mem.find(u8, name, "::") orelse return false;
-    const dot = std.mem.findScalarLast(u8, name[0..sep], '.') orelse return false;
-    return dot + 1 < sep;
+    const separator_index = std.mem.find(u8, name, "::") orelse return false;
+    const dot_index = std.mem.findScalarLast(u8, name[0..separator_index], '.') orelse return false;
+    return dot_index + 1 < separator_index;
 }
 
-pub fn sections(d: *Draft, ini: *const Ini) ![]const Section {
-    const positions = ini.count("thumbnailPositions");
-    const colors = ini.count("characterBorderColors");
-    const hotkeys = ini.count("characterHotkeys");
-    const groups = try groupCount(d, ini);
+pub fn sections(draft: *Draft, ini: *const Ini) ![]const Section {
+    const position_count = ini.count("thumbnailPositions");
+    const color_count = ini.count("characterBorderColors");
+    const hotkey_count = ini.count("characterHotkeys");
+    const group_count = try groupCount(draft, ini);
     const has_appearance = ini.section("ui") != null or ini.section("overlay") != null or ini.section("thumbnail") != null;
     const has_auto_minimize = ini.get("window", "minimizeInactiveClients") != null or ini.get("window", "minimizeDelay") != null or
         !isInvalid(ini.get("window", "neverMinimizeCharacters")) or !isInvalid(ini.get("window", "neverCloseCharacters"));
@@ -229,13 +234,13 @@ pub fn sections(d: *Draft, ini: *const Ini) ![]const Section {
     const has_global_hotkeys = ini.section("closeAllHotkeys") != null or ini.section("minimizeAllHotkeys") != null or
         ini.section("toggleThumbnailsVisibilityHotkeys") != null or ini.section("hotkeys") != null or ini.section("hotkey") != null;
     const has_chatlog = ini.section("chatlog") != null or ini.section("gamelog") != null;
-    const has_notifications = eve_x.nonEmpty(ini.get("combatMessages", "enabledEventTypes"));
+    const has_notifications = eve_x.hasText(ini.get("combatMessages", "enabledEventTypes"));
 
-    return d.arena.dupe(Section, &.{
+    return draft.arena.dupe(Section, &.{
         .{ .id = "thumbnailAppearance", .title = "dynamic.import.apm.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.apm.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.apm.characterPositions.title", .hint = try d.countText("dynamic.import.characterPositionsHint", positions), .available = positions > 0 },
-        .{ .id = "characterColors", .title = "dynamic.import.apm.characterColors.title", .hint = try eve_x.colorsHint(d, colors, hotkeys), .available = colors + hotkeys > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.apm.hotkeyGroups.title", .hint = try d.countText("dynamic.import.hotkeyGroupsCountHint", groups), .available = groups > 0 },
+        .{ .id = "characterPositions", .title = "dynamic.import.apm.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
+        .{ .id = "characterColors", .title = "dynamic.import.apm.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "dynamic.import.apm.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
         .{ .id = "globalHotkeys", .title = "dynamic.import.apm.globalHotkeys.title", .hint = .{ .key = "dynamic.import.apm.globalHotkeys.hint" }, .available = has_global_hotkeys },
         .{ .id = "autoMinimize", .title = "dynamic.import.apm.autoMinimize.title", .hint = .{ .key = "dynamic.import.apm.autoMinimize.hint" }, .available = has_auto_minimize },
         .{ .id = "snapping", .title = "dynamic.import.apm.snapping.title", .hint = .{ .key = "dynamic.import.apm.snapping.hint" }, .available = has_snapping },
@@ -245,14 +250,14 @@ pub fn sections(d: *Draft, ini: *const Ini) ![]const Section {
 }
 
 /// Groups with no members and no keys are the empty one EVE-APM starts with.
-fn groupCount(d: *Draft, ini: *const Ini) !usize {
+fn groupCount(draft: *Draft, ini: *const Ini) !usize {
     const groups = ini.section("cycleGroups") orelse return 0;
-    var n: usize = 0;
+    var group_count: usize = 0;
     for (groups.values()) |raw| {
-        const group = try parseGroup(d.arena, raw);
-        if (group.members.len > 0 or isBound(group.forward) or isBound(group.backward)) n += 1;
+        const group = try parseGroup(draft.arena, raw);
+        if (group.members.len > 0 or isBound(group.forward) or isBound(group.backward)) group_count += 1;
     }
-    return n;
+    return group_count;
 }
 
 /// "member,member|forward tuple|backward tuple|...".
@@ -267,171 +272,171 @@ fn parseGroup(arena: std.mem.Allocator, raw: []const u8) !Group {
     return .{ .members = members.items, .forward = parts.next(), .backward = parts.next() };
 }
 
-pub fn build(d: *Draft, ini: *const Ini, chosen: []const []const u8) !void {
-    if (draft.isChosen(chosen, "thumbnailAppearance")) try appearance(d, ini);
-    if (draft.isChosen(chosen, "characterPositions")) try characterPositions(d, ini);
-    if (draft.isChosen(chosen, "characterColors")) try colorsAndHotkeys(d, ini);
-    if (draft.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(d, ini);
-    if (draft.isChosen(chosen, "globalHotkeys")) try globalHotkeys(d, ini);
-    if (draft.isChosen(chosen, "autoMinimize")) try autoMinimize(d, ini);
-    if (draft.isChosen(chosen, "snapping")) try snapping(d, ini);
-    if (draft.isChosen(chosen, "chatlog")) try chatlog(d, ini);
-    if (draft.isChosen(chosen, "notifications")) try notifications(d, ini);
+pub fn build(draft: *Draft, ini: *const Ini, chosen: []const []const u8) !void {
+    if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, ini);
+    if (draft_mod.isChosen(chosen, "characterPositions")) try characterPositions(draft, ini);
+    if (draft_mod.isChosen(chosen, "characterColors")) try colorsAndHotkeys(draft, ini);
+    if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, ini);
+    if (draft_mod.isChosen(chosen, "globalHotkeys")) try globalHotkeys(draft, ini);
+    if (draft_mod.isChosen(chosen, "autoMinimize")) try autoMinimize(draft, ini);
+    if (draft_mod.isChosen(chosen, "snapping")) try snapping(draft, ini);
+    if (draft_mod.isChosen(chosen, "chatlog")) try chatlog(draft, ini);
+    if (draft_mod.isChosen(chosen, "notifications")) try notifications(draft, ini);
 }
 
-fn borderStyle(d: *Draft, path: []const u8, raw: ?[]const u8, label: []const u8) !void {
-    const n = values.parseIntLoose(raw orelse return) orelse return;
-    const name = if (n >= 0 and n < BORDER_STYLES.len) BORDER_STYLES[@intCast(n)] else try d.arena.print("#{d}", .{n});
-    if (n >= 0 and n < 4) return d.setString(path, name);
-    try d.note("dynamic.import.apm.borderStyleUnsupportedNote", &.{ .{ .name = "label", .value = label, .translate = true }, .{ .name = "name", .value = name } });
+fn borderStyle(draft: *Draft, path: []const u8, raw: ?[]const u8, label: []const u8) !void {
+    const style_index = values.parseIntLoose(raw orelse return) orelse return;
+    const name = if (style_index >= 0 and style_index < BORDER_STYLES.len) BORDER_STYLES[@intCast(style_index)] else try draft.arena.print("#{d}", .{style_index});
+    if (style_index >= 0 and style_index < SUPPORTED_BORDER_STYLE_COUNT) return draft.setString(path, name);
+    try draft.note("dynamic.import.apm.borderStyleUnsupportedNote", &.{ .{ .name = "label", .value = label, .should_translate = true }, .{ .name = "name", .value = name } });
 }
 
-fn appearance(d: *Draft, ini: *const Ini) !void {
-    try d.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
-    try d.setColor("thumbnail.borderColor", values.rgbColor(ini.get("ui", "highlightColor")));
-    try d.setNumber("thumbnail.borderWidth", number(ini.get("ui", "highlightBorderWidth")));
-    try d.setBool("thumbnail.showBorderWhenFocused", qtBool(ini.get("ui", "highlightActiveWindow")));
-    try d.setBool("thumbnail.hideWhenNoEveFocus", qtBool(ini.get("ui", "hideThumbnailsWhenEVENotFocused")));
-    try d.setBool("thumbnail.activeThumbnailHidden", qtBool(ini.get("ui", "hideActiveClientThumbnail")));
-    try borderStyle(d, "thumbnail.borderStyle", ini.get("ui", "activeBorderStyle"), "dynamic.import.apm.activeLabel");
+fn appearance(draft: *Draft, ini: *const Ini) !void {
+    try draft.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
+    try draft.setColor("thumbnail.borderColor", values.rgbColor(ini.get("ui", "highlightColor")));
+    try draft.setNumber("thumbnail.borderWidth", number(ini.get("ui", "highlightBorderWidth")));
+    try draft.setBool("thumbnail.showBorderWhenFocused", qtBool(ini.get("ui", "highlightActiveWindow")));
+    try draft.setBool("thumbnail.hideWhenNoEveFocus", qtBool(ini.get("ui", "hideThumbnailsWhenEVENotFocused")));
+    try draft.setBool("thumbnail.activeThumbnailHidden", qtBool(ini.get("ui", "hideActiveClientThumbnail")));
+    try borderStyle(draft, "thumbnail.borderStyle", ini.get("ui", "activeBorderStyle"), "dynamic.import.apm.activeLabel");
 
-    try d.setColor("thumbnail.inactiveBorderColor", values.rgbColor(ini.get("ui", "inactiveBorderColor")));
-    try d.setNumber("thumbnail.inactiveBorderWidth", number(ini.get("ui", "inactiveBorderWidth")));
-    try d.setBool("thumbnail.showBorderWhenInactive", qtBool(ini.get("ui", "showInactiveBorders")));
-    try borderStyle(d, "thumbnail.inactiveBorderStyle", ini.get("ui", "inactiveBorderStyle"), "dynamic.import.apm.inactiveLabel");
+    try draft.setColor("thumbnail.inactiveBorderColor", values.rgbColor(ini.get("ui", "inactiveBorderColor")));
+    try draft.setNumber("thumbnail.inactiveBorderWidth", number(ini.get("ui", "inactiveBorderWidth")));
+    try draft.setBool("thumbnail.showBorderWhenInactive", qtBool(ini.get("ui", "showInactiveBorders")));
+    try borderStyle(draft, "thumbnail.inactiveBorderStyle", ini.get("ui", "inactiveBorderStyle"), "dynamic.import.apm.inactiveLabel");
 
-    const show_name = qtBool(ini.get("overlay", "showCharacterName"));
-    const show_system = qtBool(ini.get("overlay", "showSystemName"));
-    try d.setBool("thumbnail.showCharacterName", show_name);
-    try d.setBool("thumbnail.showSystemName", show_system);
-    if (show_name != null or show_system != null) try d.setBool("thumbnail.showText", (show_name orelse false) or (show_system orelse false));
+    const is_name_shown = qtBool(ini.get("overlay", "showCharacterName"));
+    const is_system_shown = qtBool(ini.get("overlay", "showSystemName"));
+    try draft.setBool("thumbnail.showCharacterName", is_name_shown);
+    try draft.setBool("thumbnail.showSystemName", is_system_shown);
+    if (is_name_shown != null or is_system_shown != null) try draft.setBool("thumbnail.showText", (is_name_shown orelse false) or (is_system_shown orelse false));
 
-    try d.setColor("thumbnail.characterNameColor", values.rgbColor(ini.get("overlay", "characterNameColor")));
-    try d.setColor("thumbnail.systemNameColor", values.rgbColor(ini.get("overlay", "systemNameColor")));
-    try d.setBool("thumbnail.useUniqueSystemColors", qtBool(ini.get("overlay", "uniqueSystemNameColors")));
-    try d.setString("thumbnail.characterNamePosition", anchorName(intValue(ini.get("overlay", "characterNamePosition"))));
-    try d.setString("thumbnail.systemNamePosition", anchorName(intValue(ini.get("overlay", "systemNamePosition"))));
-    try d.setNumber("thumbnail.characterNameOffsetX", number(ini.get("overlay", "characterNameOffsetX")));
-    try d.setNumber("thumbnail.characterNameOffsetY", number(ini.get("overlay", "characterNameOffsetY")));
-    try d.setNumber("thumbnail.systemNameOffsetX", number(ini.get("overlay", "systemNameOffsetX")));
-    try d.setNumber("thumbnail.systemNameOffsetY", number(ini.get("overlay", "systemNameOffsetY")));
+    try draft.setColor("thumbnail.characterNameColor", values.rgbColor(ini.get("overlay", "characterNameColor")));
+    try draft.setColor("thumbnail.systemNameColor", values.rgbColor(ini.get("overlay", "systemNameColor")));
+    try draft.setBool("thumbnail.useUniqueSystemColors", qtBool(ini.get("overlay", "uniqueSystemNameColors")));
+    try draft.setString("thumbnail.characterNamePosition", anchorName(intValue(ini.get("overlay", "characterNamePosition"))));
+    try draft.setString("thumbnail.systemNamePosition", anchorName(intValue(ini.get("overlay", "systemNamePosition"))));
+    try draft.setNumber("thumbnail.characterNameOffsetX", number(ini.get("overlay", "characterNameOffsetX")));
+    try draft.setNumber("thumbnail.characterNameOffsetY", number(ini.get("overlay", "characterNameOffsetY")));
+    try draft.setNumber("thumbnail.systemNameOffsetX", number(ini.get("overlay", "systemNameOffsetX")));
+    try draft.setNumber("thumbnail.systemNameOffsetY", number(ini.get("overlay", "systemNameOffsetY")));
 
     if (values.rgbColor(ini.get("overlay", "backgroundColor"))) |background| {
-        const shown = qtBool(ini.get("overlay", "showBackground")) orelse true;
-        const alpha: f64 = if (!shown) 0 else if (number(ini.get("overlay", "backgroundOpacity"))) |percent| percent * 2.55 else 255;
+        const is_shown = qtBool(ini.get("overlay", "showBackground")) orelse true;
+        const alpha: f64 = if (!is_shown) 0 else if (number(ini.get("overlay", "backgroundOpacity"))) |percent| values.opacityFromPercent(percent) else 255;
         // One shared background, which each overlay text here has its own of.
         const color = values.withAlpha(background, alpha);
         inline for (.{ "thumbnail.characterNameBgColor", "thumbnail.systemNameBgColor", "thumbnail.quickGroupBadgeBgColor", "thumbnail.notifications.bg_color" }) |path| {
-            try d.setColor(path, color);
+            try draft.setColor(path, color);
         }
     }
 
     // Older versions have one overlay font; newer ones also a font each for the character and system name.
-    if (qtFont(ini.get("overlay", "font"))) |font| try d.setOverlayFont(font.family, font.size);
+    if (qtFont(ini.get("overlay", "font"))) |font| try draft.setOverlayFont(font.family, font.size);
     if (qtFont(ini.get("overlay", "characterNameFont"))) |font| {
-        try d.setString("thumbnail.characterNameFontName", font.family);
-        try d.setNumber("thumbnail.characterNameFontSize", font.size);
+        try draft.setString("thumbnail.characterNameFontName", font.family);
+        try draft.setNumber("thumbnail.characterNameFontSize", font.size);
     }
     if (qtFont(ini.get("overlay", "systemNameFont"))) |font| {
-        try d.setString("thumbnail.systemNameFontName", font.family);
-        try d.setNumber("thumbnail.systemNameFontSize", font.size);
+        try draft.setString("thumbnail.systemNameFontName", font.family);
+        try draft.setNumber("thumbnail.systemNameFontSize", font.size);
     }
 
-    try d.setNumber("thumbnail.width", number(ini.get("thumbnail", "width")));
-    try d.setNumber("thumbnail.height", number(ini.get("thumbnail", "height")));
-    if (number(ini.get("thumbnail", "opacity"))) |percent| try d.setNumber("thumbnail.thumbnailOpacity", values.opacityFromPercent(percent));
+    try draft.setNumber("thumbnail.width", number(ini.get("thumbnail", "width")));
+    try draft.setNumber("thumbnail.height", number(ini.get("thumbnail", "height")));
+    if (number(ini.get("thumbnail", "opacity"))) |percent| try draft.setNumber("thumbnail.thumbnailOpacity", values.opacityFromPercent(percent));
 }
 
-fn characterPositions(d: *Draft, ini: *const Ini) !void {
+fn characterPositions(draft: *Draft, ini: *const Ini) !void {
     const entries = ini.section("thumbnailPositions") orelse return;
-    var imported: usize = 0;
-    var skipped: usize = 0;
+    var imported_count: usize = 0;
+    var skipped_count: usize = 0;
     var it = entries.iterator();
     while (it.next()) |entry| {
         const point = qtPoint(entry.value_ptr.*) orelse continue;
-        const decoded = try decodeKey(d.arena, entry.key_ptr.*);
+        const decoded = try decodeKey(draft.arena, entry.key_ptr.*);
         if (isNonEveWindow(decoded)) {
-            skipped += 1;
+            skipped_count += 1;
             continue;
         }
         const name = values.characterName(decoded) orelse continue;
-        try eve_x.putPosition(d, try d.character(name), @floatFromInt(point.x), @floatFromInt(point.y));
-        imported += 1;
+        try eve_x.putPosition(draft, try draft.character(name), @floatFromInt(point.x), @floatFromInt(point.y));
+        imported_count += 1;
     }
-    try d.noteCount("dynamic.import.apm.importedPositionsNote", "n", imported);
-    if (skipped > 0) try d.noteCount("dynamic.import.apm.skippedNonEveWindowNote", "n", skipped);
+    try draft.noteCount("dynamic.import.apm.importedPositionsNote", "n", imported_count);
+    if (skipped_count > 0) try draft.noteCount("dynamic.import.apm.skippedNonEveWindowNote", "n", skipped_count);
 }
 
-fn colorsAndHotkeys(d: *Draft, ini: *const Ini) !void {
-    var skipped: usize = 0;
-    var colored: usize = 0;
+fn colorsAndHotkeys(draft: *Draft, ini: *const Ini) !void {
+    var skipped_count: usize = 0;
+    var colored_count: usize = 0;
     if (ini.section("characterBorderColors")) |entries| {
         var it = entries.iterator();
         while (it.next()) |entry| {
             const color = values.rgbColor(entry.value_ptr.*) orelse continue;
-            const decoded = try decodeKey(d.arena, entry.key_ptr.*);
+            const decoded = try decodeKey(draft.arena, entry.key_ptr.*);
             if (isNonEveWindow(decoded)) {
-                skipped += 1;
+                skipped_count += 1;
                 continue;
             }
             const name = values.characterName(decoded) orelse continue;
-            try d.put(try d.character(name), "borderColors.activeBorderColor", try values.colorValue(d.arena, color));
-            colored += 1;
+            try draft.put(try draft.character(name), "borderColors.activeBorderColor", try values.colorValue(draft.arena, color));
+            colored_count += 1;
         }
     }
 
-    var converted: usize = 0;
+    var converted_count: usize = 0;
     const hotkeys = ini.section("characterHotkeys");
     if (hotkeys) |entries| {
         var it = entries.iterator();
         while (it.next()) |entry| {
-            const decoded = try decodeKey(d.arena, entry.key_ptr.*);
+            const decoded = try decodeKey(draft.arena, entry.key_ptr.*);
             if (isNonEveWindow(decoded)) {
-                skipped += 1;
+                skipped_count += 1;
                 continue;
             }
             const name = values.characterName(decoded) orelse continue;
             const combined = tupleHotkey(entry.value_ptr.*) orelse continue;
-            try d.put(try d.character(name), "hotkey", try values.keyValue(d.arena, combined));
-            converted += 1;
+            try draft.put(try draft.character(name), "hotkey", try values.keyValue(draft.arena, combined));
+            converted_count += 1;
         }
     }
 
-    try d.noteCount("dynamic.import.importedBorderColorsCountNote", "n", colored);
-    const total = if (hotkeys) |h| h.count() else 0;
-    if (total > 0) try d.note("dynamic.import.apm.convertedHotkeysDecodedNote", &.{ .{ .name = "converted", .value = try d.format(converted) }, .{ .name = "total", .value = try d.format(total) } });
-    if (skipped > 0) try d.noteCount("dynamic.import.apm.skippedNonEveWindowNote", "n", skipped);
+    try draft.noteCount("dynamic.import.importedBorderColorsCountNote", "n", colored_count);
+    const total_count = if (hotkeys) |found| found.count() else 0;
+    if (total_count > 0) try draft.note("dynamic.import.apm.convertedHotkeysDecodedNote", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
+    if (skipped_count > 0) try draft.noteCount("dynamic.import.apm.skippedNonEveWindowNote", "n", skipped_count);
 }
 
-fn hotkeyGroups(d: *Draft, ini: *const Ini) !void {
+fn hotkeyGroups(draft: *Draft, ini: *const Ini) !void {
     const entries = ini.section("cycleGroups") orelse return;
-    const first_note = d.notes.items.len;
-    var imported: usize = 0;
+    const first_note = draft.notes.items.len;
+    var imported_count: usize = 0;
     var it = entries.iterator();
     while (it.next()) |entry| {
-        const group = try parseGroup(d.arena, entry.value_ptr.*);
+        const group = try parseGroup(draft.arena, entry.value_ptr.*);
         if (group.members.len == 0 and !isBound(group.forward) and !isBound(group.backward)) continue;
-        const name = try decodeKey(d.arena, entry.key_ptr.*);
+        const name = try decodeKey(draft.arena, entry.key_ptr.*);
         const forward = tupleHotkey(group.forward);
         const backward = tupleHotkey(group.backward);
 
-        var members = std.json.Array.init(d.arena);
+        var members: std.json.Array = .init(draft.arena);
         for (group.members) |member| try members.append(.{ .string = member });
-        const fields = try d.item("hotkeyGroups", "name", name);
-        try d.put(fields, "characters", .{ .array = members });
-        try d.put(fields, "forwardKey", if (forward) |k| try values.keyValue(d.arena, k) else .null);
-        try d.put(fields, "backwardKey", if (backward) |k| try values.keyValue(d.arena, k) else .null);
-        imported += 1;
+        const fields = try draft.item("hotkeyGroups", "name", name);
+        try draft.put(fields, "characters", .{ .array = members });
+        try draft.put(fields, "forwardKey", if (forward) |k| try values.keyValue(draft.arena, k) else .null);
+        try draft.put(fields, "backwardKey", if (backward) |k| try values.keyValue(draft.arena, k) else .null);
+        imported_count += 1;
 
-        if (forward != null or backward != null) try d.note("dynamic.import.apm.hotkeyGroupDecodedNote", &.{.{ .name = "name", .value = name }});
-        if (forward == null and isBound(group.forward)) try d.note("dynamic.import.apm.hotkeyGroupForwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
-        if (backward == null and isBound(group.backward)) try d.note("dynamic.import.apm.hotkeyGroupBackwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
+        if (forward != null or backward != null) try draft.note("dynamic.import.apm.hotkeyGroupDecodedNote", &.{.{ .name = "name", .value = name }});
+        if (forward == null and isBound(group.forward)) try draft.note("dynamic.import.apm.hotkeyGroupForwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
+        if (backward == null and isBound(group.backward)) try draft.note("dynamic.import.apm.hotkeyGroupBackwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
     }
-    try d.notes.insert(d.arena, first_note, try d.countText("dynamic.import.hotkeyGroupsImportedNote", imported));
+    try draft.notes.insert(draft.arena, first_note, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", imported_count));
 }
 
 /// EVE-APM can bind several keys to one action.
-fn actionHotkey(d: *Draft, ini: *const Ini, section_name: []const u8, key: []const u8, path: []const u8, label: []const u8) !void {
+fn actionHotkey(draft: *Draft, ini: *const Ini, section_name: []const u8, key: []const u8, path: []const u8, label: []const u8) !void {
     const raw = unquote(ini.get(section_name, key)) orelse return;
     var keys: KeyList = .empty;
     var has_unsupported = false;
@@ -444,86 +449,86 @@ fn actionHotkey(d: *Draft, ini: *const Ini, section_name: []const u8, key: []con
             has_unsupported = true;
         }
     }
-    try d.setKeys(path, keys);
-    if (has_unsupported) try d.note("dynamic.import.apm.globalHotkeyUnsupportedNote", &.{.{ .name = "label", .value = label, .translate = true }});
+    try draft.setKeys(path, keys);
+    if (has_unsupported) try draft.note("dynamic.import.apm.globalHotkeyUnsupportedNote", &.{.{ .name = "label", .value = label, .should_translate = true }});
 }
 
-fn globalHotkeys(d: *Draft, ini: *const Ini) !void {
-    try actionHotkey(d, ini, "closeAllHotkeys", "closeAllClients", "hotkeys.hotkeyCloseAll", "dynamic.import.apm.actionLabel.closeAll");
-    try actionHotkey(d, ini, "minimizeAllHotkeys", "minimizeAllClients", "hotkeys.hotkeyMinimizeAll", "dynamic.import.apm.actionLabel.minimizeAll");
-    try actionHotkey(d, ini, "toggleThumbnailsVisibilityHotkeys", "toggleThumbnailsVisibility", "hotkeys.hotkeyToggleVisibility", "dynamic.import.apm.actionLabel.toggleVisibility");
-    try actionHotkey(d, ini, "hotkeys", "suspendHotkey", "hotkeys.hotkeySuspend", "dynamic.import.apm.actionLabel.suspend");
-    try d.setBool("hotkeys.requireEveFocus", qtBool(ini.get("hotkey", "onlyWhenEVEFocused")));
-    try d.setBool("hotkeys.resetGroupIndexOnNonGroupFocus", qtBool(ini.get("hotkey", "resetGroupIndexOnNonGroupFocus")));
-    try d.note("dynamic.import.apm.globalHotkeysImportedNote", &.{});
+fn globalHotkeys(draft: *Draft, ini: *const Ini) !void {
+    try actionHotkey(draft, ini, "closeAllHotkeys", "closeAllClients", "hotkeys.hotkeyCloseAll", "dynamic.import.apm.actionLabel.closeAll");
+    try actionHotkey(draft, ini, "minimizeAllHotkeys", "minimizeAllClients", "hotkeys.hotkeyMinimizeAll", "dynamic.import.apm.actionLabel.minimizeAll");
+    try actionHotkey(draft, ini, "toggleThumbnailsVisibilityHotkeys", "toggleThumbnailsVisibility", "hotkeys.hotkeyToggleVisibility", "dynamic.import.apm.actionLabel.toggleVisibility");
+    try actionHotkey(draft, ini, "hotkeys", "suspendHotkey", "hotkeys.hotkeySuspend", "dynamic.import.apm.actionLabel.suspend");
+    try draft.setBool("hotkeys.requireEveFocus", qtBool(ini.get("hotkey", "onlyWhenEVEFocused")));
+    try draft.setBool("hotkeys.resetGroupIndexOnNonGroupFocus", qtBool(ini.get("hotkey", "resetGroupIndexOnNonGroupFocus")));
+    try draft.note("dynamic.import.apm.globalHotkeysImportedNote", &.{});
 }
 
-fn characterList(d: *Draft, raw: ?[]const u8, field: []const u8) !void {
+fn characterList(draft: *Draft, raw: ?[]const u8, field: []const u8) !void {
     if (isInvalid(raw)) return;
     var names = std.mem.splitScalar(u8, unquote(raw).?, ',');
     while (names.next()) |raw_name| {
         const name = values.characterName(raw_name) orelse continue;
-        try d.put(try d.character(name), field, .{ .bool = true });
+        try draft.put(try draft.character(name), field, .{ .bool = true });
     }
 }
 
-fn autoMinimize(d: *Draft, ini: *const Ini) !void {
-    try d.setBool("autoMinimize.enabled", qtBool(ini.get("window", "minimizeInactiveClients")));
-    try d.setNumber("autoMinimize.delayMs", intValue(ini.get("window", "minimizeDelay")));
-    try characterList(d, ini.get("window", "neverMinimizeCharacters"), "excludeFromMinimize");
-    try characterList(d, ini.get("window", "neverCloseCharacters"), "excludeFromCloseAll");
-    try d.note("dynamic.import.autoMinimizeImportedNote", &.{});
+fn autoMinimize(draft: *Draft, ini: *const Ini) !void {
+    try draft.setBool("autoMinimize.enabled", qtBool(ini.get("window", "minimizeInactiveClients")));
+    try draft.setNumber("autoMinimize.delayMs", intValue(ini.get("window", "minimizeDelay")));
+    try characterList(draft, ini.get("window", "neverMinimizeCharacters"), "excludeFromMinimize");
+    try characterList(draft, ini.get("window", "neverCloseCharacters"), "excludeFromCloseAll");
+    try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
 }
 
-fn snapping(d: *Draft, ini: *const Ini) !void {
-    try d.setBool("snapping.enabled", qtBool(ini.get("position", "enableSnapping")));
-    try d.setNumber("snapping.threshold", intValue(ini.get("position", "snapDistance")));
-    if (qtBool(ini.get("position", "lockPositions"))) |locked| try d.setBool("interaction.enableDragging", !locked);
-    try d.note("dynamic.import.snappingImportedNote", &.{});
+fn snapping(draft: *Draft, ini: *const Ini) !void {
+    try draft.setBool("snapping.enabled", qtBool(ini.get("position", "enableSnapping")));
+    try draft.setNumber("snapping.threshold", intValue(ini.get("position", "snapDistance")));
+    if (qtBool(ini.get("position", "lockPositions"))) |locked| try draft.setBool("interaction.enableDragging", !locked);
+    try draft.note("dynamic.import.snappingImportedNote", &.{});
 }
 
-fn chatlog(d: *Draft, ini: *const Ini) !void {
-    const chat = qtBool(ini.get("chatlog", "enableMonitoring"));
-    const game = qtBool(ini.get("gamelog", "enableMonitoring"));
-    if (chat != null or game != null) try d.setBool("chatlog.enabled", (chat orelse false) or (game orelse false));
-    if (unquote(ini.get("chatlog", "directory"))) |dir| {
-        if (dir.len > 0) try d.setString("chatlog.chatlogDir", dir);
+fn chatlog(draft: *Draft, ini: *const Ini) !void {
+    const is_chatlog_enabled = qtBool(ini.get("chatlog", "enableMonitoring"));
+    const is_gamelog_enabled = qtBool(ini.get("gamelog", "enableMonitoring"));
+    if (is_chatlog_enabled != null or is_gamelog_enabled != null) try draft.setBool("chatlog.enabled", (is_chatlog_enabled orelse false) or (is_gamelog_enabled orelse false));
+    if (unquote(ini.get("chatlog", "directory"))) |directory| {
+        if (directory.len > 0) try draft.setString("chatlog.chatlogDir", directory);
     }
-    if (unquote(ini.get("gamelog", "directory"))) |dir| {
-        if (dir.len > 0) try d.setString("chatlog.gamelogDir", dir);
+    if (unquote(ini.get("gamelog", "directory"))) |directory| {
+        if (directory.len > 0) try draft.setString("chatlog.gamelogDir", directory);
     }
-    try d.note("dynamic.import.apm.chatlogImportedNote", &.{});
+    try draft.note("dynamic.import.apm.chatlogImportedNote", &.{});
 }
 
-fn notifications(d: *Draft, ini: *const Ini) !void {
-    try d.setBool("thumbnail.notifications.enabled", qtBool(ini.get("combatMessages", "enabled")));
+fn notifications(draft: *Draft, ini: *const Ini) !void {
+    try draft.setBool("thumbnail.notifications.enabled", qtBool(ini.get("combatMessages", "enabled")));
     const default_duration = intValue(ini.get("combatMessages", "duration"));
     const color = values.rgbColor(ini.get("combatMessages", "color"));
     const suppress_all = qtBool(ini.get("combatMessages", "suppressWhenFocused"));
 
-    var mapped: usize = 0;
-    var total: usize = 0;
+    var mapped_count: usize = 0;
+    var total_count: usize = 0;
     var events = std.mem.splitScalar(u8, ini.get("combatMessages", "enabledEventTypes") orelse "", ',');
     while (events.next()) |raw| {
         const event = std.mem.trim(u8, raw, " \t");
         if (event.len == 0) continue;
-        total += 1;
+        total_count += 1;
         const target = eventType(event) orelse {
-            try d.note("dynamic.import.apm.eventTypeUnsupportedNote", &.{.{ .name = "evt", .value = event }});
+            try draft.note("dynamic.import.apm.eventTypeUnsupportedNote", &.{.{ .name = "evt", .value = event }});
             continue;
         };
-        const base = try d.arena.print("thumbnail.notifications.type_configs.{s}.", .{target});
-        try d.setBool(try concat(d, base, "enabled"), true);
-        const duration_key = try d.arena.print("eventDurations\\{s}", .{event});
-        try d.setNumber(try concat(d, base, "duration_ms"), intValue(ini.get("combatMessages", duration_key)) orelse default_duration);
-        try d.setColor(try concat(d, base, "border_color"), color);
-        const suppress_key = try d.arena.print("suppressFocused\\{s}", .{event});
-        try d.setBool(try concat(d, base, "suppress_when_focused"), qtBool(ini.get("combatMessages", suppress_key)) orelse suppress_all);
-        mapped += 1;
+        const base = try draft.arena.print("thumbnail.notifications.type_configs.{s}.", .{target});
+        try draft.setBool(try concat(draft, base, "enabled"), true);
+        const duration_key = try draft.arena.print("eventDurations\\{s}", .{event});
+        try draft.setNumber(try concat(draft, base, "duration_ms"), intValue(ini.get("combatMessages", duration_key)) orelse default_duration);
+        try draft.setColor(try concat(draft, base, "border_color"), color);
+        const suppress_key = try draft.arena.print("suppressFocused\\{s}", .{event});
+        try draft.setBool(try concat(draft, base, "suppress_when_focused"), qtBool(ini.get("combatMessages", suppress_key)) orelse suppress_all);
+        mapped_count += 1;
     }
-    if (total > 0) try d.note("dynamic.import.apm.notificationTypesImportedNote", &.{ .{ .name = "mapped", .value = try d.format(mapped) }, .{ .name = "total", .value = try d.format(total) } });
+    if (total_count > 0) try draft.note("dynamic.import.apm.notificationTypesImportedNote", &.{ .{ .name = "mapped", .value = try draft.format(mapped_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
 }
 
-fn concat(d: *Draft, a: []const u8, b: []const u8) ![]const u8 {
-    return std.mem.concat(d.arena, u8, &.{ a, b });
+fn concat(draft: *Draft, prefix: []const u8, suffix: []const u8) ![]const u8 {
+    return std.mem.concat(draft.arena, u8, &.{ prefix, suffix });
 }

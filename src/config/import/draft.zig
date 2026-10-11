@@ -10,32 +10,34 @@ const KeyList = key_list.KeyList;
 const ObjectMap = std.json.ObjectMap;
 const Config = config.Config;
 
-/// Matches list items on this field; characters, hotkey groups and spaces keep their ids, other lists are replaced whole.
-const MERGED_LISTS = [_]struct { []const u8, []const u8 }{
-    .{ "characters", "name" },
-    .{ "hotkeyGroups", "name" },
-    .{ "thumbnailSpaces", "name" },
-    .{ "systemColors", "systemName" },
-    .{ "windowFilters", "name" },
+const MERGED_LISTS = [_]MergedList{
+    .{ .name = "characters", .key_field = "name", .keeps_ids = true },
+    .{ .name = "hotkeyGroups", .key_field = "name", .keeps_ids = true },
+    .{ .name = "thumbnailSpaces", .key_field = "name", .keeps_ids = true },
+    .{ .name = "systemColors", .key_field = "systemName", .keeps_ids = false },
+    .{ .name = "windowFilters", .key_field = "name", .keeps_ids = false },
 };
+
+/// A list whose items are matched on `key_field`; one that `keeps_ids` is edited item by item, any other is replaced whole.
+const MergedList = struct { name: []const u8, key_field: []const u8, keeps_ids: bool };
 
 /// A translation key and its parameters, which the config dialog puts into words.
 pub const Text = struct {
     key: []const u8,
     parameters: []const Parameter = &.{},
 
-    pub fn jsonStringify(self: Text, jw: anytype) !void {
-        try jw.beginObject();
-        try jw.objectField("key");
-        try jw.write(self.key);
-        try jw.objectField("params");
-        try jw.beginObject();
+    pub fn jsonStringify(self: Text, json_writer: anytype) !void {
+        try json_writer.beginObject();
+        try json_writer.objectField("key");
+        try json_writer.write(self.key);
+        try json_writer.objectField("params");
+        try json_writer.beginObject();
         for (self.parameters) |parameter| {
-            try jw.objectField(parameter.name);
-            if (parameter.translate) try jw.write(.{ .t = parameter.value }) else try jw.write(parameter.value);
+            try json_writer.objectField(parameter.name);
+            if (parameter.should_translate) try json_writer.write(.{ .t = parameter.value }) else try json_writer.write(parameter.value);
         }
-        try jw.endObject();
-        try jw.endObject();
+        try json_writer.endObject();
+        try json_writer.endObject();
     }
 };
 
@@ -47,8 +49,8 @@ pub const Section = struct {
     available: bool,
 };
 
-/// `translate` marks `value` as a translation key of its own, e.g. the label of the hotkey a note is about.
-pub const Parameter = struct { name: []const u8, value: []const u8, translate: bool = false };
+/// `should_translate` marks `value` as a translation key of its own, e.g. the label of the hotkey a note is about.
+pub const Parameter = struct { name: []const u8, value: []const u8, should_translate: bool = false };
 
 pub const Draft = struct {
     arena: std.mem.Allocator,
@@ -70,16 +72,17 @@ pub const Draft = struct {
         return .{ .key = key, .parameters = try self.arena.dupe(Parameter, parameters) };
     }
 
-    pub fn countText(self: *Draft, key: []const u8, n: usize) !Text {
-        return self.text(key, &.{.{ .name = "n", .value = try self.format(n) }});
+    pub fn countText(self: *Draft, key: []const u8, item_count: usize) !Text {
+        return self.text(key, &.{.{ .name = "n", .value = try self.format(item_count) }});
     }
 
-    pub fn noteCount(self: *Draft, key: []const u8, name: []const u8, n: usize) !void {
-        try self.note(key, &.{.{ .name = name, .value = try self.format(n) }});
+    pub fn noteCount(self: *Draft, key: []const u8, name: []const u8, item_count: usize) !void {
+        try self.note(key, &.{.{ .name = name, .value = try self.format(item_count) }});
     }
 
-    pub fn format(self: *Draft, n: anytype) ![]const u8 {
-        return self.arena.print("{d}", .{n});
+    /// `number` is any integer or float.
+    pub fn format(self: *Draft, number: anytype) ![]const u8 {
+        return self.arena.print("{d}", .{number});
     }
 
     /// Sets a field by its dotted path, e.g. "thumbnail.borderWidth".
@@ -87,16 +90,16 @@ pub const Draft = struct {
         try setIn(self.arena, &self.root, path, value);
     }
 
-    pub fn setNumber(self: *Draft, path: []const u8, n: ?f64) !void {
-        if (n) |v| try self.set(path, values.numberValue(v));
+    pub fn setNumber(self: *Draft, path: []const u8, value: ?f64) !void {
+        if (value) |v| try self.set(path, values.numberValue(v));
     }
 
-    pub fn setBool(self: *Draft, path: []const u8, b: ?bool) !void {
-        if (b) |v| try self.set(path, .{ .bool = v });
+    pub fn setBool(self: *Draft, path: []const u8, value: ?bool) !void {
+        if (value) |v| try self.set(path, .{ .bool = v });
     }
 
-    pub fn setString(self: *Draft, path: []const u8, s: ?[]const u8) !void {
-        if (s) |v| try self.set(path, .{ .string = v });
+    pub fn setString(self: *Draft, path: []const u8, value: ?[]const u8) !void {
+        if (value) |v| try self.set(path, .{ .string = v });
     }
 
     pub fn setColor(self: *Draft, path: []const u8, color: ?u32) !void {
@@ -138,7 +141,7 @@ pub const Draft = struct {
 
     fn listNamed(self: *Draft, name: []const u8) !*std.json.Array {
         const entry = try self.root.getOrPut(self.arena, name);
-        if (!entry.found_existing) entry.value_ptr.* = .{ .array = std.json.Array.init(self.arena) };
+        if (!entry.found_existing) entry.value_ptr.* = .{ .array = .init(self.arena) };
         return &entry.value_ptr.array;
     }
 
@@ -159,18 +162,18 @@ fn setIn(arena: std.mem.Allocator, root: *ObjectMap, path: []const u8, value: Va
     try node.put(arena, key, value);
 }
 
-/// `value` in its saved shape (plus each keyed list item's id), for merging.
 pub fn isChosen(chosen: []const []const u8, id: []const u8) bool {
-    for (chosen) |c| {
-        if (std.mem.eql(u8, c, id)) return true;
+    for (chosen) |chosen_id| {
+        if (std.mem.eql(u8, chosen_id, id)) return true;
     }
     return false;
 }
 
+/// `value` in its saved shape (plus each keyed list item's id), for merging.
 pub fn toValue(arena: std.mem.Allocator, comptime T: type, value: *const T, path: []const Value) !Value {
     var out: std.Io.Writer.Allocating = .init(arena);
-    var jw: std.json.Stringify = .{ .writer = &out.writer };
-    try patch.writeAt(&jw, T, value, path);
+    var json_writer: std.json.Stringify = .{ .writer = &out.writer };
+    try patch.writeAt(&json_writer, T, value, path);
     return std.json.parseFromSliceLeaky(Value, arena, out.written(), .{});
 }
 
@@ -182,13 +185,13 @@ pub fn toOps(arena: std.mem.Allocator, draft: *const Draft, doc: *const Config) 
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const value = entry.value_ptr.*;
-        if (mergedListKey(key)) |key_field| {
+        if (findMergedList(key)) |merged| {
             if (value != .array) continue;
             const existing = try toValue(arena, Config, doc, &.{.{ .string = key }});
-            if (std.mem.eql(u8, key, "characters") or std.mem.eql(u8, key, "hotkeyGroups") or std.mem.eql(u8, key, "thumbnailSpaces")) {
-                try keyedListOps(arena, &ops, key, key_field, existing.array.items, value.array.items);
+            if (merged.keeps_ids) {
+                try keyedListOps(arena, &ops, key, merged.key_field, existing.array.items, value.array.items);
             } else {
-                try ops.append(arena, try setOp(arena, &.{key}, try mergedList(arena, key_field, existing.array.items, value.array.items)));
+                try ops.append(arena, try setOp(arena, &.{key}, try mergedList(arena, merged.key_field, existing.array.items, value.array.items)));
             }
         } else {
             try fieldOps(arena, &ops, &.{key}, value);
@@ -197,9 +200,9 @@ pub fn toOps(arena: std.mem.Allocator, draft: *const Draft, doc: *const Config) 
     return ops.items;
 }
 
-fn mergedListKey(name: []const u8) ?[]const u8 {
-    for (MERGED_LISTS) |entry| {
-        if (std.mem.eql(u8, entry[0], name)) return entry[1];
+fn findMergedList(name: []const u8) ?MergedList {
+    for (MERGED_LISTS) |merged| {
+        if (std.mem.eql(u8, merged.name, name)) return merged;
     }
     return null;
 }
@@ -227,7 +230,7 @@ fn keyedListOps(arena: std.mem.Allocator, ops: *std.ArrayList(patch.Op), list_na
     if (namesAny(incoming, key_field)) {
         for (existing) |entry| {
             if (!isPlaceholder(entry, key_field)) continue;
-            const id = entry.object.get("id").?.integer;
+            const id = (entry.object.get("id") orelse continue).integer;
             try removed.append(arena, id);
             const path = try arena.dupe(Value, &.{ .{ .string = list_name }, .{ .integer = id } });
             try ops.append(arena, .{ .op = "remove", .path = path });
@@ -241,7 +244,7 @@ fn keyedListOps(arena: std.mem.Allocator, ops: *std.ArrayList(patch.Op), list_na
             try ops.append(arena, .{ .op = "insert", .path = try arena.dupe(Value, &.{.{ .string = list_name }}), .value = try withoutId(arena, item) });
             continue;
         };
-        const id = target.object.get("id").?;
+        const id = target.object.get("id") orelse continue;
         var it = item.object.iterator();
         while (it.next()) |field| {
             const name = field.key_ptr.*;
@@ -259,10 +262,10 @@ fn keyedListOps(arena: std.mem.Allocator, ops: *std.ArrayList(patch.Op), list_na
 
 /// The existing list with each incoming item merged over the one of the same name, or added.
 fn mergedList(arena: std.mem.Allocator, key_field: []const u8, existing: []const Value, incoming: []const Value) !Value {
-    var out = std.json.Array.init(arena);
-    const drop_placeholders = namesAny(incoming, key_field);
+    var out: std.json.Array = .init(arena);
+    const should_drop_placeholders = namesAny(incoming, key_field);
     for (existing) |entry| {
-        if (drop_placeholders and isPlaceholder(entry, key_field)) continue;
+        if (should_drop_placeholders and isPlaceholder(entry, key_field)) continue;
         try out.append(entry);
     }
     for (incoming) |item| {
@@ -278,9 +281,9 @@ fn mergedList(arena: std.mem.Allocator, key_field: []const u8, existing: []const
 
 fn overlay(arena: std.mem.Allocator, base: ?Value, top: Value) !Value {
     var fields: ObjectMap = .empty;
-    if (base) |b| {
-        if (b == .object) {
-            var it = b.object.iterator();
+    if (base) |base_value| {
+        if (base_value == .object) {
+            var it = base_value.object.iterator();
             while (it.next()) |entry| try fields.put(arena, entry.key_ptr.*, entry.value_ptr.*);
         }
     }
@@ -314,7 +317,7 @@ fn findByKey(items: []const Value, key_field: []const u8, key: []const u8, skip_
     for (items) |item| {
         const name = keyOf(item, key_field) orelse continue;
         if (!std.ascii.eqlIgnoreCase(name, key)) continue;
-        const id = item.object.get("id").?.integer;
+        const id = (item.object.get("id") orelse continue).integer;
         if (std.mem.findScalar(i64, skip_ids, id) != null) continue;
         return item;
     }
@@ -337,4 +340,43 @@ fn isPlaceholder(item: Value, key_field: []const u8) bool {
         }
     }
     return true;
+}
+
+const testing = std.testing;
+
+fn parseTestJson(arena: std.mem.Allocator, text: []const u8) ![]const Value {
+    return (try std.json.parseFromSliceLeaky(Value, arena, text, .{})).array.items;
+}
+
+test "mergedList overlays an item of the same name, ignoring case, and appends new ones" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const existing = try parseTestJson(arena, "[{\"systemName\":\"Jita\",\"color\":\"0xFF000000\"}]");
+    const incoming = try parseTestJson(arena, "[{\"systemName\":\"jita\",\"color\":\"0xFFFFFFFF\"},{\"systemName\":\"Amarr\"}]");
+    const merged = try mergedList(arena, "systemName", existing, incoming);
+    try testing.expectEqual(@as(usize, 2), merged.array.items.len);
+    try testing.expectEqualStrings("0xFFFFFFFF", merged.array.items[0].object.get("color").?.string);
+    try testing.expectEqualStrings("Amarr", merged.array.items[1].object.get("systemName").?.string);
+}
+
+test "mergedList drops an unnamed placeholder once the import names real entries" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const existing = try parseTestJson(arena, "[{\"name\":\"\",\"executable\":\"\",\"enabled\":false}]");
+    const incoming = try parseTestJson(arena, "[{\"name\":\"Discord\"}]");
+    const merged = try mergedList(arena, "name", existing, incoming);
+    try testing.expectEqual(@as(usize, 1), merged.array.items.len);
+    try testing.expectEqualStrings("Discord", merged.array.items[0].object.get("name").?.string);
+}
+
+test "isPlaceholder needs an empty name and every other field empty" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const items = try parseTestJson(arena, "[{\"name\":\"\",\"id\":3,\"enabled\":false},{\"name\":\"\",\"enabled\":true},{\"name\":\"Pilot\"}]");
+    try testing.expect(isPlaceholder(items[0], "name"));
+    try testing.expect(!isPlaceholder(items[1], "name"));
+    try testing.expect(!isPlaceholder(items[2], "name"));
 }

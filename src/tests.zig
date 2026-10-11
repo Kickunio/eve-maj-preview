@@ -6,6 +6,7 @@ test {
     _ = @import("chatlog/lines.zig");
     _ = @import("chatlog/utf16.zig");
     _ = @import("clients/scout.zig");
+    _ = @import("config/import/draft.zig");
     _ = @import("config/import/values.zig");
     _ = @import("config/key_list.zig");
     _ = @import("config/migrate.zig");

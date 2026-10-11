@@ -2,15 +2,20 @@
 const std = @import("std");
 const vk = @import("../../platform/virtual_keys.zig");
 const values = @import("values.zig");
-const draft = @import("draft.zig");
+const draft_mod = @import("draft.zig");
 const eve_x = @import("eve_x.zig");
 const eve_apm = @import("eve_apm.zig");
 const key_list = @import("../key_list.zig");
 
 const Value = std.json.Value;
-const Draft = draft.Draft;
+const Draft = draft_mod.Draft;
 const KeyList = key_list.KeyList;
-const Section = draft.Section;
+const Section = draft_mod.Section;
+
+/// EVE-O Preview's fixed number of cycle groups.
+const CYCLE_GROUP_COUNT = 5;
+/// Right Win, which `vk` has no name for.
+const VK_RWIN = 0x5C;
 
 /// .NET's named colours, the CSS3/X11 set.
 const NAMED_COLORS = [_]struct { []const u8, u24 }{
@@ -63,37 +68,37 @@ pub fn isFile(root: Value) bool {
 
 /// "#RRGGBB", "#AARRGGBB" (its alpha dropped, as borders and text here are opaque) or a .NET colour name.
 fn color(text: ?[]const u8) ?u32 {
-    const s = std.mem.trim(u8, text orelse return null, " \t");
-    if (std.mem.startsWith(u8, s, "#")) {
-        if (s.len == 9) {
-            const argb = std.fmt.parseInt(u32, s[1..], 16) catch return null;
+    const trimmed = std.mem.trim(u8, text orelse return null, " \t");
+    if (std.mem.startsWith(u8, trimmed, "#")) {
+        if (trimmed.len == 9) {
+            const argb = std.fmt.parseInt(u32, trimmed[1..], 16) catch return null;
             return 0xFF000000 | (argb & 0x00FFFFFF);
         }
-        return values.rgbColor(s);
+        return values.rgbColor(trimmed);
     }
     for (NAMED_COLORS) |entry| {
-        if (std.ascii.eqlIgnoreCase(s, entry[0])) return 0xFF000000 | @as(u32, entry[1]);
+        if (std.ascii.eqlIgnoreCase(trimmed, entry[0])) return 0xFF000000 | @as(u32, entry[1]);
     }
     return null;
 }
 
 /// WinForms writes a Size or Point as "W, H" / "X, Y".
 fn pair(value: ?Value) ?[2]f64 {
-    const v = value orelse return null;
-    if (v != .string) return null;
-    var parts = std.mem.tokenizeAny(u8, v.string, ", \t");
-    const a = values.parseIntLoose(parts.next()) orelse return null;
-    const b = values.parseIntLoose(parts.next()) orelse return null;
-    return .{ @floatFromInt(a), @floatFromInt(b) };
+    const unwrapped = value orelse return null;
+    if (unwrapped != .string) return null;
+    var parts = std.mem.tokenizeAny(u8, unwrapped.string, ", \t");
+    const first = values.parseIntLoose(parts.next()) orelse return null;
+    const second = values.parseIntLoose(parts.next()) orelse return null;
+    return .{ @floatFromInt(first), @floatFromInt(second) };
 }
 
 /// WinForms' Keys names the digit row "D0".."D9" and has LWin/RWin keys of its own.
 fn baseKey(token: []const u8) ?u32 {
-    const t = std.mem.trim(u8, token, " \t");
-    if (t.len == 2 and (t[0] == 'D' or t[0] == 'd') and std.ascii.isDigit(t[1])) return t[1];
-    if (std.ascii.eqlIgnoreCase(t, "lwin")) return vk.VK_LWIN;
-    if (std.ascii.eqlIgnoreCase(t, "rwin")) return 0x5C;
-    return values.legacyBaseKey(t);
+    const trimmed = std.mem.trim(u8, token, " \t");
+    if (trimmed.len == 2 and (trimmed[0] == 'D' or trimmed[0] == 'd') and std.ascii.isDigit(trimmed[1])) return trimmed[1];
+    if (std.ascii.eqlIgnoreCase(trimmed, "lwin")) return vk.VK_LWIN;
+    if (std.ascii.eqlIgnoreCase(trimmed, "rwin")) return VK_RWIN;
+    return values.legacyBaseKey(trimmed);
 }
 
 /// "Control+Alt+F14"; WinForms' key flags have no Windows-key modifier.
@@ -130,11 +135,11 @@ fn boundKeys(arena: std.mem.Allocator, list: []const Value) ![]const []const u8 
 }
 
 /// Every key that converts, noting each one that doesn't; EVE-O Preview can bind several.
-fn groupKeys(d: *Draft, bound: []const []const u8, group_name: []const u8, failed_note: []const u8) !KeyList {
+fn groupKeys(draft: *Draft, bound: []const []const u8, group_name: []const u8, failed_note: []const u8) !KeyList {
     var keys: KeyList = .empty;
     for (bound) |raw| {
         const combined = hotkey(raw) orelse {
-            try d.note(failed_note, &.{ .{ .name = "name", .value = group_name }, .{ .name = "key", .value = raw } });
+            try draft.note(failed_note, &.{ .{ .name = "name", .value = group_name }, .{ .name = "key", .value = raw } });
             continue;
         };
         _ = keys.append(combined);
@@ -143,8 +148,8 @@ fn groupKeys(d: *Draft, bound: []const []const u8, group_name: []const u8, faile
 }
 
 /// In the order EVE-O Preview cycles them, its ClientsOrder index.
-fn cycleGroupMembers(arena: std.mem.Allocator, root: Value, n: usize) ![]const []const u8 {
-    const key = try arena.print("CycleGroup{d}ClientsOrder", .{n});
+fn cycleGroupMembers(arena: std.mem.Allocator, root: Value, group_number: usize) ![]const []const u8 {
+    const key = try arena.print("CycleGroup{d}ClientsOrder", .{group_number});
     const order = values.objectAt(root, key) orelse return &.{};
     const Member = struct { name: []const u8, order: f64 };
     var members: std.ArrayList(Member) = .empty;
@@ -163,205 +168,205 @@ fn cycleGroupMembers(arena: std.mem.Allocator, root: Value, n: usize) ![]const [
     return names;
 }
 
-fn countCharacters(map: ?Value, seen: *std.array_hash_map.String(void), arena: std.mem.Allocator) !usize {
-    const m = map orelse return 0;
-    var n: usize = 0;
-    for (m.object.keys()) |key| {
+fn countCharacters(arena: std.mem.Allocator, map: ?Value, seen: *std.array_hash_map.String(void)) !usize {
+    const object = map orelse return 0;
+    var new_count: usize = 0;
+    for (object.object.keys()) |key| {
         const name = values.characterName(key) orelse continue;
-        if (!(try seen.getOrPut(arena, name)).found_existing) n += 1;
+        if (!(try seen.getOrPut(arena, name)).found_existing) new_count += 1;
     }
-    return n;
+    return new_count;
 }
 
-pub fn sections(d: *Draft, root: Value) ![]const Section {
+pub fn sections(draft: *Draft, root: Value) ![]const Section {
     var positioned: std.array_hash_map.String(void) = .empty;
-    var n_positions: usize = 0;
+    var position_count: usize = 0;
     inline for (.{ "FlatLayout", "PerClientThumbnailSize", "DisableThumbnail" }) |map| {
-        n_positions += try countCharacters(values.objectAt(root, map), &positioned, d.arena);
+        position_count += try countCharacters(draft.arena, values.objectAt(root, map), &positioned);
     }
     var colored: std.array_hash_map.String(void) = .empty;
-    const n_colors = try countCharacters(values.objectAt(root, "PerClientActiveClientHighlightColor"), &colored, d.arena);
+    const color_count = try countCharacters(draft.arena, values.objectAt(root, "PerClientActiveClientHighlightColor"), &colored);
     var hotkeyed: std.array_hash_map.String(void) = .empty;
-    const n_hotkeys = try countCharacters(values.objectAt(root, "ClientHotkey"), &hotkeyed, d.arena);
-    var n_groups: usize = 0;
-    for (1..6) |n| {
-        if ((try cycleGroupMembers(d.arena, root, n)).len > 0) n_groups += 1;
+    const hotkey_count = try countCharacters(draft.arena, values.objectAt(root, "ClientHotkey"), &hotkeyed);
+    var group_count: usize = 0;
+    for (1..CYCLE_GROUP_COUNT + 1) |group_number| {
+        if ((try cycleGroupMembers(draft.arena, root, group_number)).len > 0) group_count += 1;
     }
     const has_appearance = values.has(root, "ThumbnailsOpacity") or values.has(root, "ActiveClientHighlightColor") or
         values.has(root, "OverlayLabelColor") or values.has(root, "ThumbnailSize");
 
-    return d.arena.dupe(Section, &.{
+    return draft.arena.dupe(Section, &.{
         .{ .id = "thumbnailAppearance", .title = "dynamic.import.eveo.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.eveo.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.eveo.characterPositions.title", .hint = try d.countText("dynamic.import.characterPositionsHint", n_positions), .available = n_positions > 0 },
-        .{ .id = "characterColors", .title = "dynamic.import.eveo.characterColors.title", .hint = try eve_x.colorsHint(d, n_colors, n_hotkeys), .available = n_colors + n_hotkeys > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.eveo.hotkeyGroups.title", .hint = try d.countText("dynamic.import.hotkeyGroupsCountHint", n_groups), .available = n_groups > 0 },
+        .{ .id = "characterPositions", .title = "dynamic.import.eveo.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
+        .{ .id = "characterColors", .title = "dynamic.import.eveo.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "dynamic.import.eveo.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
         .{ .id = "autoMinimize", .title = "dynamic.import.eveo.autoMinimize.title", .hint = .{ .key = "dynamic.import.eveo.autoMinimize.hint" }, .available = values.has(root, "MinimizeInactiveClients") },
         .{ .id = "snapping", .title = "dynamic.import.eveo.snapping.title", .hint = .{ .key = "dynamic.import.eveo.snapping.hint" }, .available = values.has(root, "EnableThumbnailSnap") },
     });
 }
 
 /// `cycle_group_name` is the translated "Cycle Group {n}", since EVE-O Preview's groups have no names.
-pub fn build(d: *Draft, root: Value, chosen: []const []const u8, cycle_group_name: []const u8) !void {
-    if (draft.isChosen(chosen, "thumbnailAppearance")) try appearance(d, root);
-    if (draft.isChosen(chosen, "characterPositions")) try characterPositions(d, root);
-    if (draft.isChosen(chosen, "characterColors")) try colorsAndHotkeys(d, root);
-    if (draft.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(d, root, cycle_group_name);
-    if (draft.isChosen(chosen, "autoMinimize")) {
-        if (values.get(root, "MinimizeInactiveClients")) |v| try d.setBool("autoMinimize.enabled", values.truthy(v));
-        try d.note("dynamic.import.autoMinimizeImportedNote", &.{});
+pub fn build(draft: *Draft, root: Value, chosen: []const []const u8, cycle_group_name: []const u8) !void {
+    if (draft_mod.isChosen(chosen, "thumbnailAppearance")) try appearance(draft, root);
+    if (draft_mod.isChosen(chosen, "characterPositions")) try characterPositions(draft, root);
+    if (draft_mod.isChosen(chosen, "characterColors")) try colorsAndHotkeys(draft, root);
+    if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, root, cycle_group_name);
+    if (draft_mod.isChosen(chosen, "autoMinimize")) {
+        if (values.get(root, "MinimizeInactiveClients")) |v| try draft.setBool("autoMinimize.enabled", values.truthy(v));
+        try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
     }
-    if (draft.isChosen(chosen, "snapping")) {
-        if (values.get(root, "EnableThumbnailSnap")) |v| try d.setBool("snapping.enabled", values.truthy(v));
-        try d.note("dynamic.import.snappingImportedNote", &.{});
+    if (draft_mod.isChosen(chosen, "snapping")) {
+        if (values.get(root, "EnableThumbnailSnap")) |v| try draft.setBool("snapping.enabled", values.truthy(v));
+        try draft.note("dynamic.import.snappingImportedNote", &.{});
     }
 }
 
-fn appearance(d: *Draft, root: Value) !void {
-    try d.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
+fn appearance(draft: *Draft, root: Value) !void {
+    try draft.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
     if (values.jsonNumber(values.get(root, "ThumbnailsOpacity"))) |fraction| {
-        try d.setNumber("thumbnail.thumbnailOpacity", std.math.clamp(@round(fraction * 255), 0, 255));
+        try draft.setNumber("thumbnail.thumbnailOpacity", std.math.clamp(@round(fraction * 255), 0, 255));
     }
-    if (values.get(root, "EnableActiveClientHighlight")) |v| try d.setBool("thumbnail.showBorderWhenFocused", values.truthy(v));
+    if (values.get(root, "EnableActiveClientHighlight")) |v| try draft.setBool("thumbnail.showBorderWhenFocused", values.truthy(v));
     if (values.stringAt(root, "ActiveClientHighlightColor")) |raw| {
-        if (color(raw)) |c| {
-            try d.setColor("thumbnail.borderColor", c);
+        if (color(raw)) |parsed| {
+            try draft.setColor("thumbnail.borderColor", parsed);
         } else {
-            try d.note("dynamic.import.eveo.activeColorUnrecognizedNote", &.{.{ .name = "color", .value = raw }});
+            try draft.note("dynamic.import.eveo.activeColorUnrecognizedNote", &.{.{ .name = "color", .value = raw }});
         }
     }
-    try d.setNumber("thumbnail.borderWidth", values.jsonNumber(values.get(root, "ActiveClientHighlightThickness")));
+    try draft.setNumber("thumbnail.borderWidth", values.jsonNumber(values.get(root, "ActiveClientHighlightThickness")));
 
     // One "frames on every thumbnail" toggle rather than separate active and inactive borders.
-    if (values.get(root, "ShowThumbnailFrames")) |v| try d.setBool("thumbnail.showBorderWhenInactive", values.truthy(v));
-    if (values.get(root, "ShowThumbnailOverlays")) |v| try d.setBool("thumbnail.showText", values.truthy(v));
+    if (values.get(root, "ShowThumbnailFrames")) |v| try draft.setBool("thumbnail.showBorderWhenInactive", values.truthy(v));
+    if (values.get(root, "ShowThumbnailOverlays")) |v| try draft.setBool("thumbnail.showText", values.truthy(v));
 
     if (values.stringAt(root, "OverlayLabelColor")) |raw| {
-        if (color(raw)) |c| {
-            try d.setColor("thumbnail.characterNameColor", c);
+        if (color(raw)) |parsed| {
+            try draft.setColor("thumbnail.characterNameColor", parsed);
         } else {
-            try d.note("dynamic.import.eveo.labelColorUnrecognizedNote", &.{.{ .name = "color", .value = raw }});
+            try draft.note("dynamic.import.eveo.labelColorUnrecognizedNote", &.{.{ .name = "color", .value = raw }});
         }
     }
-    try d.setOverlayFont(null, values.jsonNumber(values.get(root, "OverlayLabelSize")));
-    try d.setString("thumbnail.characterNamePosition", eve_apm.anchorName(values.jsonNumber(values.get(root, "OverlayLabelAnchor"))));
+    try draft.setOverlayFont(null, values.jsonNumber(values.get(root, "OverlayLabelSize")));
+    try draft.setString("thumbnail.characterNamePosition", eve_apm.anchorName(values.jsonNumber(values.get(root, "OverlayLabelAnchor"))));
 
-    if (values.get(root, "HideThumbnailsOnLostFocus")) |v| try d.setBool("thumbnail.hideWhenNoEveFocus", values.truthy(v));
-    if (values.get(root, "HideActiveClientThumbnail")) |v| try d.setBool("thumbnail.activeThumbnailHidden", values.truthy(v));
+    if (values.get(root, "HideThumbnailsOnLostFocus")) |v| try draft.setBool("thumbnail.hideWhenNoEveFocus", values.truthy(v));
+    if (values.get(root, "HideActiveClientThumbnail")) |v| try draft.setBool("thumbnail.activeThumbnailHidden", values.truthy(v));
 
-    if (values.get(root, "ThumbnailZoomEnabled")) |v| try d.setBool("interaction.hoverZoomEnabled", values.truthy(v));
+    if (values.get(root, "ThumbnailZoomEnabled")) |v| try draft.setBool("interaction.hoverZoomEnabled", values.truthy(v));
     // EVE-O stores a multiple, not a percentage.
-    if (values.jsonNumber(values.get(root, "ThumbnailZoomFactor"))) |factor| try d.setNumber("interaction.hoverZoomPercent", factor * 100);
-    try d.setString("interaction.hoverZoomAnchor", eve_apm.anchorName(values.jsonNumber(values.get(root, "ThumbnailZoomAnchor"))));
+    if (values.jsonNumber(values.get(root, "ThumbnailZoomFactor"))) |factor| try draft.setNumber("interaction.hoverZoomPercent", factor * 100);
+    try draft.setString("interaction.hoverZoomAnchor", eve_apm.anchorName(values.jsonNumber(values.get(root, "ThumbnailZoomAnchor"))));
 
     if (pair(values.get(root, "ThumbnailSize"))) |size| {
-        try d.setNumber("thumbnail.width", size[0]);
-        try d.setNumber("thumbnail.height", size[1]);
+        try draft.setNumber("thumbnail.width", size[0]);
+        try draft.setNumber("thumbnail.height", size[1]);
     }
 }
 
-fn characterPositions(d: *Draft, root: Value) !void {
-    var imported: std.array_hash_map.String(void) = .empty;
-    var skipped: std.array_hash_map.String(void) = .empty;
+fn characterPositions(draft: *Draft, root: Value) !void {
+    var imported_names: std.array_hash_map.String(void) = .empty;
+    var skipped_names: std.array_hash_map.String(void) = .empty;
 
     if (values.objectAt(root, "FlatLayout")) |layout| {
         var it = layout.object.iterator();
         while (it.next()) |entry| {
             const name = values.characterName(entry.key_ptr.*) orelse {
-                try skipped.put(d.arena, entry.key_ptr.*, {});
+                try skipped_names.put(draft.arena, entry.key_ptr.*, {});
                 continue;
             };
             const point = pair(entry.value_ptr.*) orelse continue;
-            try eve_x.putPosition(d, try d.character(name), point[0], point[1]);
-            try imported.put(d.arena, name, {});
+            try eve_x.putPosition(draft, try draft.character(name), point[0], point[1]);
+            try imported_names.put(draft.arena, name, {});
         }
     }
     if (values.objectAt(root, "PerClientThumbnailSize")) |sizes| {
         var it = sizes.object.iterator();
         while (it.next()) |entry| {
             const name = values.characterName(entry.key_ptr.*) orelse {
-                try skipped.put(d.arena, entry.key_ptr.*, {});
+                try skipped_names.put(draft.arena, entry.key_ptr.*, {});
                 continue;
             };
             const size = pair(entry.value_ptr.*) orelse continue;
-            const character = try d.character(name);
-            try d.put(character, "thumbnailSize.width", values.numberValue(size[0]));
-            try d.put(character, "thumbnailSize.height", values.numberValue(size[1]));
-            try imported.put(d.arena, name, {});
+            const character = try draft.character(name);
+            try draft.put(character, "thumbnailSize.width", values.numberValue(size[0]));
+            try draft.put(character, "thumbnailSize.height", values.numberValue(size[1]));
+            try imported_names.put(draft.arena, name, {});
         }
     }
     if (values.objectAt(root, "DisableThumbnail")) |disabled| {
         var it = disabled.object.iterator();
         while (it.next()) |entry| {
             const name = values.characterName(entry.key_ptr.*) orelse {
-                try skipped.put(d.arena, entry.key_ptr.*, {});
+                try skipped_names.put(draft.arena, entry.key_ptr.*, {});
                 continue;
             };
             if (!values.truthy(entry.value_ptr.*)) continue;
-            try d.put(try d.character(name), "hideThumbnail", .{ .bool = true });
-            try imported.put(d.arena, name, {});
+            try draft.put(try draft.character(name), "hideThumbnail", .{ .bool = true });
+            try imported_names.put(draft.arena, name, {});
         }
     }
-    try d.noteCount("dynamic.import.importedPositionsWithSizeNote", "n", imported.count());
-    if (skipped.count() > 0) try d.noteCount("dynamic.import.eveo.skippedPlaceholderNote", "n", skipped.count());
+    try draft.noteCount("dynamic.import.importedPositionsWithSizeNote", "n", imported_names.count());
+    if (skipped_names.count() > 0) try draft.noteCount("dynamic.import.eveo.skippedPlaceholderNote", "n", skipped_names.count());
 }
 
-fn colorsAndHotkeys(d: *Draft, root: Value) !void {
-    var skipped: std.array_hash_map.String(void) = .empty;
-    var colored: usize = 0;
+fn colorsAndHotkeys(draft: *Draft, root: Value) !void {
+    var skipped_names: std.array_hash_map.String(void) = .empty;
+    var colored_count: usize = 0;
     if (values.objectAt(root, "PerClientActiveClientHighlightColor")) |colors| {
         var it = colors.object.iterator();
         while (it.next()) |entry| {
             const name = values.characterName(entry.key_ptr.*) orelse {
-                try skipped.put(d.arena, entry.key_ptr.*, {});
+                try skipped_names.put(draft.arena, entry.key_ptr.*, {});
                 continue;
             };
-            const c = color(if (entry.value_ptr.* == .string) entry.value_ptr.string else null) orelse continue;
-            try d.put(try d.character(name), "borderColors.activeBorderColor", try values.colorValue(d.arena, c));
-            colored += 1;
+            const border_color = color(if (entry.value_ptr.* == .string) entry.value_ptr.string else null) orelse continue;
+            try draft.put(try draft.character(name), "borderColors.activeBorderColor", try values.colorValue(draft.arena, border_color));
+            colored_count += 1;
         }
     }
 
-    var converted: usize = 0;
-    var total: usize = 0;
+    var converted_count: usize = 0;
+    var total_count: usize = 0;
     if (values.objectAt(root, "ClientHotkey")) |hotkeys| {
-        total = hotkeys.object.count();
+        total_count = hotkeys.object.count();
         var it = hotkeys.object.iterator();
         while (it.next()) |entry| {
             const name = values.characterName(entry.key_ptr.*) orelse {
-                try skipped.put(d.arena, entry.key_ptr.*, {});
+                try skipped_names.put(draft.arena, entry.key_ptr.*, {});
                 continue;
             };
             if (entry.value_ptr.* != .string) continue;
             const combined = hotkey(entry.value_ptr.string) orelse continue;
-            try d.put(try d.character(name), "hotkey", try values.keyValue(d.arena, combined));
-            converted += 1;
+            try draft.put(try draft.character(name), "hotkey", try values.keyValue(draft.arena, combined));
+            converted_count += 1;
         }
     }
 
-    try d.noteCount("dynamic.import.importedBorderColorsCountNote", "n", colored);
-    if (total > 0) try d.note("dynamic.import.convertedHotkeysNote", &.{ .{ .name = "converted", .value = try d.format(converted) }, .{ .name = "total", .value = try d.format(total) } });
-    if (skipped.count() > 0) try d.noteCount("dynamic.import.eveo.skippedPlaceholderNote", "n", skipped.count());
+    try draft.noteCount("dynamic.import.importedBorderColorsCountNote", "n", colored_count);
+    if (total_count > 0) try draft.note("dynamic.import.convertedHotkeysNote", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
+    if (skipped_names.count() > 0) try draft.noteCount("dynamic.import.eveo.skippedPlaceholderNote", "n", skipped_names.count());
 }
 
-fn hotkeyGroups(d: *Draft, root: Value, cycle_group_name: []const u8) !void {
-    const first_note = d.notes.items.len;
-    var imported: usize = 0;
-    for (1..6) |n| {
-        const members = try cycleGroupMembers(d.arena, root, n);
+fn hotkeyGroups(draft: *Draft, root: Value, cycle_group_name: []const u8) !void {
+    const first_note = draft.notes.items.len;
+    var imported_count: usize = 0;
+    for (1..CYCLE_GROUP_COUNT + 1) |group_number| {
+        const members = try cycleGroupMembers(draft.arena, root, group_number);
         if (members.len == 0) continue;
-        const forward_bound = try boundKeys(d.arena, values.arrayAt(root, try d.arena.print("CycleGroup{d}ForwardHotkeys", .{n})));
-        const backward_bound = try boundKeys(d.arena, values.arrayAt(root, try d.arena.print("CycleGroup{d}BackwardHotkeys", .{n})));
-        const name = try std.mem.replaceOwned(u8, d.arena, cycle_group_name, "{n}", try d.format(n));
-        const forward = try groupKeys(d, forward_bound, name, "dynamic.import.hotkeyGroupForwardKeyFailedNote");
-        const backward = try groupKeys(d, backward_bound, name, "dynamic.import.hotkeyGroupBackwardKeyFailedNote");
+        const forward_bound = try boundKeys(draft.arena, values.arrayAt(root, try draft.arena.print("CycleGroup{d}ForwardHotkeys", .{group_number})));
+        const backward_bound = try boundKeys(draft.arena, values.arrayAt(root, try draft.arena.print("CycleGroup{d}BackwardHotkeys", .{group_number})));
+        const name = try std.mem.replaceOwned(u8, draft.arena, cycle_group_name, "{n}", try draft.format(group_number));
+        const forward = try groupKeys(draft, forward_bound, name, "dynamic.import.hotkeyGroupForwardKeyFailedNote");
+        const backward = try groupKeys(draft, backward_bound, name, "dynamic.import.hotkeyGroupBackwardKeyFailedNote");
 
-        var list = std.json.Array.init(d.arena);
+        var list: std.json.Array = .init(draft.arena);
         for (members) |member| try list.append(.{ .string = member });
-        const group = try d.item("hotkeyGroups", "name", name);
-        try d.put(group, "characters", .{ .array = list });
-        try d.put(group, "forwardKey", try values.keysValue(d.arena, forward));
-        try d.put(group, "backwardKey", try values.keysValue(d.arena, backward));
-        imported += 1;
+        const group = try draft.item("hotkeyGroups", "name", name);
+        try draft.put(group, "characters", .{ .array = list });
+        try draft.put(group, "forwardKey", try values.keysValue(draft.arena, forward));
+        try draft.put(group, "backwardKey", try values.keysValue(draft.arena, backward));
+        imported_count += 1;
     }
-    try d.notes.insert(d.arena, first_note, try d.countText("dynamic.import.hotkeyGroupsImportedNote", imported));
+    try draft.notes.insert(draft.arena, first_note, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", imported_count));
 }
