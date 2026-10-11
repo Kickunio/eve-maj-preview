@@ -8,23 +8,23 @@ const slog = log.scoped("paste_upload");
 var g_io: std.Io = undefined;
 
 /// Guards against a double-press spawning two overlapping uploads (and two browser tabs); cleared once the background thread finishes.
-var g_upload_in_flight: std.atomic.Value(bool) = .init(false);
+var g_is_upload_in_flight: std.atomic.Value(bool) = .init(false);
 
 /// Must be called once before uploadClipboardAndOpenAsync is used.
 pub fn setIo(io: std.Io) void {
     g_io = io;
 }
 
-/// Runs the upload+open on a background thread so the HTTP round-trip doesn't block the main message loop (hotkey handling, thumbnail rendering); a no-op if one is already running.
+/// Runs the upload+open on a background thread so the HTTP round-trip doesn't block the main message loop; a no-op if one is already running. `allocator` must be thread-safe.
 pub fn uploadClipboardAndOpenAsync(allocator: std.mem.Allocator, url: []const u8) void {
-    if (g_upload_in_flight.swap(true, .acq_rel)) {
+    if (g_is_upload_in_flight.swap(true, .acq_rel)) {
         slog.info("Clipboard upload already in progress; ignoring", .{});
         return;
     }
 
     const url_copy = allocator.dupe(u8, url) catch |err| {
         slog.err("Failed to copy URL for clipboard upload: {}", .{err});
-        g_upload_in_flight.store(false, .release);
+        g_is_upload_in_flight.store(false, .release);
         return;
     };
 
@@ -33,7 +33,7 @@ pub fn uploadClipboardAndOpenAsync(allocator: std.mem.Allocator, url: []const u8
     } else |err| {
         slog.warn("Failed to start clipboard upload thread: {}", .{err});
         allocator.free(url_copy);
-        g_upload_in_flight.store(false, .release);
+        g_is_upload_in_flight.store(false, .release);
     }
 }
 
@@ -63,22 +63,23 @@ fn postAndFollowRedirect(allocator: std.mem.Allocator, url: []const u8, body: []
     defer client.deinit();
 
     const uri = try std.Uri.parse(url);
-    var req = try client.request(.POST, uri, .{
+    var request = try client.request(.POST, uri, .{
         .headers = .{
             .content_type = .{ .override = "application/x-www-form-urlencoded" },
             .user_agent = .{ .override = "EVE-Maj-Preview" },
         },
     });
-    defer req.deinit();
+    defer request.deinit();
 
-    req.transfer_encoding = .{ .content_length = body.len };
-    var body_writer = try req.sendBodyUnflushed(&.{});
+    request.transfer_encoding = .{ .content_length = body.len };
+    var body_writer = try request.sendBodyUnflushed(&.{});
     try body_writer.writer.writeAll(body);
     try body_writer.end();
-    try req.connection.?.flush();
+    const connection = request.connection orelse return error.MissingConnection;
+    try connection.flush();
 
     var redirect_buf: [8 * 1024]u8 = undefined;
-    var response = try req.receiveHead(&redirect_buf);
+    var response = try request.receiveHead(&redirect_buf);
 
     const reader = response.reader(&.{});
     _ = reader.discardRemaining() catch |err| {
@@ -89,7 +90,7 @@ fn postAndFollowRedirect(allocator: std.mem.Allocator, url: []const u8, body: []
         slog.warn("Failed to upload to '{s}': status {}", .{ url, response.head.status });
     }
 
-    return allocator.printSentinel("{f}", .{req.uri}, 0);
+    return allocator.printSentinel("{f}", .{request.uri}, 0);
 }
 
 fn openFallback(url: []const u8) void {
@@ -139,6 +140,6 @@ fn uploadClipboardAndOpen(allocator: std.mem.Allocator, url: []const u8) void {
 
 fn uploadClipboardAndOpenThread(allocator: std.mem.Allocator, url: []const u8) void {
     defer allocator.free(url);
-    defer g_upload_in_flight.store(false, .release);
+    defer g_is_upload_in_flight.store(false, .release);
     uploadClipboardAndOpen(allocator, url);
 }

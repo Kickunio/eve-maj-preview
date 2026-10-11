@@ -140,7 +140,7 @@ pub fn activatePerCharacterGroup(manager: *HotkeyManager, group: *bindings.Chara
         }
     }
 
-    slog.warn("Failed to cycle the shared character hotkey: none of its characters is running", .{});
+    slog.info("No running character for the shared character hotkey", .{});
 }
 
 /// Cycles the groups' members as one list; logged-out clients join if any group includes them, ends stop only if all do.
@@ -171,7 +171,7 @@ pub fn cycleGroups(manager: *HotkeyManager, group_indices: []const usize, is_for
     const not_logged_in_count = not_logged_in_hwnds.items.len;
     const total_count = member_count + not_logged_in_count;
     if (total_count == 0) {
-        slog.warn("Failed to cycle hotkey group: it has no characters", .{});
+        slog.info("Hotkey group has no characters to cycle", .{});
         return;
     }
 
@@ -231,7 +231,7 @@ pub fn cycleGroups(manager: *HotkeyManager, group_indices: []const usize, is_for
         }
     }
 
-    slog.warn("Failed to cycle hotkey group: none of its characters is running and not excluded", .{});
+    slog.info("No running, non-excluded character in the hotkey group", .{});
 }
 
 /// In the order the characters were excluded.
@@ -258,13 +258,13 @@ pub fn cycleExcluded(manager: *HotkeyManager, is_forward: bool) void {
         slog.debug("Excluded character {s} is not currently running, skipping", .{character_name});
     }
 
-    slog.warn("Failed to cycle excluded characters: none is running", .{});
+    slog.info("No excluded character is running", .{});
 }
 
 /// Cycles to the most-recently-notified character (FIFO).
 pub fn cycleNotified(manager: *HotkeyManager, is_forward: bool) void {
     slog.info("Cycle notified character hotkey pressed ({s})", .{directionName(is_forward)});
-    const retention_ms: u64 = @as(u64, manager.live().thumbnail.notifications.notified_cycle_retention_seconds) * 1000;
+    const retention_ms: u64 = @as(u64, manager.live().thumbnail.notifications.notified_cycle_retention_seconds) * std.time.ms_per_s;
 
     var names = manager.painter.notified_queue.namesWithin(manager.allocator, retention_ms) catch |err| {
         slog.err("Failed to build notified-character list: {}", .{err});
@@ -292,7 +292,7 @@ pub fn cycleNotified(manager: *HotkeyManager, is_forward: bool) void {
         slog.debug("Notified character {s} is not currently running, skipping", .{character_name});
     }
 
-    slog.warn("Failed to cycle notified characters: none is running", .{});
+    slog.info("No notified character is running", .{});
 }
 
 /// Cycles every logged-in client in Characters-list order (unconfigured ones follow, in Scout's discovery order); unlike other cycles, every entry is guaranteed running.
@@ -334,7 +334,7 @@ pub fn cycleAllClients(manager: *HotkeyManager, is_forward: bool) void {
         return;
     }
 
-    slog.warn("Failed to cycle all clients: every client is excluded", .{});
+    slog.info("Every logged-in client is excluded from cycling", .{});
 }
 
 /// Cycles windows still at the login screen ("EVE" title), in the order they logged out.
@@ -384,8 +384,8 @@ pub fn syncToFocusedCharacter(manager: *HotkeyManager, character_name: []const u
 
     syncExcludedCycleIndex(manager, character_name);
 
-    const already_synced = if (manager.cycle.last_all_clients_name) |last| std.mem.eql(u8, last, character_name) else false;
-    if (!already_synced) setOwnedCursorName(manager.allocator, &manager.cycle.last_all_clients_name, character_name, "all-clients");
+    const is_already_synced = if (manager.cycle.last_all_clients_name) |last| std.mem.eql(u8, last, character_name) else false;
+    if (!is_already_synced) setOwnedCursorName(manager.allocator, &manager.cycle.last_all_clients_name, character_name, "all-clients");
 
     var actions = manager.hotkey_map.valueIterator();
     while (actions.next()) |action| {
@@ -473,15 +473,15 @@ fn setOwnedCursorName(allocator: std.mem.Allocator, field: *?[]const u8, name: [
     field.* = duped;
 }
 
-/// `cursors` parallels `groups`; reset_on_leave clears the cursor of groups character_name isn't in.
-fn syncGroupCycleIndex(groups: []const config.HotkeyGroupConfig, cursors: []?usize, character_name: []const u8, reset_on_leave: bool) void {
+/// `cursors` parallels `groups`; should_reset_on_leave clears the cursor of groups character_name isn't in.
+fn syncGroupCycleIndex(groups: []const config.HotkeyGroupConfig, cursors: []?usize, character_name: []const u8, should_reset_on_leave: bool) void {
     for (groups, cursors) |*group, *cursor| {
         if (strings.indexOfString(group.characters.items, character_name)) |index| {
-            if (cursor.* == null or cursor.*.? != index) {
+            if (cursor.* != index) {
                 slog.debug("Updated hotkey group index: {s} now at position {}/{}", .{ character_name, index + 1, group.characters.items.len });
                 cursor.* = index;
             }
-        } else if (reset_on_leave and cursor.* != null) {
+        } else if (should_reset_on_leave and cursor.* != null) {
             slog.debug("Reset hotkey group cycle index - {s} left this group", .{character_name});
             cursor.* = null;
         }
@@ -491,7 +491,7 @@ fn syncGroupCycleIndex(groups: []const config.HotkeyGroupConfig, cursors: []?usi
 fn syncExcludedCycleIndex(manager: *HotkeyManager, character_name: []const u8) void {
     const excluded_names = manager.exclusions.names.items;
     const index = strings.indexOfString(excluded_names, character_name) orelse return;
-    if (manager.cycle.excluded_index == null or manager.cycle.excluded_index.? != index) {
+    if (manager.cycle.excluded_index != index) {
         slog.debug("Updated excluded cycle index: {s} now at position {}/{}", .{ character_name, index + 1, excluded_names.len });
         manager.cycle.excluded_index = index;
     }

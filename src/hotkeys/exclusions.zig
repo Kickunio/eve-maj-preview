@@ -55,7 +55,7 @@ pub fn isExcluded(character_name: []const u8) bool {
 const testing = std.testing;
 
 test "toggle excludes a character, then includes them again" {
-    var exclusions = Exclusions.init(testing.allocator);
+    var exclusions: Exclusions = .init(testing.allocator);
     defer exclusions.deinit();
 
     try testing.expect(try exclusions.toggle("Pilot A"));
@@ -65,7 +65,7 @@ test "toggle excludes a character, then includes them again" {
 }
 
 test "names keep the order characters were excluded in" {
-    var exclusions = Exclusions.init(testing.allocator);
+    var exclusions: Exclusions = .init(testing.allocator);
     defer exclusions.deinit();
 
     _ = try exclusions.toggle("Pilot B");
@@ -79,7 +79,7 @@ test "names keep the order characters were excluded in" {
 }
 
 test "remove only reports a character that was excluded" {
-    var exclusions = Exclusions.init(testing.allocator);
+    var exclusions: Exclusions = .init(testing.allocator);
     defer exclusions.deinit();
 
     _ = try exclusions.toggle("Pilot A");

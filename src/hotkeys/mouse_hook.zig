@@ -2,7 +2,9 @@
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const vk = @import("../platform/virtual_keys.zig");
-const HookBindings = @import("hook_bindings.zig").HookBindings;
+const hook_bindings = @import("hook_bindings.zig");
+
+const HookBindings = hook_bindings.HookBindings;
 
 var g_hook: HookBindings = .{
     .hook_type = win32.WH_MOUSE_LL,
@@ -10,9 +12,9 @@ var g_hook: HookBindings = .{
     .name = "mouse",
     .on_uninstall = clearSwallowState,
 };
-var g_swallow_mbutton_up = false;
-var g_swallow_xbutton1_up = false;
-var g_swallow_xbutton2_up = false;
+var g_should_swallow_mbutton_up = false;
+var g_should_swallow_xbutton1_up = false;
+var g_should_swallow_xbutton2_up = false;
 
 /// Installs the hook on first registration.
 pub fn register(allocator: std.mem.Allocator, target_hwnd: win32.HWND, combined_vk: u32, id: c_int) !void {
@@ -23,8 +25,8 @@ pub fn unregister(combined_vk: u32) void {
     g_hook.unregister(combined_vk);
 }
 
-pub fn setExactModifiers(exact: bool) void {
-    g_hook.exact_modifiers = exact;
+pub fn setExactModifiers(is_exact: bool) void {
+    g_hook.requires_exact_modifiers = is_exact;
 }
 
 /// Safe to call even if nothing was ever registered.
@@ -38,9 +40,9 @@ pub fn deinit() void {
 }
 
 fn clearSwallowState() void {
-    g_swallow_mbutton_up = false;
-    g_swallow_xbutton1_up = false;
-    g_swallow_xbutton2_up = false;
+    g_should_swallow_mbutton_up = false;
+    g_should_swallow_xbutton1_up = false;
+    g_should_swallow_xbutton2_up = false;
 }
 
 fn lowLevelMouseProc(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
@@ -48,12 +50,12 @@ fn lowLevelMouseProc(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) c
     if (nCode >= 0) {
         if (wParam == win32.WM_MBUTTONDOWN) {
             if (g_hook.dispatch(vk.VK_MBUTTON, vk.currentModifiers(), 0)) {
-                g_swallow_mbutton_up = true;
+                g_should_swallow_mbutton_up = true;
                 return 1;
             }
         } else if (wParam == win32.WM_MBUTTONUP) {
-            if (g_swallow_mbutton_up) {
-                g_swallow_mbutton_up = false;
+            if (g_should_swallow_mbutton_up) {
+                g_should_swallow_mbutton_up = false;
                 return 1;
             }
         } else if (wParam == win32.WM_XBUTTONDOWN) {
@@ -69,8 +71,8 @@ fn lowLevelMouseProc(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) c
                 if (g_hook.dispatch(base_vk, vk.currentModifiers(), 0)) {
                     // Arm the matching release swallow so the newly-focused client doesn't see a phantom button-up.
                     switch (button) {
-                        win32.XBUTTON1 => g_swallow_xbutton1_up = true,
-                        win32.XBUTTON2 => g_swallow_xbutton2_up = true,
+                        win32.XBUTTON1 => g_should_swallow_xbutton1_up = true,
+                        win32.XBUTTON2 => g_should_swallow_xbutton2_up = true,
                         else => {},
                     }
                     return 1;
@@ -79,12 +81,12 @@ fn lowLevelMouseProc(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) c
         } else if (wParam == win32.WM_XBUTTONUP) {
             const info = win32.lparamToPtr(win32.MSLLHOOKSTRUCT, lParam);
             switch (win32.getXButton(info.mouseData)) {
-                win32.XBUTTON1 => if (g_swallow_xbutton1_up) {
-                    g_swallow_xbutton1_up = false;
+                win32.XBUTTON1 => if (g_should_swallow_xbutton1_up) {
+                    g_should_swallow_xbutton1_up = false;
                     return 1;
                 },
-                win32.XBUTTON2 => if (g_swallow_xbutton2_up) {
-                    g_swallow_xbutton2_up = false;
+                win32.XBUTTON2 => if (g_should_swallow_xbutton2_up) {
+                    g_should_swallow_xbutton2_up = false;
                     return 1;
                 },
                 else => {},

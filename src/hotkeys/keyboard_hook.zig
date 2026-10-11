@@ -2,10 +2,11 @@
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const vk = @import("../platform/virtual_keys.zig");
-const HookBindings = @import("hook_bindings.zig").HookBindings;
+const hook_bindings = @import("hook_bindings.zig");
 const log = @import("../log.zig");
 
-const slog = log.scoped("keyboard_hook");
+const HookBindings = hook_bindings.HookBindings;
+const slog = log.scoped("hotkeys");
 
 var g_hook: HookBindings = .{
     .hook_type = win32.WH_KEYBOARD_LL,
@@ -16,7 +17,7 @@ var g_hook: HookBindings = .{
 /// Held hotkey keys; the value is whether to swallow the key's release.
 var g_swallow_release: ?std.AutoHashMap(u32, bool) = null;
 /// Set while the config dialog is recording a new binding; see armWinKeyCapture's doc comment.
-var g_capture_win_key = false;
+var g_is_capturing_win_key = false;
 /// Given the modifiers held with a bare Win press while the config dialog records; set by the dialog.
 pub var g_on_win_key: ?*const fn (modifiers: u32) void = null;
 
@@ -29,8 +30,8 @@ pub fn unregister(combined_vk: u32) void {
     g_hook.unregister(combined_vk);
 }
 
-pub fn setExactModifiers(exact: bool) void {
-    g_hook.exact_modifiers = exact;
+pub fn setExactModifiers(is_exact: bool) void {
+    g_hook.requires_exact_modifiers = is_exact;
 }
 
 /// Safe to call even if nothing was ever registered.
@@ -54,13 +55,13 @@ pub fn trackPress(allocator: std.mem.Allocator, vk_code: u32) bool {
     if (vk_code == 0) return true;
     if (g_swallow_release == null) g_swallow_release = .init(allocator);
 
-    const gop = g_swallow_release.?.getOrPut(vk_code) catch |err| {
+    const entry = g_swallow_release.?.getOrPut(vk_code) catch |err| {
         slog.warn("Failed to track hotkey press for vk 0x{X}: {}", .{ vk_code, err });
         return true;
     };
-    if (gop.found_existing) return false;
+    if (entry.found_existing) return false;
 
-    gop.value_ptr.* = false;
+    entry.value_ptr.* = false;
     return true;
 }
 
@@ -73,16 +74,16 @@ pub fn markSwallowRelease(vk_code: u32) void {
 
 /// Keeps the hook alive while the dialog records a binding, to swallow Win and report it; otherwise the Start Menu opens first.
 pub fn armWinKeyCapture() void {
-    g_capture_win_key = true;
+    g_is_capturing_win_key = true;
     if (g_hook.hook == null) {
         g_hook.install() catch {
-            g_capture_win_key = false;
+            g_is_capturing_win_key = false;
         };
     }
 }
 
 pub fn disarmWinKeyCapture() void {
-    g_capture_win_key = false;
+    g_is_capturing_win_key = false;
     if (g_hook.isEmpty()) g_hook.uninstall();
 }
 
@@ -111,8 +112,8 @@ fn selfModifierBit(base_vk: u32) u32 {
 fn dispatchIfBound(raw_vk: u32) bool {
     const base_vk = normalizeModifierVk(raw_vk);
     // Encode raw_vk into HIWORD(lParam) like a real WM_HOTKEY message, so hotkeyVkFromLparam needs no changes.
-    const lparam: win32.LPARAM = @bitCast(@as(usize, raw_vk << 16));
-    return g_hook.dispatch(base_vk, vk.currentModifiers() & ~selfModifierBit(base_vk), lparam);
+    const lParam: win32.LPARAM = @bitCast(@as(usize, raw_vk << 16));
+    return g_hook.dispatch(base_vk, vk.currentModifiers() & ~selfModifierBit(base_vk), lParam);
 }
 
 fn lowLevelKeyboardProc(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
@@ -121,12 +122,12 @@ fn lowLevelKeyboardProc(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM
         const info = win32.lparamToPtr(win32.KBDLLHOOKSTRUCT, lParam);
         const is_win_vk = info.vkCode == win32.VK_LWIN or info.vkCode == win32.VK_RWIN;
         if (wParam == win32.WM_KEYDOWN or wParam == win32.WM_SYSKEYDOWN) {
-            if (g_capture_win_key and is_win_vk) return 1;
+            if (g_is_capturing_win_key and is_win_vk) return 1;
             if (dispatchIfBound(info.vkCode)) return 1;
         } else if (wParam == win32.WM_KEYUP or wParam == win32.WM_SYSKEYUP) {
             // The conduit hotkey only consumes the down; a stray up reaching the new client makes it drop held modifiers.
             if (info.vkCode == vk.VK_FOCUS_GRANT) return 1;
-            if (g_capture_win_key and is_win_vk) {
+            if (g_is_capturing_win_key and is_win_vk) {
                 if (g_on_win_key) |on_win_key| on_win_key(vk.currentModifiers() & ~vk.MOD_WIN);
                 return 1;
             }

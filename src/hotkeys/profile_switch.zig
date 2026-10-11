@@ -8,8 +8,8 @@ const log = @import("../log.zig");
 
 const slog = log.scoped("hotkeys");
 
-pub fn cycle(allocator: std.mem.Allocator, current_profile: []const u8, forward: bool) void {
-    slog.info("{s} profile hotkey pressed", .{if (forward) "Next" else "Previous"});
+pub fn cycle(allocator: std.mem.Allocator, current_profile: []const u8, is_forward: bool) void {
+    slog.info("{s} profile hotkey pressed", .{if (is_forward) "Next" else "Previous"});
 
     var profiles = config.listProfiles(allocator) catch |err| {
         slog.err("Failed to enumerate profiles: {}", .{err});
@@ -26,9 +26,9 @@ pub fn cycle(allocator: std.mem.Allocator, current_profile: []const u8, forward:
     }
 
     const current_index = strings.indexOfString(profiles.items, current_profile);
-    var order = cycling.CycleOrder.init(current_index, profiles.items.len, .{ .is_forward = forward });
+    var order = cycling.CycleOrder.init(current_index, profiles.items.len, .{ .is_forward = is_forward });
     const target_profile = profiles.items[order.next().?];
-    slog.info("Cycling to {s} profile: {s} -> {s}", .{ if (forward) "next" else "previous", current_profile, target_profile });
+    slog.info("Cycling to {s} profile: {s} -> {s}", .{ if (is_forward) "next" else "previous", current_profile, target_profile });
     main.requestProfileSwitch(target_profile);
 }
 

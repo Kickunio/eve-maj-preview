@@ -15,32 +15,6 @@ const FindByExecutableContext = struct {
     found: ?win32.HWND = null,
 };
 
-fn findByExecutableCallback(hwnd: win32.HWND, lparam: win32.LPARAM) callconv(.c) win32.BOOL {
-    const context: *FindByExecutableContext = win32.lparamToPtr(FindByExecutableContext, lparam);
-    if (!win32.isWindowVisible(hwnd)) return win32.TRUE;
-
-    var exe_path: [260:0]u8 = undefined;
-    const exe_name = win32.windowExeName(hwnd, &exe_path) orelse return win32.TRUE;
-    if (!std.ascii.eqlIgnoreCase(exe_name, context.executable_name)) return win32.TRUE;
-
-    context.found = hwnd;
-    return win32.FALSE;
-}
-
-/// First visible top-level window (in Z-order, so effectively the frontmost) owned by executable_name.
-fn findWindowByExecutable(executable_name: []const u8) ?win32.HWND {
-    var context = FindByExecutableContext{ .executable_name = executable_name };
-    _ = win32.EnumWindows(findByExecutableCallback, win32.ptrToLparam(&context));
-    return context.found;
-}
-
-fn focusWindow(target: win32.HWND) void {
-    if (win32.isWindowIconic(target)) {
-        _ = win32.ShowWindowAsync(target, win32.SW_RESTORE);
-    }
-    focus_grant.forceSetForegroundWindow(target);
-}
-
 /// Clears `last_non_eve_foreground` if the window it names has since closed.
 pub fn returnToLastApp(last_non_eve_foreground: *?win32.HWND) void {
     const target = last_non_eve_foreground.* orelse {
@@ -75,32 +49,21 @@ pub fn activateApp(global_settings: *const config.GlobalConfig, app_index: usize
 }
 
 /// Steps through the App Hotkeys list, in its order, to the next app with a running window: on from the app in front, else from the list's start or end.
-pub fn cycleApps(global_settings: *const config.GlobalConfig, forward: bool) void {
+pub fn cycleApps(global_settings: *const config.GlobalConfig, is_forward: bool) void {
     const apps = global_settings.appHotkeys.items;
     const current = foregroundAppIndex(apps);
-    var it = cycling.CycleOrder.init(current, apps.len, .{ .is_forward = forward });
+    var it = cycling.CycleOrder.init(current, apps.len, .{ .is_forward = is_forward });
     while (it.next()) |index| {
         const name = apps[index].executableName;
         if (name.len == 0) continue;
         // The list can name the app in front more than once.
-        if (current) |at| if (std.ascii.eqlIgnoreCase(apps[at].executableName, name)) continue;
+        if (current) |current_index| if (std.ascii.eqlIgnoreCase(apps[current_index].executableName, name)) continue;
         const target = findWindowByExecutable(name) orelse continue;
-        slog.info("Cycle apps hotkey pressed ({s}): {s}", .{ cycling.directionName(forward), name });
+        slog.info("Cycle apps hotkey pressed ({s}): {s}", .{ cycling.directionName(is_forward), name });
         focusWindow(target);
         return;
     }
     slog.debug("Cycle apps hotkey pressed - no other app in the App Hotkeys list is running", .{});
-}
-
-/// The first App Hotkeys entry for the foreground window's executable, or null when it's none of them.
-fn foregroundAppIndex(apps: []const global_config.AppHotkeyConfig) ?usize {
-    const foreground = win32.GetForegroundWindow() orelse return null;
-    var exe_path: [260:0]u8 = undefined;
-    const exe_name = win32.windowExeName(foreground, &exe_path) orelse return null;
-    for (apps, 0..) |app, index| {
-        if (std.ascii.eqlIgnoreCase(app.executableName, exe_name)) return index;
-    }
-    return null;
 }
 
 pub fn openUrl(allocator: std.mem.Allocator, global_settings: *const config.GlobalConfig, url_index: usize) void {
@@ -109,7 +72,10 @@ pub fn openUrl(allocator: std.mem.Allocator, global_settings: *const config.Glob
         return;
     }
     const url_hotkey = global_settings.urlHotkeys.items[url_index];
-    if (url_hotkey.url.len == 0) return;
+    if (url_hotkey.url.len == 0) {
+        slog.debug("Open URL hotkey pressed - no URL set", .{});
+        return;
+    }
 
     if (url_hotkey.uploadClipboard) {
         slog.info("Open URL hotkey pressed (uploading clipboard): {s}", .{url_hotkey.url});
@@ -121,4 +87,41 @@ pub fn openUrl(allocator: std.mem.Allocator, global_settings: *const config.Glob
     if (!win32.shellOpenUrl(url_hotkey.url)) {
         slog.err("Failed to open URL '{s}'", .{url_hotkey.url});
     }
+}
+
+fn findByExecutableCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win32.BOOL {
+    const context: *FindByExecutableContext = win32.lparamToPtr(FindByExecutableContext, lParam);
+    if (!win32.isWindowVisible(hwnd)) return win32.TRUE;
+
+    var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+    const exe_name = win32.windowExeName(hwnd, &exe_path_buf) orelse return win32.TRUE;
+    if (!std.ascii.eqlIgnoreCase(exe_name, context.executable_name)) return win32.TRUE;
+
+    context.found = hwnd;
+    return win32.FALSE;
+}
+
+/// First visible top-level window (in Z-order, so effectively the frontmost) owned by executable_name.
+fn findWindowByExecutable(executable_name: []const u8) ?win32.HWND {
+    var context = FindByExecutableContext{ .executable_name = executable_name };
+    _ = win32.EnumWindows(findByExecutableCallback, win32.ptrToLparam(&context));
+    return context.found;
+}
+
+fn focusWindow(target: win32.HWND) void {
+    if (win32.isWindowIconic(target)) {
+        _ = win32.ShowWindowAsync(target, win32.SW_RESTORE);
+    }
+    focus_grant.forceSetForegroundWindow(target);
+}
+
+/// The first App Hotkeys entry for the foreground window's executable, or null when it's none of them.
+fn foregroundAppIndex(apps: []const global_config.AppHotkeyConfig) ?usize {
+    const foreground = win32.GetForegroundWindow() orelse return null;
+    var exe_path_buf: [win32.MAX_PATH:0]u8 = undefined;
+    const exe_name = win32.windowExeName(foreground, &exe_path_buf) orelse return null;
+    for (apps, 0..) |app, index| {
+        if (std.ascii.eqlIgnoreCase(app.executableName, exe_name)) return index;
+    }
+    return null;
 }

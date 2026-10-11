@@ -4,13 +4,13 @@ const win32 = @import("../platform/win32.zig");
 const focus_grant = @import("../platform/focus_grant.zig");
 const vk = @import("../platform/virtual_keys.zig");
 const scout = @import("../clients/scout.zig");
-const client_actions = @import("../clients/actions.zig");
+const actions = @import("../clients/actions.zig");
 const auto_minimize = @import("../clients/auto_minimize.zig");
 const config_mod = @import("../config.zig");
 const protocol = @import("../protocol.zig");
 const painter_mod = @import("../painter.zig");
 const main = @import("../main.zig");
-const dialog_session = @import("../dialog/knots/session.zig");
+const session = @import("../dialog/knots/session.zig");
 const alert_effects = @import("../notifications/alert_effects.zig");
 const mouse_hook = @import("mouse_hook.zig");
 const keyboard_hook = @import("keyboard_hook.zig");
@@ -28,7 +28,7 @@ const slog = log.scoped("hotkeys");
 
 /// The characters or hotkey groups bound to one key combo, in config order.
 const ComboSharers = struct {
-    vk: u32,
+    virtual_key: u32,
     indices: std.ArrayList(usize),
 };
 
@@ -37,15 +37,19 @@ pub const HotkeyManager = struct {
     allocator: std.mem.Allocator,
     /// The saved copy, for the bindings and the groups and characters their ids index into; other settings read live().
     config: *const config_mod.Config,
+    /// Borrowed; outlives the manager.
     store: *config_mod.ProfileStore,
+    /// Borrowed; outlives the manager.
     global_settings: *const config_mod.GlobalConfig,
+    /// Borrowed; outlives the manager.
     scout: *scout.Scout,
+    /// Borrowed; outlives the manager.
     painter: *painter_mod.Painter,
     hotkey_map: std.AutoHashMap(c_int, HotkeyAction),
     /// The suspend hotkey itself stays live.
-    hotkeys_suspended: bool = false,
-    /// Whether the config dialog is recording a new hotkey; kept separate from hotkeys_suspended so the two don't clobber each other.
-    dialog_suspended: bool = false,
+    are_hotkeys_suspended: bool = false,
+    /// Whether the config dialog is recording a new hotkey; kept separate from are_hotkeys_suspended so the two don't clobber each other.
+    is_dialog_suspended: bool = false,
     cycle: cycling.CycleState,
     /// Outlives the manager, so a Save that recreates it keeps them.
     exclusions: *exclusions_mod.Exclusions,
@@ -55,14 +59,14 @@ pub const HotkeyManager = struct {
     /// Registers from the profile's saved copy, since bindings only change on Save.
     pub fn init(allocator: std.mem.Allocator, store: *config_mod.ProfileStore, global_settings: *const config_mod.GlobalConfig, scout_ptr: *scout.Scout, painter: *painter_mod.Painter, exclusions: *exclusions_mod.Exclusions) !HotkeyManager {
         const config = &store.saved;
-        return HotkeyManager{
+        return .{
             .allocator = allocator,
             .config = config,
             .store = store,
             .global_settings = global_settings,
             .scout = scout_ptr,
             .painter = painter,
-            .hotkey_map = std.AutoHashMap(c_int, HotkeyAction).init(allocator),
+            .hotkey_map = .init(allocator),
             .cycle = try cycling.CycleState.init(allocator, config.hotkeyGroups.items.len),
             .exclusions = exclusions,
         };
@@ -75,7 +79,7 @@ pub const HotkeyManager = struct {
 
     /// Like live(), for the global settings; `global_settings` stays the saved copy the bindings came from.
     pub fn liveGlobal(_: *const HotkeyManager) *const config_mod.GlobalConfig {
-        return dialog_session.liveGlobal();
+        return session.liveGlobal();
     }
 
     fn formatKeyName(virtual_key: u32, buffer: []u8) []const u8 {
@@ -121,26 +125,26 @@ pub const HotkeyManager = struct {
     }
 
     fn bindingKeys(self: *const HotkeyManager, comptime binding: bindings.GlobalBinding) KeyList {
-        return if (binding.in_global_settings) @field(self.global_settings, binding.field) else @field(self.config.hotkeys, binding.field);
+        return if (binding.is_global_setting) @field(self.global_settings, binding.field) else @field(self.config.hotkeys, binding.field);
     }
 
     /// Returns how many keys failed to register; groups sharing a combo cycle as one list.
-    fn registerGroupChains(self: *HotkeyManager, hwnd: win32.HWND, chains: []const ComboSharers, forward: bool) usize {
+    fn registerGroupChains(self: *HotkeyManager, hwnd: win32.HWND, chains: []const ComboSharers, is_forward: bool) usize {
         var failed_count: usize = 0;
         var description_buf: [160]u8 = undefined;
         for (chains, 0..) |chain, chain_index| {
             const first_name = self.config.hotkeyGroups.items[chain.indices.items[0]].name;
-            const slot = chain_index * 2 + @intFromBool(!forward);
+            const slot = chain_index * 2 + @intFromBool(!is_forward);
             if (slot >= bindings.CYCLE_GROUP_SLOT_COUNT) {
-                slog.err("Failed to register hotkey group '{s}' {s}: too many group cycle keys", .{ first_name, cycling.directionName(forward) });
+                slog.err("Failed to register hotkey group '{s}' {s}: too many group cycle keys", .{ first_name, cycling.directionName(is_forward) });
                 failed_count += 1;
                 continue;
             }
 
             const description = if (chain.indices.items.len == 1)
-                std.mem.print(&description_buf, "group [{s}] {s}", .{ first_name, cycling.directionName(forward) }) catch "group cycle"
+                formatDescription(&description_buf, "group [{s}] {s}", .{ first_name, cycling.directionName(is_forward) }, "group cycle")
             else
-                std.mem.print(&description_buf, "groups [{s}...] {s} ({} sharing hotkey)", .{ first_name, cycling.directionName(forward), chain.indices.items.len }) catch "shared group cycle";
+                formatDescription(&description_buf, "groups [{s}...] {s} ({} sharing hotkey)", .{ first_name, cycling.directionName(is_forward), chain.indices.items.len }, "shared group cycle");
 
             const owned_indices = self.allocator.dupe(usize, chain.indices.items) catch |err| {
                 slog.err("Failed to copy hotkey group chain '{s}': {}", .{ first_name, err });
@@ -148,7 +152,7 @@ pub const HotkeyManager = struct {
                 continue;
             };
             // A single key, so any failure means the action wasn't tracked and the indices are still ours.
-            const failed = self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_CYCLE_GROUP_BASE, slot), .one(chain.vk), .{ .cycle_group = .{ .group_indices = owned_indices, .forward = forward } }, description);
+            const failed = self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_CYCLE_GROUP_BASE, slot), .one(chain.virtual_key), .{ .cycle_group = .{ .group_indices = owned_indices, .is_forward = is_forward } }, description);
             if (failed > 0) {
                 self.allocator.free(owned_indices);
                 failed_count += failed;
@@ -210,16 +214,16 @@ pub const HotkeyManager = struct {
 
         for (self.config.hotkeyGroups.items, 0..) |*group, group_index| {
             if (group.assignKey.isEmpty()) continue;
-            const description = std.mem.print(&description_buf, "group {} [{s}] assign", .{ group_index, group.name }) catch "group assign";
+            const description = formatDescription(&description_buf, "group {} [{s}] assign", .{ group_index, group.name }, "group assign");
             failed_count += self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_ASSIGN_GROUP_BASE, group_index), group.assignKey, .{ .assign_group = .{ .group_index = group_index } }, description);
         }
 
         for (per_character_groups.items, 0..) |*group, group_index| {
             const first_name = self.config.characters.items[group.indices.items[0]].name;
             const description = if (group.indices.items.len == 1)
-                std.mem.print(&description_buf, "activate character [{s}]", .{first_name}) catch "activate character"
+                formatDescription(&description_buf, "activate character [{s}]", .{first_name}, "activate character")
             else
-                std.mem.print(&description_buf, "activate character [{s}...] ({} sharing hotkey)", .{ first_name, group.indices.items.len }) catch "activate character group";
+                formatDescription(&description_buf, "activate character [{s}...] ({} sharing hotkey)", .{ first_name, group.indices.items.len }, "activate character group");
 
             const owned_indices = self.allocator.dupe(usize, group.indices.items) catch |err| {
                 slog.err("Failed to copy the hotkey group starting with '{s}': {}", .{ first_name, err });
@@ -227,7 +231,7 @@ pub const HotkeyManager = struct {
                 continue;
             };
             // A single key, so any failure means the action wasn't tracked and the indices are still ours.
-            const failed = self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_PER_CHARACTER_BASE, group_index), .one(group.vk), .{ .activate_character = .{ .character_indices = owned_indices } }, description);
+            const failed = self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_PER_CHARACTER_BASE, group_index), .one(group.virtual_key), .{ .activate_character = .{ .character_indices = owned_indices } }, description);
             if (failed > 0) {
                 self.allocator.free(owned_indices);
                 failed_count += failed;
@@ -236,19 +240,19 @@ pub const HotkeyManager = struct {
 
         for (self.global_settings.profileSwitchHotkeys.items, 0..) |profile_hotkey, index| {
             if (profile_hotkey.hotkey.isEmpty()) continue;
-            const description = std.mem.print(&description_buf, "switch to profile [{s}]", .{profile_hotkey.targetProfile}) catch "switch to profile";
+            const description = formatDescription(&description_buf, "switch to profile [{s}]", .{profile_hotkey.targetProfile}, "switch to profile");
             failed_count += self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_PROFILE_SWITCH_BASE, index), profile_hotkey.hotkey, .{ .switch_to_profile = .{ .profile_index = index } }, description);
         }
 
         for (self.global_settings.appHotkeys.items, 0..) |app_hotkey, index| {
             if (app_hotkey.hotkey.isEmpty()) continue;
-            const description = std.mem.print(&description_buf, "activate app [{s}]", .{app_hotkey.executableName}) catch "activate app";
+            const description = formatDescription(&description_buf, "activate app [{s}]", .{app_hotkey.executableName}, "activate app");
             failed_count += self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_APP_HOTKEY_BASE, index), app_hotkey.hotkey, .{ .activate_app = .{ .app_index = index } }, description);
         }
 
         for (self.global_settings.urlHotkeys.items, 0..) |url_hotkey, index| {
             if (url_hotkey.hotkey.isEmpty()) continue;
-            const description = std.mem.print(&description_buf, "open url [{s}]", .{url_hotkey.url}) catch "open url";
+            const description = formatDescription(&description_buf, "open url [{s}]", .{url_hotkey.url}, "open url");
             failed_count += self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_URL_HOTKEY_BASE, index), url_hotkey.hotkey, .{ .open_url = .{ .url_index = index } }, description);
         }
 
@@ -259,15 +263,13 @@ pub const HotkeyManager = struct {
         const success_count: usize = self.hotkey_map.count();
         if (failed_count > 0) {
             if (success_count == 0) {
-                slog.err("Failed to register any hotkeys - all {} key(s) failed", .{failed_count});
-                slog.err("Hotkey functionality will be unavailable", .{});
+                slog.err("Failed to register any hotkeys ({} key(s) failed), so none will work", .{failed_count});
                 self.unregisterAll();
                 return error.RegisterHotkeysFailed;
             }
             // The hotkeys that did register stay live.
-            slog.warn("Failed to register {} key(s); {} hotkey(s) still registered", .{ failed_count, success_count });
-            slog.warn("Some hotkey groups may not respond to key presses", .{});
-            return error.PartialHotkeyRegistrationFailure;
+            slog.warn("Failed to register {} key(s); the other {} hotkey(s) still work", .{ failed_count, success_count });
+            return error.RegisterHotkeysFailed;
         }
 
         slog.debug("Successfully registered all {} hotkey(s)", .{success_count});
@@ -277,8 +279,8 @@ pub const HotkeyManager = struct {
         mouse_hook.unregisterAll();
         keyboard_hook.unregisterAll();
 
-        var action_it = self.hotkey_map.valueIterator();
-        while (action_it.next()) |action| {
+        var it = self.hotkey_map.valueIterator();
+        while (it.next()) |action| {
             if (action.* == .activate_character) self.allocator.free(action.activate_character.character_indices);
             if (action.* == .cycle_group) self.allocator.free(action.cycle_group.group_indices);
         }
@@ -287,15 +289,15 @@ pub const HotkeyManager = struct {
         self.hotkey_map.clearRetainingCapacity();
     }
 
-    /// Handles a WM_HOTKEY press; lparam is the raw lParam, used only to recover the vk code for release-consumption.
-    pub fn handleHotkeyPress(self: *HotkeyManager, hotkey_id: c_int, lparam: win32.LPARAM) void {
+    /// Handles a WM_HOTKEY press; `lParam` is used only to recover the vk code for release-consumption.
+    pub fn handleHotkeyPress(self: *HotkeyManager, hotkey_id: c_int, lParam: win32.LPARAM) void {
         const action = self.hotkey_map.getPtr(hotkey_id) orelse {
             slog.warn("Received unknown hotkey ID: {}", .{hotkey_id});
             return;
         };
 
         // Auto-repeat while a key is held isn't filtered by the keyboard hook, so this must run before every early return or held keys would re-fire.
-        const vk_code = win32.hotkeyVkFromLparam(lparam);
+        const vk_code = win32.hotkeyVkFromLparam(lParam);
         const is_repeat = !keyboard_hook.trackPress(self.allocator, vk_code);
         if (is_repeat and !self.live().hotkeys.allowHotkeyAutoRepeat) {
             slog.debug("Hotkey {} ignored - key-repeat re-fire while held", .{hotkey_id});
@@ -307,12 +309,12 @@ pub const HotkeyManager = struct {
             return;
         }
 
-        if (self.hotkeys_suspended) {
+        if (self.are_hotkeys_suspended) {
             slog.debug("Hotkey {} ignored - hotkeys suspended", .{hotkey_id});
             return;
         }
 
-        if (self.dialog_suspended) {
+        if (self.is_dialog_suspended) {
             slog.debug("Hotkey {} ignored - config dialog is recording a new hotkey", .{hotkey_id});
             return;
         }
@@ -342,16 +344,16 @@ pub const HotkeyManager = struct {
     /// Takes a pointer so per-character hotkeys can advance their cursor in hotkey_map.
     fn runAction(self: *HotkeyManager, action: *HotkeyAction) void {
         switch (action.*) {
-            .cycle_group => |chain| cycling.cycleGroups(self, chain.group_indices, chain.forward),
+            .cycle_group => |chain| cycling.cycleGroups(self, chain.group_indices, chain.is_forward),
             .activate_character => |*character_group| cycling.activatePerCharacterGroup(self, character_group),
             .assign_group => |assign| membership.assignHoveredToGroup(self, assign.group_index),
             .minimize_all => {
                 slog.info("Minimize all hotkey pressed", .{});
-                client_actions.minimizeAllClients(self.scout.getWindows(), self.live());
+                actions.minimizeAllClients(self.scout.getWindows(), self.live());
             },
             .close_all => {
                 slog.info("Close all hotkey pressed", .{});
-                client_actions.closeAllClients(self.scout.getWindows(), self.live());
+                actions.closeAllClients(self.scout.getWindows(), self.live());
             },
             .toggle_visibility => {
                 slog.info("Toggle visibility hotkey pressed", .{});
@@ -377,7 +379,7 @@ pub const HotkeyManager = struct {
             .previous_not_logged_in => cycling.cycleNotLoggedIn(self, false),
             .move_to_saved_positions => {
                 slog.info("Move to saved positions hotkey pressed", .{});
-                client_actions.moveAllClientsToSavedPositions(self.scout.getWindows(), self.live(), self.painter);
+                actions.moveAllClientsToSavedPositions(self.scout.getWindows(), self.live(), self.painter);
             },
             .return_to_last_app => launch.returnToLastApp(&self.last_non_eve_foreground),
             .next_app => launch.cycleApps(self.global_settings, true),
@@ -392,7 +394,7 @@ pub const HotkeyManager = struct {
         }
     }
 
-    pub fn foregroundEveWindow(self: *HotkeyManager) ?scout.EveWindow {
+    pub fn foregroundEveWindow(self: *const HotkeyManager) ?scout.EveWindow {
         const foreground_hwnd = win32.GetForegroundWindow() orelse return null;
         for (self.scout.getWindows()) |eve_window| {
             if (eve_window.hwnd == foreground_hwnd) return eve_window;
@@ -420,16 +422,18 @@ pub const HotkeyManager = struct {
             return;
         }
         slog.info("Close active hotkey pressed for: {s}", .{eve_window.character_name});
-        _ = win32.PostMessageA(eve_window.hwnd, win32.WM_CLOSE, 0, 0);
+        if (!win32.toBool(win32.PostMessageA(eve_window.hwnd, win32.WM_CLOSE, 0, 0))) {
+            slog.warn("Failed to send close to '{s}'", .{eve_window.character_name});
+        }
     }
 
     fn toggleSuspend(self: *HotkeyManager) void {
-        self.hotkeys_suspended = !self.hotkeys_suspended;
-        const state = if (self.hotkeys_suspended) "suspended" else "resumed";
+        self.are_hotkeys_suspended = !self.are_hotkeys_suspended;
+        const state = if (self.are_hotkeys_suspended) "suspended" else "resumed";
         slog.info("Hotkeys {s}", .{state});
 
         if (main.g_timer_hwnd) |hwnd| {
-            if (self.hotkeys_suspended) {
+            if (self.are_hotkeys_suspended) {
                 // The low-level hooks intercept system-wide, so leaving bindings registered while "suspended" would still block other apps from seeing those keys.
                 self.unregisterAll();
                 // Pressing it again must still be able to resume everything else.
@@ -443,24 +447,24 @@ pub const HotkeyManager = struct {
         }
     }
 
-    pub fn areHotkeysSuspended(self: *HotkeyManager) bool {
-        return self.hotkeys_suspended;
+    pub fn areHotkeysSuspended(self: *const HotkeyManager) bool {
+        return self.are_hotkeys_suspended;
     }
 
     /// Unregisters every live hotkey (not just gates dispatch) since the low-level hooks swallow matched keys system-wide, so a gate alone would never let the dialog see the keypress.
     pub fn dialogSuspendHotkeys(self: *HotkeyManager) void {
-        if (self.dialog_suspended) return;
+        if (self.is_dialog_suspended) return;
         slog.debug("Config dialog is recording a hotkey - unregistering live hotkeys", .{});
-        self.dialog_suspended = true;
+        self.is_dialog_suspended = true;
         self.unregisterAll();
         keyboard_hook.armWinKeyCapture();
     }
 
     /// Re-registers from the same in-memory config unregisterAll left untouched, so this restores exactly what was live before.
     pub fn dialogResumeHotkeys(self: *HotkeyManager, hwnd: win32.HWND) void {
-        if (!self.dialog_suspended) return;
+        if (!self.is_dialog_suspended) return;
         slog.debug("Config dialog finished recording - re-registering hotkeys", .{});
-        self.dialog_suspended = false;
+        self.is_dialog_suspended = false;
         keyboard_hook.disarmWinKeyCapture();
         self.registerHotkeys(hwnd) catch |err| {
             slog.err("Failed to re-register hotkeys after dialog recording: {}", .{err});
@@ -498,9 +502,9 @@ pub fn recordNonEveForeground(hwnd: win32.HWND) void {
 
 fn addComboSharer(allocator: std.mem.Allocator, list: *std.ArrayList(ComboSharers), combo_vk: u32, index: usize) !void {
     for (list.items) |*sharers| {
-        if (sharers.vk == combo_vk) return sharers.indices.append(allocator, index);
+        if (sharers.virtual_key == combo_vk) return sharers.indices.append(allocator, index);
     }
-    var sharers: ComboSharers = .{ .vk = combo_vk, .indices = .empty };
+    var sharers: ComboSharers = .{ .virtual_key = combo_vk, .indices = .empty };
     errdefer sharers.indices.deinit(allocator);
     try sharers.indices.append(allocator, index);
     try list.append(allocator, sharers);
@@ -511,10 +515,19 @@ fn deinitComboSharers(allocator: std.mem.Allocator, list: *std.ArrayList(ComboSh
     list.deinit(allocator);
 }
 
+/// `items` is a slice of configs with a `hotkey: KeyList` field.
 fn countBound(items: anytype) usize {
-    var n: usize = 0;
+    var bound_count: usize = 0;
     for (items) |item| {
-        if (!item.hotkey.isEmpty()) n += 1;
+        if (!item.hotkey.isEmpty()) bound_count += 1;
     }
-    return n;
+    return bound_count;
+}
+
+/// Falls back to `fallback`, logged, when a long name doesn't fit `buffer`.
+fn formatDescription(buffer: []u8, comptime format: []const u8, args: anytype, fallback: []const u8) []const u8 {
+    return std.mem.print(buffer, format, args) catch |err| blk: {
+        slog.warn("Failed to describe hotkey '{s}': {}", .{ fallback, err });
+        break :blk fallback;
+    };
 }

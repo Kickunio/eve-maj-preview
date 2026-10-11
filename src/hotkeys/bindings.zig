@@ -24,8 +24,8 @@ pub const GLOBAL_BINDINGS = [_]GlobalBinding{
     .{ .action = .minimize_all, .protocol = .minimize_all, .field = "hotkeyMinimizeAll", .description = "minimize all clients" },
     .{ .action = .close_all, .protocol = .close_all, .field = "hotkeyCloseAll", .description = "close all clients" },
     .{ .action = .toggle_visibility, .protocol = .toggle_visibility, .field = "hotkeyToggleVisibility", .description = "toggle thumbnails visibility" },
-    .{ .action = .next_profile, .protocol = .next_profile, .field = "hotkeyNextProfile", .in_global_settings = true, .description = "cycle to next profile" },
-    .{ .action = .previous_profile, .protocol = .previous_profile, .field = "hotkeyPreviousProfile", .in_global_settings = true, .description = "cycle to previous profile" },
+    .{ .action = .next_profile, .protocol = .next_profile, .field = "hotkeyNextProfile", .is_global_setting = true, .description = "cycle to next profile" },
+    .{ .action = .previous_profile, .protocol = .previous_profile, .field = "hotkeyPreviousProfile", .is_global_setting = true, .description = "cycle to previous profile" },
     .{ .action = .toggle_exclusion, .protocol = .toggle_exclusion, .field = "hotkeyToggleExclusion", .description = "toggle character exclusion from cycling" },
     .{ .action = .next_excluded, .protocol = .next_excluded, .field = "hotkeyNextExcluded", .description = "cycle to next excluded character" },
     .{ .action = .previous_excluded, .protocol = .previous_excluded, .field = "hotkeyPreviousExcluded", .description = "cycle to previous excluded character" },
@@ -34,14 +34,14 @@ pub const GLOBAL_BINDINGS = [_]GlobalBinding{
     .{ .action = .toggle_alert_mute, .protocol = .toggle_alert_mute, .field = "hotkeyToggleAlertMute", .description = "mute/unmute TTS and sound alerts" },
     .{ .action = .cycle_notified, .protocol = .cycle_notified, .field = "hotkeyCycleNotified", .description = "cycle to most recently notified character" },
     .{ .action = .previous_notified, .protocol = .previous_notified, .field = "hotkeyPreviousNotified", .description = "cycle backward through notified characters" },
-    .{ .action = .next_all_clients, .protocol = .next_all_clients, .field = "hotkeyCycleAllClientsForward", .in_global_settings = true, .description = "cycle forward through all logged-in clients" },
-    .{ .action = .previous_all_clients, .protocol = .previous_all_clients, .field = "hotkeyCycleAllClientsBackward", .in_global_settings = true, .description = "cycle backward through all logged-in clients" },
-    .{ .action = .next_not_logged_in, .protocol = .next_not_logged_in, .field = "hotkeyCycleNotLoggedInForward", .in_global_settings = true, .description = "cycle forward through not-logged-in clients" },
-    .{ .action = .previous_not_logged_in, .protocol = .previous_not_logged_in, .field = "hotkeyCycleNotLoggedInBackward", .in_global_settings = true, .description = "cycle backward through not-logged-in clients" },
+    .{ .action = .next_all_clients, .protocol = .next_all_clients, .field = "hotkeyCycleAllClientsForward", .is_global_setting = true, .description = "cycle forward through all logged-in clients" },
+    .{ .action = .previous_all_clients, .protocol = .previous_all_clients, .field = "hotkeyCycleAllClientsBackward", .is_global_setting = true, .description = "cycle backward through all logged-in clients" },
+    .{ .action = .next_not_logged_in, .protocol = .next_not_logged_in, .field = "hotkeyCycleNotLoggedInForward", .is_global_setting = true, .description = "cycle forward through not-logged-in clients" },
+    .{ .action = .previous_not_logged_in, .protocol = .previous_not_logged_in, .field = "hotkeyCycleNotLoggedInBackward", .is_global_setting = true, .description = "cycle backward through not-logged-in clients" },
     .{ .action = .move_to_saved_positions, .protocol = .move_to_saved_positions, .field = "hotkeyMoveToSavedPositions", .description = "move all clients to saved positions" },
-    .{ .action = .return_to_last_app, .protocol = .return_to_last_app, .field = "hotkeyReturnToLastApp", .in_global_settings = true, .description = "return focus to the last non-EVE app" },
-    .{ .action = .next_app, .protocol = .next_app, .field = "hotkeyCycleAppsForward", .in_global_settings = true, .description = "cycle forward through the app hotkeys' running apps" },
-    .{ .action = .previous_app, .protocol = .previous_app, .field = "hotkeyCycleAppsBackward", .in_global_settings = true, .description = "cycle backward through the app hotkeys' running apps" },
+    .{ .action = .return_to_last_app, .protocol = .return_to_last_app, .field = "hotkeyReturnToLastApp", .is_global_setting = true, .description = "return focus to the last non-EVE app" },
+    .{ .action = .next_app, .protocol = .next_app, .field = "hotkeyCycleAppsForward", .is_global_setting = true, .description = "cycle forward through the app hotkeys' running apps" },
+    .{ .action = .previous_app, .protocol = .previous_app, .field = "hotkeyCycleAppsBackward", .is_global_setting = true, .description = "cycle backward through the app hotkeys' running apps" },
     .{ .action = .exit_app, .protocol = .exit_app, .field = "hotkeyExitApp", .description = "exit the application" },
     .{ .action = .close_active, .protocol = .close_active, .field = "hotkeyCloseActive", .description = "close the focused client" },
 };
@@ -59,7 +59,7 @@ pub const CharacterGroup = struct {
 pub const GroupChain = struct {
     /// In hotkeyGroups order.
     group_indices: []const usize,
-    forward: bool,
+    is_forward: bool,
 };
 
 pub const HotkeyAction = union(enum) {
@@ -108,9 +108,9 @@ pub const ActionTag = std.meta.Tag(HotkeyAction);
 pub const GlobalBinding = struct {
     action: ActionTag,
     protocol: protocol.GlobalAction,
-    /// Name of the KeyList field, on GlobalConfig when `in_global_settings`, else on the profile's Config.hotkeys.
+    /// Name of the KeyList field, on GlobalConfig when `is_global_setting`, else on the profile's Config.hotkeys.
     field: []const u8,
-    in_global_settings: bool = false,
+    is_global_setting: bool = false,
     description: []const u8,
 };
 
@@ -127,6 +127,7 @@ pub fn actionFor(comptime action: ActionTag) HotkeyAction {
     return @unionInit(HotkeyAction, @tagName(action), {});
 }
 
+/// Every GlobalAction maps to exactly one binding; checked at compile time below.
 pub fn fromProtocol(action: protocol.GlobalAction) HotkeyAction {
     inline for (GLOBAL_BINDINGS) |binding| {
         if (binding.protocol == action) return actionFor(binding.action);
