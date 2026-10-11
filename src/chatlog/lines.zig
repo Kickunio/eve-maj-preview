@@ -7,6 +7,8 @@ pub const MAX_LINE_LENGTH = 4000;
 const LOCAL_CHANGE = "EVE System > Channel changed to Local";
 const JUMP = "Jumping from ";
 const UNDOCK = "Undocking from ";
+/// EVE's tag on jump and undock lines.
+const NONE_TAG = "(None) ";
 
 pub const SystemSource = enum { chatlog, jump, undock, conduit };
 
@@ -25,15 +27,15 @@ pub const SystemMatch = struct {
     /// Borrows from the scanned text.
     system: []const u8,
     /// See lineTimestamp; 0 if it couldn't be read.
-    event_ts: u64,
+    event_timestamp: u64,
 };
 
 /// Joins lines split across reads, holding a trailing incomplete one until its newline arrives.
 pub const LineAssembler = struct {
     partial: std.ArrayList(u8) = .empty,
-    /// Set once a held line outgrows max_len; the rest of it is dropped up to its newline.
-    skipping: bool = false,
-    max_len: usize = MAX_LINE_LENGTH,
+    /// Set once a held line outgrows max_length; the rest of it is dropped up to its newline.
+    is_skipping: bool = false,
+    max_length: usize = MAX_LINE_LENGTH,
 
     pub fn deinit(self: *LineAssembler, allocator: std.mem.Allocator) void {
         self.partial.deinit(allocator);
@@ -41,7 +43,7 @@ pub const LineAssembler = struct {
 
     pub fn reset(self: *LineAssembler) void {
         self.partial.clearRetainingCapacity();
-        self.skipping = false;
+        self.is_skipping = false;
     }
 
     /// Calls `handler.onLine` per complete line, valid only during the call, and `handler.onLongLine` per line too long to keep.
@@ -50,23 +52,23 @@ pub const LineAssembler = struct {
         while (std.mem.findScalar(u8, rest, '\n')) |newline| {
             const piece = rest[0..newline];
             rest = rest[newline + 1 ..];
-            if (self.partial.items.len == 0 and !self.skipping) {
+            if (self.partial.items.len == 0 and !self.is_skipping) {
                 handler.onLine(piece);
                 continue;
             }
             try self.hold(allocator, piece, handler);
-            if (!self.skipping) handler.onLine(self.partial.items);
+            if (!self.is_skipping) handler.onLine(self.partial.items);
             self.reset();
         }
         if (rest.len > 0) try self.hold(allocator, rest, handler);
     }
 
     fn hold(self: *LineAssembler, allocator: std.mem.Allocator, bytes: []const u8, handler: anytype) !void {
-        if (self.skipping) return;
-        if (self.partial.items.len + bytes.len > self.max_len) {
+        if (self.is_skipping) return;
+        if (self.partial.items.len + bytes.len > self.max_length) {
             handler.onLongLine(self.partial.items.len + bytes.len);
             self.partial.clearRetainingCapacity();
-            self.skipping = true;
+            self.is_skipping = true;
             return;
         }
         try self.partial.appendSlice(allocator, bytes);
@@ -86,11 +88,11 @@ pub fn parseChatLine(line: []const u8) ?[]const u8 {
 /// Dispatches on the message's first characters, so each line is scanned once.
 pub fn parseGameLine(line: []const u8) GameLine {
     const close = std.mem.find(u8, line, "] ") orelse return .{};
-    const message = line[close + 2 ..];
+    const message = line[close + "] ".len ..];
     if (message.len < 2) return .{};
 
     // EVE tags jumps and undocks "(None)"; untagged ones are accepted too.
-    const untagged = if (std.mem.startsWith(u8, message, "(None) ")) message["(None) ".len..] else message;
+    const untagged = if (std.mem.startsWith(u8, message, NONE_TAG)) message[NONE_TAG.len..] else message;
     if (std.mem.startsWith(u8, untagged, JUMP)) {
         const system = jumpDestination(untagged) orelse return .{};
         return .{ .system = .{ .system = system, .source = .jump } };
@@ -149,7 +151,7 @@ pub fn lastSystemInChat(text: []const u8) ?SystemMatch {
     var end = text.len;
     while (std.mem.findLast(u8, text[0..end], LOCAL_CHANGE)) |match_index| {
         const line_start = if (std.mem.findScalarLast(u8, text[0..match_index], '\n')) |newline| newline + 1 else 0;
-        if (parseChatLine(text[line_start..])) |system| return .{ .system = system, .event_ts = lineTimestamp(text, match_index) };
+        if (parseChatLine(text[line_start..])) |system| return .{ .system = system, .event_timestamp = lineTimestamp(text, match_index) };
         end = line_start;
     }
     return null;
@@ -166,7 +168,7 @@ pub fn lastSystemInGame(text: []const u8) ?SystemMatch {
         const line_start = if (std.mem.findScalarLast(u8, text[0..match_index], '\n')) |newline| newline + 1 else 0;
         if (isTimestampPrefix(text[line_start..match_index])) {
             const system = (if (use_jump) jumpDestination(text[match_index..]) else undockDestination(text[match_index..])) orelse return null;
-            return .{ .system = system, .event_ts = lineTimestamp(text, match_index) };
+            return .{ .system = system, .event_timestamp = lineTimestamp(text, match_index) };
         }
         end = line_start;
     }
@@ -178,7 +180,7 @@ fn isTimestampPrefix(prefix: []const u8) bool {
     if (!std.mem.startsWith(u8, stamped, "[ ")) return false;
     const close = std.mem.find(u8, stamped, " ] ") orelse return false;
     const rest = stamped[close + " ] ".len ..];
-    return rest.len == 0 or std.mem.eql(u8, rest, "(None) ");
+    return rest.len == 0 or std.mem.eql(u8, rest, NONE_TAG);
 }
 
 /// YYYYMMDDHHMMSS, or 0; looks only 64 bytes back, so a chunk cut mid-line can't borrow an earlier line's bracket.
@@ -216,9 +218,9 @@ pub fn logFileTimestamp(file_name: []const u8, is_chatlog: bool) u64 {
 }
 
 /// UTC Unix seconds for a logFileTimestamp; null for 0 or an impossible date.
-pub fn logTimestampToUnixSeconds(ts: u64) ?i64 {
-    const date: i64 = @intCast(ts / 1000000);
-    const time: i64 = @intCast(ts % 1000000);
+pub fn logTimestampToUnixSeconds(timestamp: u64) ?i64 {
+    const date: i64 = @intCast(timestamp / 1000000);
+    const time: i64 = @intCast(timestamp % 1000000);
     const year = @divTrunc(date, 10000);
     const month = @mod(@divTrunc(date, 100), 100);
     const day = @mod(date, 100);
@@ -237,6 +239,7 @@ pub fn logTimestampToUnixSeconds(ts: u64) ?i64 {
     return days * std.time.s_per_day + hour * std.time.s_per_hour + minute * std.time.s_per_min + second;
 }
 
+/// The 8-13 digit character ID before ".txt"; null for any other name.
 pub fn characterIdFromFileName(file_name: []const u8) ?[]const u8 {
     const name = withoutTxt(file_name);
     const underscore = std.mem.findScalarLast(u8, name, '_') orelse return null;
@@ -314,7 +317,7 @@ test "lastSystemInGame picks whichever of jump and undock came last" {
     ;
     const found = lastSystemInGame(text).?;
     try testing.expectEqualStrings("Floseswin", found.system);
-    try testing.expectEqual(@as(u64, 20260920232636), found.event_ts);
+    try testing.expectEqual(@as(u64, 20260920232636), found.event_timestamp);
     try testing.expectEqualStrings("8-WYQZ", lastSystemInGame(text[0..std.mem.findScalar(u8, text, '\n').?]).?.system);
 }
 
@@ -346,7 +349,7 @@ test "lastSystemInChat skips Local changes typed by a player" {
     ;
     const found = lastSystemInChat(text).?;
     try testing.expectEqualStrings("Perimeter", found.system);
-    try testing.expectEqual(@as(u64, 20260921211037), found.event_ts);
+    try testing.expectEqual(@as(u64, 20260921211037), found.event_timestamp);
 }
 
 test "logFileTimestamp and characterIdFromFileName read EVE's log names" {
@@ -437,7 +440,7 @@ test "LineAssembler drops a line over its limit up to the next newline" {
     defer freeLines(&lines);
     var long_lines: usize = 0;
     const collector: Collector = .{ .lines = &lines, .long_lines = &long_lines };
-    var assembler: LineAssembler = .{ .max_len = 8 };
+    var assembler: LineAssembler = .{ .max_length = 8 };
     defer assembler.deinit(testing.allocator);
 
     try assembler.feed(testing.allocator, "12345", collector);

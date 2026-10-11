@@ -21,7 +21,9 @@ pub const Backoff = struct {
 };
 
 pub const LogFile = struct {
+    /// Owned; freed in deinit.
     path: []const u8,
+    /// Owned; freed in deinit.
     character_name: []const u8,
     /// UTF-16 LE if true, UTF-8 if not.
     is_chatlog: bool,
@@ -29,20 +31,20 @@ pub const LogFile = struct {
     file: ?std.Io.File = null,
     position: u64 = 0,
     /// Until set, a poll skips the backlog rather than reading it from 0.
-    started: bool = false,
+    has_started: bool = false,
     last_size: u64 = 0,
-    last_modified: i64 = 0,
-    disabled: bool = false,
-    idle_checks: u32 = 0,
-    cycle_counter: u32 = 0,
+    last_modified_ns: i64 = 0,
+    is_disabled: bool = false,
+    idle_check_count: u32 = 0,
+    skipped_cycle_count: u32 = 0,
     poll_interval_multiplier: u8 = 1,
     lines: lines_mod.LineAssembler = .{},
     u16_buffer: std.ArrayList(u16) = .empty,
     utf8_buffer: std.ArrayList(u8) = .empty,
     system_name_buffer: std.ArrayList(u8) = .empty,
-    // Parse state the monitor keeps per file.
+    /// Owned by the monitor's parse of this file.
     last_system_hash: u64 = 0,
-    long_line_warnings: u32 = 0,
+    long_line_warning_count: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8, character_name: []const u8, is_chatlog: bool) !LogFile {
         const owned_path = try allocator.dupe(u8, path);
@@ -71,9 +73,9 @@ pub const LogFile = struct {
         self.file = file;
         const stat = try file.stat(io);
         self.last_size = stat.size;
-        self.last_modified = @intCast(stat.mtime.nanoseconds);
+        self.last_modified_ns = @intCast(stat.mtime.nanoseconds);
         self.position = stat.size;
-        self.started = true;
+        self.has_started = true;
 
         const found = try self.findSystemBackward(allocator, io, file, stat.size);
         if (found == null and stat.size > MAX_BACKWARD_SCAN_BYTES) {
@@ -84,13 +86,13 @@ pub const LogFile = struct {
 
     /// Passes each complete line appended since the last poll to `handler`; see LineAssembler.feed.
     pub fn poll(self: *LogFile, allocator: std.mem.Allocator, io: std.Io, backoff: Backoff, handler: anytype) !void {
-        if (self.disabled) return;
-        self.cycle_counter += 1;
-        if (self.cycle_counter < @min(self.poll_interval_multiplier, backoff.max_multiplier)) return;
-        self.cycle_counter = 0;
+        if (self.is_disabled) return;
+        self.skipped_cycle_count += 1;
+        if (self.skipped_cycle_count < @min(self.poll_interval_multiplier, backoff.max_multiplier)) return;
+        self.skipped_cycle_count = 0;
 
         const file = self.file orelse self.open(io) orelse return;
-        if (!self.started) return self.skipToEnd(io, file);
+        if (!self.has_started) return self.skipToEnd(io, file);
         self.readAppended(allocator, io, file, backoff, handler) catch |err| {
             // Reopened on the next poll, in case the handle itself went bad.
             self.closeFile(io);
@@ -104,9 +106,9 @@ pub const LogFile = struct {
             return err;
         };
         self.last_size = stat.size;
-        self.last_modified = @intCast(stat.mtime.nanoseconds);
+        self.last_modified_ns = @intCast(stat.mtime.nanoseconds);
         self.position = stat.size;
-        self.started = true;
+        self.has_started = true;
         slog.info("Following '{s}' from its end, after its start failed", .{self.path});
     }
 
@@ -121,7 +123,7 @@ pub const LogFile = struct {
                 },
                 error.BadPathName => {
                     slog.warn("Failed to open '{s}' for '{s}', disabling it: {}", .{ self.path, self.character_name, err });
-                    self.disabled = true;
+                    self.is_disabled = true;
                 },
                 else => slog.warn("Failed to open '{s}': {}", .{ self.path, err }),
             }
@@ -134,33 +136,33 @@ pub const LogFile = struct {
     fn readAppended(self: *LogFile, allocator: std.mem.Allocator, io: std.Io, file: std.Io.File, backoff: Backoff, handler: anytype) !void {
         const stat = try file.stat(io);
         const size = stat.size;
-        const modified: i64 = @intCast(stat.mtime.nanoseconds);
+        const modified_ns: i64 = @intCast(stat.mtime.nanoseconds);
 
-        if (size == self.last_size and modified == self.last_modified) {
-            self.idle_checks += 1;
-            if (self.idle_checks >= backoff.idle_threshold and self.poll_interval_multiplier < backoff.max_multiplier) {
+        if (size == self.last_size and modified_ns == self.last_modified_ns) {
+            self.idle_check_count += 1;
+            if (self.idle_check_count >= backoff.idle_threshold and self.poll_interval_multiplier < backoff.max_multiplier) {
                 const old_multiplier = self.poll_interval_multiplier;
                 self.poll_interval_multiplier = @min(self.poll_interval_multiplier * 2, backoff.max_multiplier);
-                self.idle_checks = 0;
+                self.idle_check_count = 0;
                 slog.debug("Poll backoff {s} ({s}): {}x -> {}x", .{ self.character_name, if (self.is_chatlog) "chatlog" else "gamelog", old_multiplier, self.poll_interval_multiplier });
             }
             return;
         }
-        self.idle_checks = 0;
+        self.idle_check_count = 0;
         self.poll_interval_multiplier = 1;
 
         // EVE only appends, so a shrink means something else (e.g. a sync client) rewrote it; replaying would refire old events.
         if (size < self.last_size) {
             self.position = if (self.is_chatlog) size & ~@as(u64, 1) else size;
             self.last_size = size;
-            self.last_modified = modified;
+            self.last_modified_ns = modified_ns;
             self.lines.reset();
             slog.info("'{s}' shrank, following it from its new end", .{self.path});
             return;
         }
 
-        var chunks: usize = 0;
-        while (chunks < MAX_CHUNKS_PER_POLL) : (chunks += 1) {
+        var chunk_count: usize = 0;
+        while (chunk_count < MAX_CHUNKS_PER_POLL) : (chunk_count += 1) {
             var buffer: [READ_CHUNK_SIZE]u8 = undefined;
             const bytes_read = try file.readPositionalAll(io, &buffer, self.position);
             // A chatlog read can stop mid-character while EVE is writing; the rest is read next time.
@@ -182,7 +184,7 @@ pub const LogFile = struct {
         // Only once caught up, so unread data makes the next poll read again.
         if (self.position >= size) {
             self.last_size = size;
-            self.last_modified = modified;
+            self.last_modified_ns = modified_ns;
         }
     }
 
@@ -216,7 +218,7 @@ pub const LogFile = struct {
             if (found) |match| {
                 self.system_name_buffer.clearRetainingCapacity();
                 try self.system_name_buffer.appendSlice(allocator, match.system);
-                return .{ .system = self.system_name_buffer.items, .event_ts = match.event_ts };
+                return .{ .system = self.system_name_buffer.items, .event_timestamp = match.event_timestamp };
             }
 
             scan_offset = if (start_offset > 0) start_offset + overlap else 0;

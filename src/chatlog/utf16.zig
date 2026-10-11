@@ -11,11 +11,11 @@ pub fn completeLen(data: []const u8) usize {
     return len;
 }
 
-/// `out` needs 3 bytes per UTF-16 unit and `units` one per byte pair; an unpaired surrogate becomes U+FFFD rather than losing the rest.
+/// `out` needs 3 bytes per UTF-16 unit and `units` one per byte pair; an unpaired surrogate becomes U+FFFD rather than losing the rest. Null for no whole unit.
 pub fn decodeInto(units: []u16, out: []u8, data: []const u8) ?[]u8 {
-    const count = data.len / 2;
-    if (count == 0) return null;
-    const packed_units = units[0..count];
+    const unit_count = data.len / 2;
+    if (unit_count == 0) return null;
+    const packed_units = units[0..unit_count];
     for (packed_units, 0..) |*unit, i| unit.* = @as(u16, data[i * 2]) | (@as(u16, data[i * 2 + 1]) << 8);
 
     const written = std.unicode.utf16LeToUtf8(out, packed_units) catch blk: {
@@ -25,6 +25,7 @@ pub fn decodeInto(units: []u16, out: []u8, data: []const u8) ?[]u8 {
     return out[0..written];
 }
 
+/// Borrows from `out`.
 pub fn decode(allocator: std.mem.Allocator, units: *std.ArrayList(u16), out: *std.ArrayList(u8), data: []const u8) !?[]u8 {
     try units.resize(allocator, data.len / 2);
     try out.resize(allocator, (data.len / 2) * 3);

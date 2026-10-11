@@ -12,22 +12,24 @@ const slog = log.scoped("chatlog");
 /// Files checked by header when a character's ID isn't cached; a live character's log is always among the newest.
 const MAX_HEADER_CHECKS = 64;
 /// Enough for a decoded MAX_PATH file name.
-const NAME_BUF = win32.MAX_PATH * 3;
+const MAX_NAME_LENGTH = win32.MAX_PATH * 3;
 
 /// Folders where files were created since they were last rescanned.
 pub const Changes = struct {
-    chatlog: bool = false,
-    gamelog: bool = false,
+    chatlog_changed: bool = false,
+    gamelog_changed: bool = false,
 
-    pub fn any(self: Changes) bool {
-        return self.chatlog or self.gamelog;
+    pub fn hasAny(self: Changes) bool {
+        return self.chatlog_changed or self.gamelog_changed;
     }
 };
 
 pub const LogFinder = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
+    /// Owned; freed in deinit.
     chatlog_dir: []const u8,
+    /// Owned; freed in deinit.
     gamelog_dir: []const u8,
     /// Borrowed; outlives the finder.
     character_ids: ?*CharacterIds,
@@ -69,8 +71,8 @@ pub const LogFinder = struct {
     /// Without waiting; a folder whose watch only just started counts as changed, for logs made while it wasn't watched.
     pub fn changes(self: *LogFinder) Changes {
         return .{
-            .chatlog = self.folderChanged(&self.chatlog_watcher, &self.chatlog_watch_is_new, self.chatlog_dir),
-            .gamelog = self.folderChanged(&self.gamelog_watcher, &self.gamelog_watch_is_new, self.gamelog_dir),
+            .chatlog_changed = self.folderChanged(&self.chatlog_watcher, &self.chatlog_watch_is_new, self.chatlog_dir),
+            .gamelog_changed = self.folderChanged(&self.gamelog_watcher, &self.gamelog_watch_is_new, self.gamelog_dir),
         };
     }
 
@@ -86,8 +88,8 @@ pub const LogFinder = struct {
 
     /// Resumes watching the folders in `done`, once their changes have been rescanned.
     pub fn rearm(self: *LogFinder, done: Changes) void {
-        if (done.chatlog) rewatch(&self.chatlog_watcher, &self.chatlog_watch_is_new, self.chatlog_dir);
-        if (done.gamelog) rewatch(&self.gamelog_watcher, &self.gamelog_watch_is_new, self.gamelog_dir);
+        if (done.chatlog_changed) rewatch(&self.chatlog_watcher, &self.chatlog_watch_is_new, self.chatlog_dir);
+        if (done.gamelog_changed) rewatch(&self.gamelog_watcher, &self.gamelog_watch_is_new, self.gamelog_dir);
     }
 
     /// Owned by the caller.
@@ -101,6 +103,7 @@ pub const LogFinder = struct {
         return self.findByHeader(dir, is_chatlog, character_name);
     }
 
+    /// Caller frees.
     fn cachedId(self: *LogFinder, character_name: []const u8) ?[]const u8 {
         const ids = self.character_ids orelse return null;
         return ids.get(self.allocator, character_name) catch |err| {
@@ -118,7 +121,7 @@ pub const LogFinder = struct {
         };
 
         var best_timestamp: u64 = 0;
-        var best_buf: [NAME_BUF]u8 = undefined;
+        var best_buf: [MAX_NAME_LENGTH]u8 = undefined;
         var best: []const u8 = "";
 
         var files = FileNames.open(self.allocator, dir, pattern) orelse return null;
@@ -222,7 +225,7 @@ const FileNames = struct {
     handle: win32.HANDLE,
     find_data: win32.WIN32_FIND_DATAW,
     has_pending: bool,
-    name_buf: [NAME_BUF]u8 = undefined,
+    name_buf: [MAX_NAME_LENGTH]u8 = undefined,
 
     fn open(allocator: std.mem.Allocator, dir: []const u8, pattern: []const u8) ?FileNames {
         const search = std.Io.Dir.path.join(allocator, &.{ dir, pattern }) catch |err| {
@@ -238,8 +241,12 @@ const FileNames = struct {
 
         var files: FileNames = .{ .handle = undefined, .find_data = undefined, .has_pending = true };
         files.handle = win32.FindFirstFileW(search_w.ptr, &files.find_data);
-        // No match at all is also INVALID_HANDLE_VALUE.
-        if (files.handle == win32.INVALID_HANDLE_VALUE) return null;
+        if (files.handle == win32.INVALID_HANDLE_VALUE) {
+            // No match at all is also INVALID_HANDLE_VALUE.
+            const error_code = win32.GetLastError();
+            if (error_code != win32.ERROR_FILE_NOT_FOUND) slog.warn("Failed to list '{s}': error {}", .{ search, error_code });
+            return null;
+        }
         return files;
     }
 
@@ -251,13 +258,13 @@ const FileNames = struct {
     fn next(self: *FileNames) ?[]const u8 {
         while (true) {
             if (!self.has_pending) {
-                if (win32.FindNextFileW(self.handle, &self.find_data) == win32.FALSE) return null;
+                if (!win32.toBool(win32.FindNextFileW(self.handle, &self.find_data))) return null;
             }
             self.has_pending = false;
             if (self.find_data.dwFileAttributes & win32.FILE_ATTRIBUTE_DIRECTORY != 0) continue;
-            const raw: []const u16 = self.find_data.cFileName[0..];
-            const len = std.mem.findScalar(u16, raw, 0) orelse raw.len;
-            const written = std.unicode.utf16LeToUtf8(&self.name_buf, raw[0..len]) catch |err| {
+            const raw_name: []const u16 = self.find_data.cFileName[0..];
+            const name_len = std.mem.findScalar(u16, raw_name, 0) orelse raw_name.len;
+            const written = std.unicode.utf16LeToUtf8(&self.name_buf, raw_name[0..name_len]) catch |err| {
                 slog.warn("Failed to decode log file name: {}", .{err});
                 continue;
             };

@@ -16,12 +16,12 @@ pub const Command = union(enum) {
     }
 };
 
-/// Worker to main thread, which resolves the hwnd: only the main thread may touch Scout and Painter.
+/// Worker to main thread, which resolves the hwnd: only the main thread may touch Scout and Painter. Names are owned; freed in deinit.
 pub const SystemUpdate = struct {
     character_name: []const u8,
     system_name: []const u8,
     /// 0 skips the staleness check; live-tail lines arrive in order.
-    event_ts: u64,
+    event_timestamp: u64,
     /// Stargate and conduit jumps only, for Travel Mode.
     is_jump: bool = false,
 
@@ -31,7 +31,7 @@ pub const SystemUpdate = struct {
     }
 };
 
-/// Worker to main thread: when a character's session began, by its gamelog's name.
+/// Worker to main thread: when a character's session began, by its gamelog's name. The name is owned; freed in deinit.
 pub const SessionStart = struct {
     character_name: []const u8,
     /// UTC Unix seconds.
@@ -42,7 +42,7 @@ pub const SessionStart = struct {
     }
 };
 
-/// Worker to main thread, where the text is rendered from per-type config.
+/// Worker to main thread, where the text is rendered from per-type config. The name is owned; freed in deinit.
 pub const NotificationEvent = struct {
     character_name: []const u8,
     /// source/target are owned copies.
@@ -59,6 +59,7 @@ pub const NotificationEvent = struct {
 pub fn Queue(comptime T: type) type {
     return struct {
         mutex: std.Io.Mutex = .init,
+        /// Guarded by mutex.
         items: std.ArrayList(T) = .empty,
         allocator: std.mem.Allocator,
         io: std.Io,

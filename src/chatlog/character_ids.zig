@@ -10,8 +10,8 @@ const FILE_NAME = files.CHARACTER_IDS_FILE;
 
 pub const CharacterIds = struct {
     allocator: std.mem.Allocator,
+    /// Guarded by mutex; the chatlog worker adds to it while the config window reads it for portraits.
     map: std.StringHashMapUnmanaged([]const u8) = .empty,
-    /// Guards `map`: the chatlog worker adds to it while the config window reads it for portraits.
     mutex: std.Io.Mutex = .init,
 
     /// Starts empty if the file is missing or unreadable; the monitor learns the IDs again as it needs them.
@@ -52,6 +52,7 @@ pub const CharacterIds = struct {
         self.map.deinit(self.allocator);
     }
 
+    /// Caller holds mutex, or no other thread has the ids yet.
     fn putOwned(self: *CharacterIds, name: []const u8, id: []const u8) !void {
         const name_copy = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(name_copy);
@@ -94,27 +95,28 @@ pub const CharacterIds = struct {
     }
 
     /// `{name: id}`.
-    pub fn write(self: *CharacterIds, jw: *std.json.Stringify) !void {
+    pub fn write(self: *CharacterIds, json_writer: *std.json.Stringify) !void {
         try self.mutex.lock(files.g_io);
         defer self.mutex.unlock(files.g_io);
-        try writeMap(&self.map, jw);
+        try writeMap(&self.map, json_writer);
     }
 
+    /// Caller holds mutex.
     fn toJson(self: *const CharacterIds, allocator: std.mem.Allocator) ![]u8 {
         var out: std.Io.Writer.Allocating = .init(allocator);
         errdefer out.deinit();
-        var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{ .whitespace = .indent_2 } };
-        try writeMap(&self.map, &jw);
+        var json_writer: std.json.Stringify = .{ .writer = &out.writer, .options = .{ .whitespace = .indent_2 } };
+        try writeMap(&self.map, &json_writer);
         return out.toOwnedSlice();
     }
 };
 
-fn writeMap(map: *const std.StringHashMapUnmanaged([]const u8), jw: *std.json.Stringify) !void {
-    try jw.beginObject();
+fn writeMap(map: *const std.StringHashMapUnmanaged([]const u8), json_writer: *std.json.Stringify) !void {
+    try json_writer.beginObject();
     var it = map.iterator();
     while (it.next()) |entry| {
-        try jw.objectField(entry.key_ptr.*);
-        try jw.write(entry.value_ptr.*);
+        try json_writer.objectField(entry.key_ptr.*);
+        try json_writer.write(entry.value_ptr.*);
     }
-    try jw.endObject();
+    try json_writer.endObject();
 }

@@ -205,7 +205,7 @@ pub const ChatlogMonitor = struct {
                 slog.warn("Failed to apply system '{s}' for '{s}': the painter isn't ready", .{ system_update.system_name, system_update.character_name });
                 continue;
             };
-            painter_ptr.updateSystemNameByHwnd(hwnd, system_update.system_name, system_update.event_ts, system_update.is_jump) catch |err| {
+            painter_ptr.updateSystemNameByHwnd(hwnd, system_update.system_name, system_update.event_timestamp, system_update.is_jump) catch |err| {
                 slog.err("Failed to update system name for '{s}': {}", .{ system_update.character_name, err });
             };
         }
@@ -369,9 +369,9 @@ pub const ChatlogMonitor = struct {
             return err;
         };
         if (found) |match| {
-            slog.debug("Initial system for {s}: {s} (event_ts={})", .{ character_name, match.system, match.event_ts });
+            slog.debug("Initial system for {s}: {s} (event_timestamp={})", .{ character_name, match.system, match.event_timestamp });
             // Not a jump: it's where the character already was.
-            self.queueSystemUpdate(character_name, match.system, match.event_ts, false);
+            self.queueSystemUpdate(character_name, match.system, match.event_timestamp, false);
         }
         if (!is_chatlog) self.queueSessionStart(character_name, std.Io.Dir.path.basename(path));
 
@@ -397,9 +397,9 @@ pub const ChatlogMonitor = struct {
     fn rescanForNewLogs(self: *ChatlogMonitor) !void {
         const start_time = std.Io.Timestamp.now(self.io, .awake).toNanoseconds();
 
-        if (!self.rescan_changes.any()) {
+        if (!self.rescan_changes.hasAny()) {
             const changes = self.finder.changes();
-            if (!changes.any()) return;
+            if (!changes.hasAny()) return;
             self.rescan_changes = changes;
             self.rescan_index = 0;
 
@@ -411,7 +411,7 @@ pub const ChatlogMonitor = struct {
                 errdefer self.allocator.free(copy);
                 try self.rescan_names.append(self.allocator, copy);
             }
-            slog.debug("New log file scan started (chatlog={}, gamelog={})", .{ changes.chatlog, changes.gamelog });
+            slog.debug("New log file scan started (chatlog={}, gamelog={})", .{ changes.chatlog_changed, changes.gamelog_changed });
         }
 
         const names = self.rescan_names.items;
@@ -423,8 +423,8 @@ pub const ChatlogMonitor = struct {
             const name = names[self.rescan_index];
             if (!self.wanted.contains(name)) continue;
             // addLogFile skips a file already followed.
-            if (self.rescan_changes.chatlog) self.followNewestLog(name, true);
-            if (self.rescan_changes.gamelog) self.followNewestLog(name, false);
+            if (self.rescan_changes.chatlog_changed) self.followNewestLog(name, true);
+            if (self.rescan_changes.gamelog_changed) self.followNewestLog(name, false);
         }
 
         self.finder.rearm(self.rescan_changes);
@@ -434,8 +434,8 @@ pub const ChatlogMonitor = struct {
         slog.debug("Log file scan completed", .{});
     }
 
-    fn queueSystemUpdate(self: *ChatlogMonitor, character_name: []const u8, system_name: []const u8, event_ts: u64, is_jump: bool) void {
-        const system_update = self.copySystemUpdate(character_name, system_name, event_ts, is_jump) catch |err| {
+    fn queueSystemUpdate(self: *ChatlogMonitor, character_name: []const u8, system_name: []const u8, event_timestamp: u64, is_jump: bool) void {
+        const system_update = self.copySystemUpdate(character_name, system_name, event_timestamp, is_jump) catch |err| {
             slog.err("Failed to copy system update for '{s}': {}", .{ character_name, err });
             return;
         };
@@ -444,10 +444,10 @@ pub const ChatlogMonitor = struct {
         };
     }
 
-    fn copySystemUpdate(self: *ChatlogMonitor, character_name: []const u8, system_name: []const u8, event_ts: u64, is_jump: bool) !queue.SystemUpdate {
+    fn copySystemUpdate(self: *ChatlogMonitor, character_name: []const u8, system_name: []const u8, event_timestamp: u64, is_jump: bool) !queue.SystemUpdate {
         const owned_name = try self.allocator.dupe(u8, character_name);
         errdefer self.allocator.free(owned_name);
-        return .{ .character_name = owned_name, .system_name = try self.allocator.dupe(u8, system_name), .event_ts = event_ts, .is_jump = is_jump };
+        return .{ .character_name = owned_name, .system_name = try self.allocator.dupe(u8, system_name), .event_timestamp = event_timestamp, .is_jump = is_jump };
     }
 
     /// EVE starts a new gamelog at each login, named for when it did.
@@ -498,9 +498,9 @@ pub const ChatlogMonitor = struct {
 
     /// Only the first few and then every 100th, since a malformed log can produce thousands.
     fn warnLongLine(file: *LogFile, len: usize) void {
-        file.long_line_warnings += 1;
-        if (file.long_line_warnings <= 3 or file.long_line_warnings % 100 == 0) {
-            slog.warn("Dropping line ({} bytes, over the {}-byte cap) for '{s}' (warning #{})", .{ len, lines.MAX_LINE_LENGTH, file.character_name, file.long_line_warnings });
+        file.long_line_warning_count += 1;
+        if (file.long_line_warning_count <= 3 or file.long_line_warning_count % 100 == 0) {
+            slog.warn("Dropping line ({} bytes, over the {}-byte cap) for '{s}' (warning #{})", .{ len, lines.MAX_LINE_LENGTH, file.character_name, file.long_line_warning_count });
         }
     }
 
