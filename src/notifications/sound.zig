@@ -225,6 +225,7 @@ const WAVEHDR = extern struct {
 };
 
 const DecodedPcm = struct {
+    /// Owned; freed by deinit.
     data: []u8,
     channels: u16,
     samples_per_second: u32,
@@ -275,7 +276,7 @@ pub fn setIo(io: std.Io) void {
 pub fn playAlert(path: []const u8, volume_percent: u8) void {
     if (!g_worker.start()) return;
     const copy = std.heap.page_allocator.dupe(u8, path) catch |err| {
-        slog.warn("Failed to queue sound alert: {}", .{err});
+        slog.warn("Failed to queue sound alert '{s}': {}", .{ path, err });
         return;
     };
     g_worker.push(.{ .path = copy, .volume_percent = volume_percent });
@@ -292,9 +293,9 @@ fn packVolume(volume_percent: u8) u32 {
     return (level << 16) | level;
 }
 
-fn decodeToPcm(allocator: std.mem.Allocator, path_w: [*:0]const WCHAR) !DecodedPcm {
+fn decodeToPcm(allocator: std.mem.Allocator, path_utf16: [*:0]const WCHAR) !DecodedPcm {
     var reader_opt: ?*IMFSourceReader = null;
-    if (MFCreateSourceReaderFromURL(path_w, null, &reader_opt) < 0 or reader_opt == null) {
+    if (MFCreateSourceReaderFromURL(path_utf16, null, &reader_opt) < 0 or reader_opt == null) {
         return error.CreateSourceReaderFailed;
     }
     const reader = reader_opt.?;
@@ -334,8 +335,8 @@ fn decodeToPcm(allocator: std.mem.Allocator, path_w: [*:0]const WCHAR) !DecodedP
     while (true) {
         var sample_flags: u32 = 0;
         var sample_opt: ?*IMFSample = null;
-        const hr = reader.vtable.ReadSample(reader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, null, &sample_flags, null, &sample_opt);
-        if (hr < 0) return error.ReadSampleFailed;
+        const read_result = reader.vtable.ReadSample(reader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, null, &sample_flags, null, &sample_opt);
+        if (read_result < 0) return error.ReadSampleFailed;
         if (sample_flags & MF_SOURCE_READERF_ENDOFSTREAM != 0) break;
         const sample = sample_opt orelse continue;
         defer sample.release();
@@ -348,12 +349,12 @@ fn decodeToPcm(allocator: std.mem.Allocator, path_w: [*:0]const WCHAR) !DecodedP
         defer buffer.release();
 
         var data_ptr: ?[*]u8 = null;
-        var current_len: u32 = 0;
-        if (buffer.vtable.Lock(buffer, &data_ptr, null, &current_len) < 0 or data_ptr == null) {
+        var current_length: u32 = 0;
+        if (buffer.vtable.Lock(buffer, &data_ptr, null, &current_length) < 0 or data_ptr == null) {
             return error.LockBufferFailed;
         }
-        try pcm_data.appendSlice(allocator, data_ptr.?[0..current_len]);
-        _ = buffer.vtable.Unlock(buffer);
+        defer _ = buffer.vtable.Unlock(buffer);
+        try pcm_data.appendSlice(allocator, data_ptr.?[0..current_length]);
     }
 
     return .{
@@ -366,10 +367,10 @@ fn decodeToPcm(allocator: std.mem.Allocator, path_w: [*:0]const WCHAR) !DecodedP
 
 /// Decodes and plays `path` (WAV/MP3), blocking until done; Media Foundation must already be started (see Player).
 fn playBlocking(allocator: std.mem.Allocator, path: []const u8, volume_percent: u8) !void {
-    const path_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
-    defer allocator.free(path_w);
+    const path_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
+    defer allocator.free(path_utf16);
 
-    const pcm = try decodeToPcm(allocator, path_w);
+    const pcm = try decodeToPcm(allocator, path_utf16);
     defer pcm.deinit(allocator);
 
     const format = WAVEFORMATEX{
