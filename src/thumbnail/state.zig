@@ -1,8 +1,4 @@
 //! A thumbnail's visibility, and the state that picks its look.
-const std = @import("std");
-const log = @import("../log.zig");
-
-const slog = log.scoped("thumbnail_state");
 
 pub const VisibilityState = enum {
     visible,
@@ -10,14 +6,6 @@ pub const VisibilityState = enum {
     hidden_automatic,
     /// Persists until the user manually toggles it again.
     hidden_manual,
-
-    pub fn canTransitionTo(self: VisibilityState, next: VisibilityState) bool {
-        return switch (self) {
-            .visible => true,
-            .hidden_automatic => next == .visible or next == .hidden_manual,
-            .hidden_manual => next == .visible or next == .hidden_automatic,
-        };
-    }
 
     pub fn isVisible(self: VisibilityState) bool {
         return self == .visible;
@@ -32,44 +20,3 @@ pub const ThumbnailState = enum {
     minimized,
     dragging,
 };
-
-/// Logs and returns error.InvalidVisibilityTransition for a disallowed transition.
-pub fn transitionVisibility(
-    current: VisibilityState,
-    next: VisibilityState,
-    context_name: []const u8,
-) !VisibilityState {
-    if (!current.canTransitionTo(next)) {
-        slog.warn("Failed to change visibility for '{s}': {} -> {} isn't allowed", .{
-            context_name,
-            current,
-            next,
-        });
-        return error.InvalidVisibilityTransition;
-    }
-
-    if (current != next) {
-        slog.debug("Visibility transition for '{s}': {} -> {}", .{
-            context_name,
-            current,
-            next,
-        });
-    }
-
-    return next;
-}
-
-/// Like transitionVisibility, but returns `current` instead of erroring on an invalid transition.
-pub fn tryTransitionVisibility(
-    current: VisibilityState,
-    next: VisibilityState,
-    context_name: []const u8,
-) VisibilityState {
-    return transitionVisibility(current, next, context_name) catch current;
-}
-
-test "a hidden thumbnail can be shown or switch to the other hidden state, but not re-enter its own" {
-    try std.testing.expect(VisibilityState.hidden_automatic.canTransitionTo(.visible));
-    try std.testing.expect(VisibilityState.hidden_automatic.canTransitionTo(.hidden_manual));
-    try std.testing.expect(!VisibilityState.hidden_manual.canTransitionTo(.hidden_manual));
-}

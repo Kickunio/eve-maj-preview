@@ -174,7 +174,7 @@ pub const ThumbnailWindow = struct {
         return .inactive;
     }
 
-    /// Refuses to hide while alerting or dragging; an invalid transition is logged and ignored.
+    /// Refuses to hide while alerting or dragging.
     pub fn setVisibility(self: *ThumbnailWindow, new_visibility: state.VisibilityState) void {
         const blocks_hiding = !self.notifications.isEmpty() or thumbnail_drag.isDragging(self);
         if (new_visibility != .visible and blocks_hiding) {
@@ -182,7 +182,10 @@ pub const ThumbnailWindow = struct {
             return;
         }
 
-        self.visibility_state = state.tryTransitionVisibility(self.visibility_state, new_visibility, self.character_name);
+        if (self.visibility_state != new_visibility) {
+            slog.debug("Visibility transition for '{s}': {} -> {}", .{ self.character_name, self.visibility_state, new_visibility });
+        }
+        self.visibility_state = new_visibility;
     }
 
     pub fn isVisible(self: *const ThumbnailWindow) bool {
