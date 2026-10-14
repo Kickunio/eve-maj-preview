@@ -56,7 +56,7 @@ pub fn fill(writer: *std.Io.Writer, template: []const u8, args: anytype) std.Io.
 }
 
 /// Whether `template`'s placeholders are the same set as `english`'s, so a translation can't lose or invent one.
-pub fn hasSamePlaceholders(english: []const u8, template: []const u8) bool {
+fn hasSamePlaceholders(english: []const u8, template: []const u8) bool {
     var english_names = Placeholders.init(english);
     while (english_names.next()) |name| {
         if (!Placeholders.contains(template, name)) return false;

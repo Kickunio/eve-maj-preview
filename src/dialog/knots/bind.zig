@@ -175,37 +175,6 @@ pub fn stringBox(context: *ui.Frame, key: ui.Key, current: []const u8, placehold
     return committed;
 }
 
-/// A number box for an optional value that isn't one setting, e.g. half of a character's size override; empty is unset.
-pub fn optionalValueBox(context: *ui.Frame, key: ui.Key, value: ?f64, placeholder: []const u8, box_style: *const ui.Style) !Typed {
-    const state = try textState(key);
-    var typed: Typed = .unchanged;
-    if (context.ui().focused(key.hash())) {
-        state.is_editing = true;
-    } else {
-        if (state.is_editing) {
-            state.is_editing = false;
-            const trimmed = std.mem.trim(u8, state.text.items, " ");
-            if (trimmed.len == 0) {
-                typed = .cleared;
-            } else if (std.fmt.parseFloat(f64, trimmed)) |parsed| {
-                typed = .{ .value = parsed };
-            } else |_| {}
-        }
-        const shown: ?f64 = switch (typed) {
-            .unchanged => value,
-            .cleared => null,
-            .value => |parsed| parsed,
-        };
-        if (shown) |figure| {
-            try syncText(state, try std.fmt.allocPrint(context.arena(), "{d}", .{figure}));
-        } else {
-            try syncText(state, "");
-        }
-    }
-    try context.e(TextInput{ .key = key, .buf = &state.text, .style = box_style, .placeholder = lang.text(placeholder) });
-    return typed;
-}
-
 /// optionalValueBox with `unit` inside the box, e.g. "px"; draws its frame and unit with `key` indices 5 and 6.
 pub fn optionalUnitValueBox(context: *ui.Frame, key: ui.Key, value: ?f64, placeholder: []const u8, unit: []const u8) !Typed {
     const field_rect = try openUnitField(context, key.indexed(6), key);
@@ -406,6 +375,37 @@ pub fn rangeOf(comptime T: type, comptime field: []const u8) ?[2]f32 {
     if (!@hasDecl(T, "ranges") or !@hasField(@TypeOf(T.ranges), field)) return null;
     const bounds = @field(T.ranges, field);
     return .{ @as(f32, bounds[0]), @as(f32, bounds[1]) };
+}
+
+/// A number box for an optional value that isn't one setting, e.g. half of a character's size override; empty is unset.
+fn optionalValueBox(context: *ui.Frame, key: ui.Key, value: ?f64, placeholder: []const u8, box_style: *const ui.Style) !Typed {
+    const state = try textState(key);
+    var typed: Typed = .unchanged;
+    if (context.ui().focused(key.hash())) {
+        state.is_editing = true;
+    } else {
+        if (state.is_editing) {
+            state.is_editing = false;
+            const trimmed = std.mem.trim(u8, state.text.items, " ");
+            if (trimmed.len == 0) {
+                typed = .cleared;
+            } else if (std.fmt.parseFloat(f64, trimmed)) |parsed| {
+                typed = .{ .value = parsed };
+            } else |_| {}
+        }
+        const shown: ?f64 = switch (typed) {
+            .unchanged => value,
+            .cleared => null,
+            .value => |parsed| parsed,
+        };
+        if (shown) |figure| {
+            try syncText(state, try std.fmt.allocPrint(context.arena(), "{d}", .{figure}));
+        } else {
+            try syncText(state, "");
+        }
+    }
+    try context.e(TextInput{ .key = key, .buf = &state.text, .style = box_style, .placeholder = lang.text(placeholder) });
+    return typed;
 }
 
 fn styledNumberBox(context: *ui.Frame, ref: anytype, comptime field: []const u8, options: NumberOptions, box_style: *const ui.Style) !void {

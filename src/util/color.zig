@@ -22,7 +22,7 @@ const DistinctPalette = struct {
 
 /// Names mapped to colors that stay fixed once assigned, least recently seen first; persistence is the owner's job (see `is_dirty`).
 pub const AutoColors = struct {
-    pub const MAX_ENTRIES = 64;
+    const MAX_ENTRIES = 64;
     pub const MAX_AVOIDED = 32;
 
     pub const Entry = struct {
@@ -83,32 +83,6 @@ pub const AutoColors = struct {
     }
 };
 
-/// The palette colour (0xRRGGBB) farthest in OKLab from everything in `taken`; `seed_string` picks the start and breaks ties, so the result is deterministic.
-pub fn pickDistinctColor(seed_string: []const u8, taken: []const u32) u32 {
-    const candidates = DISTINCT_PALETTE.candidates[0..DISTINCT_PALETTE.count];
-    const count = candidates.len;
-
-    var taken_labs: [MAX_DISTINCT_TAKEN]Oklab = undefined;
-    const taken_count = @min(taken.len, MAX_DISTINCT_TAKEN);
-    for (taken[0..taken_count], 0..) |rgb, i| taken_labs[i] = rgbToOklab(rgb);
-
-    const start: usize = @intCast(std.hash.Wyhash.hash(0, seed_string) % count);
-    var best_rgb = candidates[start].rgb;
-    var best_distance: f32 = -1.0;
-    for (0..count) |offset| {
-        const candidate = candidates[(start + offset) % count];
-        var nearest = std.math.inf(f32);
-        for (taken_labs[0..taken_count]) |taken_lab| {
-            nearest = @min(nearest, oklabDistance(candidate.lab, taken_lab));
-        }
-        if (nearest > best_distance) {
-            best_distance = nearest;
-            best_rgb = candidate.rgb;
-        }
-    }
-    return best_rgb;
-}
-
 pub fn withAlpha(rgb: u32, alpha: u8) u32 {
     return (@as(u32, alpha) << 24) | (rgb & 0x00FF_FFFF);
 }
@@ -145,6 +119,32 @@ pub fn inkFor(background: u32) u32 {
     const g = (background >> 8) & 0xFF;
     const b = background & 0xFF;
     return if (299 * r + 587 * g + 114 * b > 550 * 255) 0xFF1A1408 else 0xFFF5F0E6;
+}
+
+/// The palette colour (0xRRGGBB) farthest in OKLab from everything in `taken`; `seed_string` picks the start and breaks ties, so the result is deterministic.
+fn pickDistinctColor(seed_string: []const u8, taken: []const u32) u32 {
+    const candidates = DISTINCT_PALETTE.candidates[0..DISTINCT_PALETTE.count];
+    const count = candidates.len;
+
+    var taken_labs: [MAX_DISTINCT_TAKEN]Oklab = undefined;
+    const taken_count = @min(taken.len, MAX_DISTINCT_TAKEN);
+    for (taken[0..taken_count], 0..) |rgb, i| taken_labs[i] = rgbToOklab(rgb);
+
+    const start: usize = @intCast(std.hash.Wyhash.hash(0, seed_string) % count);
+    var best_rgb = candidates[start].rgb;
+    var best_distance: f32 = -1.0;
+    for (0..count) |offset| {
+        const candidate = candidates[(start + offset) % count];
+        var nearest = std.math.inf(f32);
+        for (taken_labs[0..taken_count]) |taken_lab| {
+            nearest = @min(nearest, oklabDistance(candidate.lab, taken_lab));
+        }
+        if (nearest > best_distance) {
+            best_distance = nearest;
+            best_rgb = candidate.rgb;
+        }
+    }
+    return best_rgb;
 }
 
 /// Comptime only: drops the hue/lightness/chroma steps that fall outside sRGB.

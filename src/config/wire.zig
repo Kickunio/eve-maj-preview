@@ -52,20 +52,6 @@ pub fn parseHexColor(text: []const u8) !u32 {
     return std.fmt.parseInt(u32, hex_text, 16) catch error.InvalidColorFormat;
 }
 
-/// A `u32`/`?u32` field whose name ends in "color"/"Color" is an ARGB colour, saved as a hex string.
-pub fn isColorField(comptime name: []const u8) bool {
-    // Compared by hand: std.mem.endsWith costs enough comptime branches to matter across every nested field.
-    if (name.len < 5) return false;
-    const tail = name[name.len - 5 ..];
-    return (tail[0] == 'c' or tail[0] == 'C') and tail[1] == 'o' and tail[2] == 'l' and tail[3] == 'o' and tail[4] == 'r';
-}
-
-/// A field named "hotkey…" or "…Key" is a KeyList, saved as a hex string or an array of them.
-pub fn isKeyField(comptime name: []const u8) bool {
-    if (name.len >= 6 and name[0] == 'h' and name[1] == 'o' and name[2] == 't' and name[3] == 'k' and name[4] == 'e' and name[5] == 'y') return true;
-    return name.len >= 3 and name[name.len - 3] == 'K' and name[name.len - 2] == 'e' and name[name.len - 1] == 'y';
-}
-
 /// Generated or hand-written, a type with a `Wire` saves, loads, frees and patches itself.
 pub fn isNested(comptime T: type) bool {
     return @typeInfo(T) == .@"struct" and @hasDecl(T, "Wire");
@@ -81,12 +67,6 @@ pub fn ListItem(comptime T: type) ?type {
     if (@typeInfo(T) != .@"struct" or !@hasField(T, "items") or !@hasField(T, "capacity")) return null;
     const Item = @typeInfo(@FieldType(T, "items")).pointer.child;
     return if (T == std.ArrayList(Item)) Item else null;
-}
-
-/// A field in `R.wire_defaults` loads with that default when its key is missing, for defaults a runtime field can't hold (e.g. a non-empty list).
-pub fn hasWireDefault(comptime R: type, comptime name: []const u8) bool {
-    if (!@hasDecl(R, "wire_defaults")) return false;
-    return @hasField(@TypeOf(R.wire_defaults), name);
 }
 
 pub fn savedFields(comptime R: type) []const SavedField {
@@ -254,26 +234,6 @@ pub fn deinit(comptime R: type, value: *R, allocator: std.mem.Allocator) void {
     }
 }
 
-/// Borrows each item's strings like `encode`, so allocate from an arena freed once the result is serialized.
-pub fn encodeList(comptime T: type, allocator: std.mem.Allocator, items: []const T) ![]const WireOf(T) {
-    const out = try allocator.alloc(WireOf(T), items.len);
-    for (items, out) |item, *saved| saved.* = encode(T, item);
-    return out;
-}
-
-/// Appends a decoded copy of each of `wires`; on failure `list` holds only the items fully decoded so far.
-pub fn decodeList(comptime T: type, list: *std.ArrayList(T), allocator: std.mem.Allocator, wires: []const WireOf(T)) !void {
-    try list.ensureUnusedCapacity(allocator, wires.len);
-    for (wires) |saved| list.appendAssumeCapacity(try decode(T, saved, allocator));
-}
-
-/// Leaves `list` empty, so it can be refilled or freed again.
-pub fn freeList(comptime T: type, list: *std.ArrayList(T), allocator: std.mem.Allocator) void {
-    for (list.items) |*item| free(T, item, allocator);
-    list.deinit(allocator);
-    list.* = .empty;
-}
-
 /// Unlike an encode/decode round trip, keeps state a type's `toWire` leaves out (a temporary group's members).
 pub fn clone(comptime T: type, value: T, allocator: std.mem.Allocator) !T {
     if (comptime !isNested(T)) return cloneField(T, value, allocator);
@@ -348,6 +308,46 @@ pub fn logJson(allocator: std.mem.Allocator, settings: anytype) void {
 
     var lines = std.mem.splitScalar(u8, json, '\n');
     while (lines.next()) |line| slog.debug("{s}", .{line});
+}
+
+/// A `u32`/`?u32` field whose name ends in "color"/"Color" is an ARGB colour, saved as a hex string.
+fn isColorField(comptime name: []const u8) bool {
+    // Compared by hand: std.mem.endsWith costs enough comptime branches to matter across every nested field.
+    if (name.len < 5) return false;
+    const tail = name[name.len - 5 ..];
+    return (tail[0] == 'c' or tail[0] == 'C') and tail[1] == 'o' and tail[2] == 'l' and tail[3] == 'o' and tail[4] == 'r';
+}
+
+/// A field named "hotkey…" or "…Key" is a KeyList, saved as a hex string or an array of them.
+fn isKeyField(comptime name: []const u8) bool {
+    if (name.len >= 6 and name[0] == 'h' and name[1] == 'o' and name[2] == 't' and name[3] == 'k' and name[4] == 'e' and name[5] == 'y') return true;
+    return name.len >= 3 and name[name.len - 3] == 'K' and name[name.len - 2] == 'e' and name[name.len - 1] == 'y';
+}
+
+/// A field in `R.wire_defaults` loads with that default when its key is missing, for defaults a runtime field can't hold (e.g. a non-empty list).
+fn hasWireDefault(comptime R: type, comptime name: []const u8) bool {
+    if (!@hasDecl(R, "wire_defaults")) return false;
+    return @hasField(@TypeOf(R.wire_defaults), name);
+}
+
+/// Borrows each item's strings like `encode`, so allocate from an arena freed once the result is serialized.
+fn encodeList(comptime T: type, allocator: std.mem.Allocator, items: []const T) ![]const WireOf(T) {
+    const out = try allocator.alloc(WireOf(T), items.len);
+    for (items, out) |item, *saved| saved.* = encode(T, item);
+    return out;
+}
+
+/// Appends a decoded copy of each of `wires`; on failure `list` holds only the items fully decoded so far.
+fn decodeList(comptime T: type, list: *std.ArrayList(T), allocator: std.mem.Allocator, wires: []const WireOf(T)) !void {
+    try list.ensureUnusedCapacity(allocator, wires.len);
+    for (wires) |saved| list.appendAssumeCapacity(try decode(T, saved, allocator));
+}
+
+/// Leaves `list` empty, so it can be refilled or freed again.
+fn freeList(comptime T: type, list: *std.ArrayList(T), allocator: std.mem.Allocator) void {
+    for (list.items) |*item| free(T, item, allocator);
+    list.deinit(allocator);
+    list.* = .empty;
 }
 
 /// A field named in `R.runtime_fields` (an allocator, an id) only exists while the app runs and isn't saved.

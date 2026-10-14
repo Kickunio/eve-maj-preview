@@ -28,7 +28,6 @@ pub const LPVOID = ?*anyopaque;
 pub const LPCSTR = [*:0]const u8;
 pub const LPSTR = [*:0]u8;
 
-pub const WS_VISIBLE = 0x10000000;
 pub const WS_POPUP = 0x80000000;
 
 pub const WS_EX_TOPMOST = 0x00000008;

@@ -120,7 +120,7 @@ pub const UpdateChecker = struct {
         return std.SemanticVersion.parse(normalized) catch null;
     }
 
-    pub fn checkForUpdates(self: *const UpdateChecker) !?UpdateInfo {
+    fn checkForUpdates(self: *const UpdateChecker) !?UpdateInfo {
         slog.info("Checking for updates (current: {s})", .{self.current_version});
 
         var client: std.http.Client = .{ .allocator = self.allocator, .io = self.io };
@@ -229,7 +229,7 @@ pub const UpdateChecker = struct {
 };
 
 /// Strings come from the checker's allocator; the caller frees each one.
-pub const UpdateInfo = struct {
+const UpdateInfo = struct {
     version: []const u8,
     url: []const u8,
     notes: ?[]const u8,

@@ -186,20 +186,20 @@ pub fn beginFrame(arena: std.mem.Allocator) !void {
     g_conflicts = conflicts.items;
 }
 
-/// Whether any of `keys` is bound elsewhere too; see beginFrame.
-pub fn isConflict(keys: KeyList) bool {
-    for (keys.slice()) |combo| {
-        if (std.mem.findScalar(u32, g_conflicts, combo) != null) return true;
-    }
-    return false;
-}
-
 /// Combos as the app spells them, e.g. "Ctrl+1, 1".
 pub fn writeKeys(writer: *std.Io.Writer, keys: KeyList) !void {
     for (keys.slice(), 0..) |combo, index| {
         if (index > 0) try writer.writeAll(", ");
         try vk.writeVirtualKey(writer, combo);
     }
+}
+
+/// Whether any of `keys` is bound elsewhere too; see beginFrame.
+fn isConflict(keys: KeyList) bool {
+    for (keys.slice()) |combo| {
+        if (std.mem.findScalar(u32, g_conflicts, combo) != null) return true;
+    }
+    return false;
 }
 
 /// Every KeyList in `value`, however deeply nested, counted under the HolderKind of the field it sits in.

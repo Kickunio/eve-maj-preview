@@ -36,11 +36,6 @@ pub fn cursorMonitorBounds() MonitorBounds {
     return monitorBounds(win32.nearestMonitor(cursor));
 }
 
-/// DPI for a specific monitor; used before a window exists on it yet.
-pub fn getMonitorDpi(hmonitor: win32.HMONITOR) u32 {
-    return win32.monitorDpi(hmonitor);
-}
-
 /// DPI of whichever monitor a window currently sits on; queried live, nothing to invalidate.
 pub fn getWindowDpi(hwnd: win32.HWND) u32 {
     return win32.GetDpiForWindow(hwnd);
@@ -49,11 +44,6 @@ pub fn getWindowDpi(hwnd: win32.HWND) u32 {
 /// `monitor`'s DPI, or the system DPI when there isn't one.
 pub fn dpiForMonitor(monitor: ?win32.HMONITOR) u32 {
     return if (monitor) |m| getMonitorDpi(m) else defaultDpi();
-}
-
-/// DPI for the system default monitor; used as a fallback when no target monitor is configured.
-pub fn defaultDpi() u32 {
-    return win32.GetDpiForSystem();
 }
 
 /// Every monitor's full bounds, up to `buffer.len` of them, primary first; borrows from `buffer`.
@@ -74,6 +64,16 @@ pub fn monitorRects(buffer: []win32.RECT) []win32.RECT {
 
 pub fn resolveMonitorPlacement(display: *const config.DisplayConfig) ?MonitorPlacement {
     return if (display.monitorIndex) |monitor_index| getMonitorPlacement(monitor_index, display.useMonitorWorkArea) else null;
+}
+
+/// DPI for a specific monitor; used before a window exists on it yet.
+fn getMonitorDpi(hmonitor: win32.HMONITOR) u32 {
+    return win32.monitorDpi(hmonitor);
+}
+
+/// DPI for the system default monitor; used as a fallback when no target monitor is configured.
+fn defaultDpi() u32 {
+    return win32.GetDpiForSystem();
 }
 
 /// By 0-based index; null if out of range.

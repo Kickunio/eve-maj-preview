@@ -10,7 +10,7 @@ pub const GLOBAL_SETTINGS_FILE = "profiles/global.settings.json";
 pub const MAX_CONFIG_FILE_SIZE: u64 = 300 * 1024;
 
 /// App state that isn't a setting, kept out of PROFILES_DIR so copying profiles doesn't carry it along.
-pub const DATA_DIR = "data";
+const DATA_DIR = "data";
 pub const AUTO_COLORS_FILE = DATA_DIR ++ "/colors.json";
 pub const CHARACTER_IDS_FILE = DATA_DIR ++ "/character_ids.json";
 /// Downloaded character portraits, one `{id}.jpg` each, kept for good.

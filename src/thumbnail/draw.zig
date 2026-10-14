@@ -32,7 +32,7 @@ pub const TextOrigin = struct {
 
 pub const HorizontalAlign = enum { left, center, right };
 
-pub const VerticalAlign = enum { top, middle, bottom };
+const VerticalAlign = enum { top, middle, bottom };
 
 const Diagonal = enum { backslash, slash };
 
@@ -57,23 +57,6 @@ pub fn alignedLineX(block_x: i32, block_width: usize, line_width: usize, alignme
         .left => block_x,
         .center => block_x + @as(i32, @intCast((block_width -| line_width) / 2)),
         .right => block_x + @as(i32, @intCast(block_width -| line_width)),
-    };
-}
-
-pub fn verticalAlignOf(position: TextPosition) VerticalAlign {
-    return switch (position) {
-        .TopLeft, .TopCenter, .TopRight => .top,
-        .LeftCenter, .Center, .RightCenter => .middle,
-        .BottomLeft, .BottomCenter, .BottomRight => .bottom,
-    };
-}
-
-/// y for a line of `line_height` so it sits flush against whichever edge `alignment` anchors to, within a block of `block_height` starting at `block_y`.
-pub fn alignedLineY(block_y: i32, block_height: usize, line_height: usize, alignment: VerticalAlign) i32 {
-    return switch (alignment) {
-        .top => block_y,
-        .middle => block_y + @as(i32, @intCast((block_height -| line_height) / 2)),
-        .bottom => block_y + @as(i32, @intCast(block_height -| line_height)),
     };
 }
 
@@ -272,6 +255,23 @@ pub fn measureText(dc: win32.HDC, text: []const u8) TextDimensions {
 /// In the font already selected into `dc`, inside measureText's padding.
 pub fn renderText(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32) void {
     gdi_overlay.drawText(TEXT_BUFFER_SIZE, dc, x + TEXT_PADDING_X, y + TEXT_PADDING_Y, text, color);
+}
+
+fn verticalAlignOf(position: TextPosition) VerticalAlign {
+    return switch (position) {
+        .TopLeft, .TopCenter, .TopRight => .top,
+        .LeftCenter, .Center, .RightCenter => .middle,
+        .BottomLeft, .BottomCenter, .BottomRight => .bottom,
+    };
+}
+
+/// y for a line of `line_height` so it sits flush against whichever edge `alignment` anchors to, within a block of `block_height` starting at `block_y`.
+fn alignedLineY(block_y: i32, block_height: usize, line_height: usize, alignment: VerticalAlign) i32 {
+    return switch (alignment) {
+        .top => block_y,
+        .middle => block_y + @as(i32, @intCast((block_height -| line_height) / 2)),
+        .bottom => block_y + @as(i32, @intCast(block_height -| line_height)),
+    };
 }
 
 fn drawDiagonalBand(canvas: Canvas, color: u32, diagonal: Diagonal) void {

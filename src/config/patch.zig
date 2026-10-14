@@ -26,16 +26,6 @@ pub const Context = struct {
 /// Main thread only, like everything that edits a document.
 var g_next_id: u32 = 1;
 
-/// A keyed map (NotificationTypeConfigs) is reached by child name rather than field, and saves in its own shape.
-pub fn isKeyedMap(comptime T: type) bool {
-    return @typeInfo(T) == .@"struct" and @hasDecl(T, "childAt");
-}
-
-pub fn ChildOf(comptime T: type) type {
-    const Return = @typeInfo(@TypeOf(T.childAt)).@"fn".return_type.?;
-    return @typeInfo(@typeInfo(Return).optional.child).pointer.child;
-}
-
 /// Whether `path` names a section (or keyed map child) whose fields can be set one by one, rather than a value set whole.
 pub fn isSection(comptime T: type, path: []const []const u8) bool {
     if (comptime isKeyedMap(T)) return path.len == 0 or isSection(ChildOf(T), path[1..]);
@@ -85,6 +75,16 @@ pub fn writeAt(json_writer: anytype, comptime T: type, target: *const T, path: [
 pub fn apply(comptime T: type, document: *T, op: Op, context: Context) !?u32 {
     const kind = std.meta.stringToEnum(Kind, op.op) orelse return error.InvalidOp;
     return applyIn(T, document, op.path, kind, op, context);
+}
+
+/// A keyed map (NotificationTypeConfigs) is reached by child name rather than field, and saves in its own shape.
+fn isKeyedMap(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "childAt");
+}
+
+fn ChildOf(comptime T: type) type {
+    const Return = @typeInfo(@TypeOf(T.childAt)).@"fn".return_type.?;
+    return @typeInfo(@typeInfo(Return).optional.child).pointer.child;
 }
 
 fn hasId(comptime T: type) bool {

@@ -20,7 +20,7 @@ pub const LogLevel = enum {
     warn,
     err,
 
-    pub fn asString(self: LogLevel) []const u8 {
+    fn asString(self: LogLevel) []const u8 {
         return switch (self) {
             .debug => "DEBUG",
             .info => "INFO",

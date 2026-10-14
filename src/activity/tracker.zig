@@ -140,12 +140,12 @@ pub const MiningWindow = struct {
         self.last_stopped_alert = .{};
     }
 
-    pub fn countEvents(self: *const MiningWindow, window_ms: u64, now: Ticks) usize {
+    fn countEvents(self: *const MiningWindow, window_ms: u64, now: Ticks) usize {
         return self.ring.countRecent(window_ms, now);
     }
 
     /// m3 per second (see WindowSum.rate); warm-up runs to the newest yield, since yields come in cycles.
-    pub fn computeRate(self: *const MiningWindow, now: Ticks) ?f32 {
+    fn computeRate(self: *const MiningWindow, now: Ticks) ?f32 {
         return self.ring.rate("m3", now, .to_newest);
     }
 
@@ -210,7 +210,7 @@ pub const MiningTracker = Tracker(MiningWindow);
 pub const BountyTracker = Tracker(BountyWindow);
 
 /// One locked Window per character, read by the main thread and fed by the chatlog worker; `Window` needs `init(window_seconds: u32)`, `addEntry` and a `ring` field.
-pub fn Tracker(comptime Window: type) type {
+fn Tracker(comptime Window: type) type {
     return struct {
         allocator: std.mem.Allocator,
         io: std.Io,

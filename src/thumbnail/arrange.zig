@@ -15,18 +15,6 @@ const slog = log.Scoped("arrange");
 
 pub const Place = struct { position: config_mod.Position, size: Size };
 
-/// Every active space's grid for the current thumbnails.
-pub fn spaceCells(thumbnail_set: *const ThumbnailSet) placement.SpaceCells {
-    const layout = thumbnail_set.layout();
-    return layout.spaceCells(&layout.spaceCounts());
-}
-
-/// A space's cell is already physical pixels; only a hand-placed thumbnail's configured size is DPI-scaled.
-pub fn targetSize(thumbnail_set: *const ThumbnailSet, character_name: []const u8, cells: *const placement.SpaceCells, scale: f32) Size {
-    if (placement.cellFor(thumbnail_set.config, cells, character_name)) |cell| return cellSize(cell);
-    return handPlacedSize(thumbnail_set, character_name, scale);
-}
-
 /// Where a thumbnail not yet in the list goes: the end of its space until the reflow that follows ranks it, else its hand-placed spot.
 pub fn newPlace(thumbnail_set: *const ThumbnailSet, character_name: []const u8, monitor_bounds: ?win32.RECT, scale: f32) Place {
     const layout = thumbnail_set.layout();
@@ -166,6 +154,18 @@ pub fn reassertTopmost(thumbnail_set: *ThumbnailSet) void {
     }
     hdwp = thumbnail_set.renderer.hover_zoom.deferRaise(hdwp) orelse return;
     _ = win32.EndDeferWindowPos(hdwp);
+}
+
+/// Every active space's grid for the current thumbnails.
+fn spaceCells(thumbnail_set: *const ThumbnailSet) placement.SpaceCells {
+    const layout = thumbnail_set.layout();
+    return layout.spaceCells(&layout.spaceCounts());
+}
+
+/// A space's cell is already physical pixels; only a hand-placed thumbnail's configured size is DPI-scaled.
+fn targetSize(thumbnail_set: *const ThumbnailSet, character_name: []const u8, cells: *const placement.SpaceCells, scale: f32) Size {
+    if (placement.cellFor(thumbnail_set.config, cells, character_name)) |cell| return cellSize(cell);
+    return handPlacedSize(thumbnail_set, character_name, scale);
 }
 
 /// Caller frees with Assignment.deinit.

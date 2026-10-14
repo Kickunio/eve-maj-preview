@@ -226,29 +226,6 @@ pub const Look = struct {
 /// The Text Overlays section's Sync Fonts and Backgrounds; not saved.
 pub var g_should_sync_styling: bool = false;
 
-pub fn SectionType(comptime section: Section) type {
-    return switch (section) {
-        .thumbnail => config.ThumbnailConfig,
-        .notifications => config.NotificationConfig,
-        .combat => config.CombatConfig,
-        .mining => config.MiningConfig,
-        .bounty => config.BountyConfig,
-        .resources => config.ResourcesConfig,
-    };
-}
-
-pub fn refFor(comptime section: Section) session.Ref(SectionType(section)) {
-    const profile = session.profile();
-    return switch (section) {
-        .thumbnail => profile.child("thumbnail"),
-        .notifications => profile.child("thumbnail").child("notifications"),
-        .combat => profile.child("combat"),
-        .mining => profile.child("mining"),
-        .bounty => profile.child("bounty"),
-        .resources => profile.child("resources"),
-    };
-}
-
 pub fn look(comptime chip: Chip) Look {
     const ref = refFor(chip.section);
     const thumbnail = &session.profile().ptr.thumbnail;
@@ -363,6 +340,29 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
 /// Turning sync on unifies every text to the Character Name's styling.
 pub fn syncFromCharacterName() void {
     copyStyleToOthers(0);
+}
+
+fn SectionType(comptime section: Section) type {
+    return switch (section) {
+        .thumbnail => config.ThumbnailConfig,
+        .notifications => config.NotificationConfig,
+        .combat => config.CombatConfig,
+        .mining => config.MiningConfig,
+        .bounty => config.BountyConfig,
+        .resources => config.ResourcesConfig,
+    };
+}
+
+fn refFor(comptime section: Section) session.Ref(SectionType(section)) {
+    const profile = session.profile();
+    return switch (section) {
+        .thumbnail => profile.child("thumbnail"),
+        .notifications => profile.child("thumbnail").child("notifications"),
+        .combat => profile.child("combat"),
+        .mining => profile.child("mining"),
+        .bounty => profile.child("bounty"),
+        .resources => profile.child("resources"),
+    };
 }
 
 fn copyStyleToOthers(comptime source_index: usize) void {

@@ -30,7 +30,7 @@ pub const NotificationTypeConfig = struct {
         return .{ .primary = self.custom_text, .alt = self.custom_text_alt };
     }
 
-    pub fn defaultFor(notification_type: notification.NotificationType) NotificationTypeConfig {
+    fn defaultFor(notification_type: notification.NotificationType) NotificationTypeConfig {
         return if (notification.isUserAction(notification_type)) .{ .duration_ms = 3000, .throttle_ms = 0 } else .{};
     }
 

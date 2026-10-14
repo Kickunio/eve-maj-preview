@@ -10,7 +10,7 @@ const LOWEST_QUALITY = "-300";
 const MAX_SETTINGS_FILE_SIZE = 4 * 1024 * 1024;
 
 /// Keys in EVE's core_public__.yaml `device:` section that Ultra Potato Mode forces to LOWEST_QUALITY.
-pub const TARGET_KEYS = [_][]const u8{
+const TARGET_KEYS = [_][]const u8{
     "aoQuality",
     "charClothSimulation",
     "charTextureQuality",

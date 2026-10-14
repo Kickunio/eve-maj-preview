@@ -8,15 +8,6 @@ pub const SNAP_DISTANCE_PX: i32 = 8;
 
 pub const Axis = enum { x, y };
 
-/// The edge of `others` or `bounds` along `axis` nearest `value`, if one is within `distance`.
-pub fn nearestEdge(value: i32, axis: Axis, others: []const RECT, bounds: RECT, distance: i32) ?i32 {
-    var best: ?i32 = null;
-    var best_gap = distance;
-    considerRect(value, axis, bounds, &best, &best_gap);
-    for (others) |other| considerRect(value, axis, other, &best, &best_gap);
-    return best;
-}
-
 /// `value` moved onto the nearest edge within `distance`, else unchanged.
 pub fn snapEdge(value: i32, axis: Axis, others: []const RECT, bounds: RECT, distance: i32) i32 {
     return nearestEdge(value, axis, others, bounds, distance) orelse value;
@@ -47,6 +38,15 @@ pub fn withLength(rect: RECT, axis: Axis, length: i32, bounds: RECT, min_length:
         },
     }
     return resized;
+}
+
+/// The edge of `others` or `bounds` along `axis` nearest `value`, if one is within `distance`.
+fn nearestEdge(value: i32, axis: Axis, others: []const RECT, bounds: RECT, distance: i32) ?i32 {
+    var best: ?i32 = null;
+    var best_gap = distance;
+    considerRect(value, axis, bounds, &best, &best_gap);
+    for (others) |other| considerRect(value, axis, other, &best, &best_gap);
+    return best;
 }
 
 fn considerRect(value: i32, axis: Axis, rect: RECT, best: *?i32, best_gap: *i32) void {

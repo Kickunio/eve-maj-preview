@@ -72,7 +72,7 @@ const VK_MASK: u32 = 0xFF;
 const MOD_MASK: u32 = 0x0F;
 
 /// Every key a binding can use, in the spelling it's shown and typed in; the config dialog's recorder offers exactly these.
-pub const KEY_NAMES: []const KeyName = blk: {
+const KEY_NAMES: []const KeyName = blk: {
     @setEvalBranchQuota(10_000);
     var list: []const KeyName = &.{};
     for (1..25) |n| list = list ++ &[_]KeyName{.{ .vk_code = VK_F1 + @as(u32, @intCast(n)) - 1, .name = std.fmt.comptimePrint("F{d}", .{n}) }};
@@ -138,14 +138,14 @@ pub const KEY_NAMES: []const KeyName = blk: {
 };
 
 /// The prefix each modifier flag is written with, in the order they're written.
-pub const MODIFIER_NAMES = [_]struct { flag: u32, name: []const u8 }{
+const MODIFIER_NAMES = [_]struct { flag: u32, name: []const u8 }{
     .{ .flag = MOD_CONTROL, .name = "Ctrl" },
     .{ .flag = MOD_ALT, .name = "Alt" },
     .{ .flag = MOD_SHIFT, .name = "Shift" },
     .{ .flag = MOD_WIN, .name = "Win" },
 };
 
-pub const KeyName = struct { vk_code: u32, name: []const u8 };
+const KeyName = struct { vk_code: u32, name: []const u8 };
 
 pub fn extractVk(combined: u32) u32 {
     return combined & VK_MASK;

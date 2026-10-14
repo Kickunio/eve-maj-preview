@@ -42,12 +42,6 @@ pub fn clamp(comptime R: type, value: *R) void {
     }
 }
 
-pub fn clampValue(comptime R: type, comptime name: []const u8, value: @FieldType(R, name)) @FieldType(R, name) {
-    var result = value;
-    clampField(R, name, &result);
-    return result;
-}
-
 fn hasValidate(comptime T: type) bool {
     return @typeInfo(T) == .@"struct" and @hasDecl(T, "validate");
 }
@@ -144,10 +138,4 @@ test "clamp validates nested settings, including a set optional" {
     clamp(TestParent, &parent);
     try testing.expectEqual(@as(u8, 51), parent.settings.opacity);
     try testing.expectEqual(@as(u8, 51), parent.extra.?.opacity);
-}
-
-test "clampValue brings a single value within its field's range" {
-    try testing.expectEqual(@as(u8, 51), clampValue(TestSettings, "opacity", 5));
-    try testing.expectEqual(@as(u32, 60), clampValue(TestSettings, "window_seconds", 0));
-    try testing.expectEqual(@as(u32, 3600), clampValue(TestSettings, "window_seconds", 9_000));
 }

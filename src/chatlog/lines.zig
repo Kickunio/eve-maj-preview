@@ -145,25 +145,6 @@ pub fn lastSystemInGame(text: []const u8) ?SystemMatch {
     }
 }
 
-/// YYYYMMDDHHMMSS, or 0; looks only 64 bytes back, so a chunk cut mid-line can't borrow an earlier line's bracket.
-pub fn lineTimestamp(text: []const u8, match_index: usize) u64 {
-    const window_start = match_index -| 64;
-    const open = window_start + (std.mem.findScalarLast(u8, text[window_start..match_index], '[') orelse return 0);
-    const close = std.mem.findScalarPos(u8, text, open, ']') orelse return 0;
-    const inner = std.mem.trim(u8, text[open + 1 .. close], " \t");
-
-    if (inner.len < 19) return 0;
-    if (inner[4] != '.' or inner[7] != '.' or inner[10] != ' ' or inner[13] != ':' or inner[16] != ':') return 0;
-
-    const year = std.fmt.parseInt(u64, inner[0..4], 10) catch return 0;
-    const month = std.fmt.parseInt(u64, inner[5..7], 10) catch return 0;
-    const day = std.fmt.parseInt(u64, inner[8..10], 10) catch return 0;
-    const hour = std.fmt.parseInt(u64, inner[11..13], 10) catch return 0;
-    const minute = std.fmt.parseInt(u64, inner[14..16], 10) catch return 0;
-    const second = std.fmt.parseInt(u64, inner[17..19], 10) catch return 0;
-    return (year * 10000 + month * 100 + day) * 1000000 + (hour * 10000 + minute * 100 + second);
-}
-
 /// YYYYMMDDHHMMSS from "[Local_]YYYYMMDD_HHMMSS[_<id>].txt", or 0 for any other name, such as a sync client's conflict copy.
 pub fn logFileTimestamp(file_name: []const u8, is_chatlog: bool) u64 {
     if (!std.mem.endsWith(u8, file_name, ".txt")) return 0;
@@ -215,6 +196,25 @@ pub fn listenerName(header: []const u8) ?[]const u8 {
     const needle = "Listener:";
     const match_index = std.mem.find(u8, header, needle) orelse return null;
     return nonEmpty(untilLineEnd(header[match_index + needle.len ..]));
+}
+
+/// YYYYMMDDHHMMSS, or 0; looks only 64 bytes back, so a chunk cut mid-line can't borrow an earlier line's bracket.
+fn lineTimestamp(text: []const u8, match_index: usize) u64 {
+    const window_start = match_index -| 64;
+    const open = window_start + (std.mem.findScalarLast(u8, text[window_start..match_index], '[') orelse return 0);
+    const close = std.mem.findScalarPos(u8, text, open, ']') orelse return 0;
+    const inner = std.mem.trim(u8, text[open + 1 .. close], " \t");
+
+    if (inner.len < 19) return 0;
+    if (inner[4] != '.' or inner[7] != '.' or inner[10] != ' ' or inner[13] != ':' or inner[16] != ':') return 0;
+
+    const year = std.fmt.parseInt(u64, inner[0..4], 10) catch return 0;
+    const month = std.fmt.parseInt(u64, inner[5..7], 10) catch return 0;
+    const day = std.fmt.parseInt(u64, inner[8..10], 10) catch return 0;
+    const hour = std.fmt.parseInt(u64, inner[11..13], 10) catch return 0;
+    const minute = std.fmt.parseInt(u64, inner[14..16], 10) catch return 0;
+    const second = std.fmt.parseInt(u64, inner[17..19], 10) catch return 0;
+    return (year * 10000 + month * 100 + day) * 1000000 + (hour * 10000 + minute * 100 + second);
 }
 
 /// `text` starts at "EVE System > Channel changed to Local"; the system follows the colon.

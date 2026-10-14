@@ -19,15 +19,6 @@ pub fn path(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
     return std.Io.Dir.path.join(allocator, &[_][]const u8{ files.PROFILES_DIR, name });
 }
 
-/// Only a plain `<name>.json` file name, so a name from the dialog can't reach outside PROFILES_DIR.
-pub fn validateName(name: []const u8) !void {
-    if (!std.mem.endsWith(u8, name, ".json")) return error.InvalidProfileName;
-    const stem = name[0 .. name.len - ".json".len];
-    if (stem.len == 0 or stem[0] == '.') return error.InvalidProfileName;
-    if (std.mem.findAny(u8, stem, "/\\:*?\"<>|") != null) return error.InvalidProfileName;
-    if (std.mem.eql(u8, name, std.Io.Dir.path.basename(files.GLOBAL_SETTINGS_FILE))) return error.InvalidProfileName;
-}
-
 /// "<name>.json" for a display name typed by the user, which may only hold letters, digits, spaces, '-' and '_'; caller owns the result.
 pub fn fileNameFor(allocator: std.mem.Allocator, display_name: []const u8) ![]u8 {
     if (display_name.len == 0 or display_name.len > MAX_NAME_LENGTH) return error.InvalidProfileName;
@@ -234,6 +225,15 @@ pub fn writeDefault(allocator: std.mem.Allocator, io: std.Io, name: []const u8, 
     const profile_path = try path(allocator, name);
     defer allocator.free(profile_path);
     try save(&config, allocator, io, profile_path);
+}
+
+/// Only a plain `<name>.json` file name, so a name from the dialog can't reach outside PROFILES_DIR.
+fn validateName(name: []const u8) !void {
+    if (!std.mem.endsWith(u8, name, ".json")) return error.InvalidProfileName;
+    const stem = name[0 .. name.len - ".json".len];
+    if (stem.len == 0 or stem[0] == '.') return error.InvalidProfileName;
+    if (std.mem.findAny(u8, stem, "/\\:*?\"<>|") != null) return error.InvalidProfileName;
+    if (std.mem.eql(u8, name, std.Io.Dir.path.basename(files.GLOBAL_SETTINGS_FILE))) return error.InvalidProfileName;
 }
 
 /// `backup`'s path in PROFILES_DIR/backup, once it's checked to be a plain file name; caller owns the result.

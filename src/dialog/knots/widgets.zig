@@ -926,8 +926,20 @@ pub fn switchRow(context: *ui.Frame, key: ui.Key, label: []const u8, is_checked:
     return true;
 }
 
+/// A preview's text at `size` px in `color`, made in `arena`.
+pub fn textStyle(arena: std.mem.Allocator, color: u32, size: f32, options: TextOptions) !*const ui.Style {
+    const text_style = try arena.create(ui.Style);
+    text_style.* = .{
+        .foreground = color_convert.solid(color),
+        .font_size = .{ .px = size },
+        .opacity = if (options.is_shown) 1 else style.OFF_TEXT_OPACITY,
+    };
+    if (options.is_grown) text_style.width = .grow();
+    return text_style;
+}
+
 /// knots has no switch, so it's a pill button whose knob slides across; returns whether it was flipped this frame.
-pub fn toggleSwitch(context: *ui.Frame, key: ui.Key, is_checked: *bool) !bool {
+fn toggleSwitch(context: *ui.Frame, key: ui.Key, is_checked: *bool) !bool {
     // knots never animates layout, so the knob is pushed along by a spacer whose width is eased here.
     const position = context.ui().anim(key.hash(), "knob", if (is_checked.*) 1 else 0, .{ .duration_ms = style.SWITCH_ANIMATION_MS });
     const spacer = try context.arena().create(ui.Style);
@@ -942,18 +954,6 @@ pub fn toggleSwitch(context: *ui.Frame, key: ui.Key, is_checked: *bool) !bool {
     is_checked.* = !is_checked.*;
     context.requestRedraw();
     return true;
-}
-
-/// A preview's text at `size` px in `color`, made in `arena`.
-pub fn textStyle(arena: std.mem.Allocator, color: u32, size: f32, options: TextOptions) !*const ui.Style {
-    const text_style = try arena.create(ui.Style);
-    text_style.* = .{
-        .foreground = color_convert.solid(color),
-        .font_size = .{ .px = size },
-        .opacity = if (options.is_shown) 1 else style.OFF_TEXT_OPACITY,
-    };
-    if (options.is_grown) text_style.width = .grow();
-    return text_style;
 }
 
 /// A Dialog with its panel's top-left corner at `corner`, over a backdrop that doesn't dim.

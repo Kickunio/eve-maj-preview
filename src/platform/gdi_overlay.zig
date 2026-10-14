@@ -276,24 +276,6 @@ pub fn measureTextWidth(comptime buf_size: usize, dc: win32.HDC, text: []const u
     return @intCast(@max(0, measureTextSize(buf_size, dc, text).cx));
 }
 
-/// Like `measureTextSize`, for UTF-8 text such as translated labels.
-pub fn measureTextSizeUtf8(comptime buf_size: usize, dc: win32.HDC, text: []const u8) win32.SIZE {
-    var wide: [buf_size]u16 = undefined;
-    const unit_count = toWide(buf_size, text, &wide);
-    var size = win32.SIZE{ .cx = 0, .cy = 0 };
-    _ = win32.GetTextExtentPoint32W(dc, &wide, @intCast(unit_count), &size);
-    return size;
-}
-
-/// Like `drawText`, for UTF-8 text such as translated labels.
-pub fn drawTextUtf8(comptime buf_size: usize, dc: win32.HDC, x: i32, y: i32, text: []const u8, color: u32) void {
-    var wide: [buf_size]u16 = undefined;
-    const unit_count = toWide(buf_size, text, &wide);
-    _ = win32.SetBkMode(dc, win32.TRANSPARENT);
-    _ = win32.SetTextColor(dc, toColorRef(color));
-    _ = win32.TextOutW(dc, x, y, &wide, @intCast(unit_count));
-}
-
 /// Draws `text` (truncated to `buf_size - 1` bytes) with a transparent background in the currently selected font; `color` is 0xAARRGGBB.
 pub fn drawText(comptime buf_size: usize, dc: win32.HDC, x: i32, y: i32, text: []const u8, color: u32) void {
     const buf = toBufZ(buf_size, text);
@@ -423,6 +405,24 @@ pub fn registerWindowClass(
     if (win32.RegisterClassExA(&window_class) == 0) {
         return error.RegisterClassFailed;
     }
+}
+
+/// Like `measureTextSize`, for UTF-8 text such as translated labels.
+fn measureTextSizeUtf8(comptime buf_size: usize, dc: win32.HDC, text: []const u8) win32.SIZE {
+    var wide: [buf_size]u16 = undefined;
+    const unit_count = toWide(buf_size, text, &wide);
+    var size = win32.SIZE{ .cx = 0, .cy = 0 };
+    _ = win32.GetTextExtentPoint32W(dc, &wide, @intCast(unit_count), &size);
+    return size;
+}
+
+/// Like `drawText`, for UTF-8 text such as translated labels.
+fn drawTextUtf8(comptime buf_size: usize, dc: win32.HDC, x: i32, y: i32, text: []const u8, color: u32) void {
+    var wide: [buf_size]u16 = undefined;
+    const unit_count = toWide(buf_size, text, &wide);
+    _ = win32.SetBkMode(dc, win32.TRANSPARENT);
+    _ = win32.SetTextColor(dc, toColorRef(color));
+    _ = win32.TextOutW(dc, x, y, &wide, @intCast(unit_count));
 }
 
 /// UTF-8 to UTF-16 into `out`, truncating to `buf_size` bytes; returns the number of UTF-16 units written.

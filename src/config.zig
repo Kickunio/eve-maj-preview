@@ -32,10 +32,8 @@ pub const DEFAULT_PROFILE = files.DEFAULT_PROFILE;
 pub const GLOBAL_SETTINGS_FILE = files.GLOBAL_SETTINGS_FILE;
 pub const atomicWriteFile = files.atomicWriteFile;
 pub const migrateLegacyLayout = files.migrateLegacyLayout;
-pub const profilePath = profiles.path;
 pub const loadProfile = profiles.load;
 pub const listProfiles = profiles.list;
-pub const saveProfile = profiles.save;
 pub const writeDefaultProfile = profiles.writeDefault;
 pub const createProfile = profiles.create;
 pub const copyProfile = profiles.copy;
@@ -50,12 +48,10 @@ pub const parseBackupName = profiles.parseBackupName;
 pub const profileFileName = profiles.fileNameFor;
 pub const profileDisplayName = profiles.displayName;
 pub const ProfileStore = store.ProfileStore;
-pub const clampValue = ranges.clampValue;
 pub const Argb = wire.Argb;
 pub const KeyList = key_list.KeyList;
 pub const parseHexColor = wire.parseHexColor;
 
-pub const OrePriceConfig = global.OrePriceConfig;
 pub const DEFAULT_ORE_TABLE = global.DEFAULT_ORE_TABLE;
 pub const OreEntry = global.OreEntry;
 pub const GlobalConfig = global.GlobalConfig;
@@ -193,7 +189,7 @@ pub const Config = struct {
         return fromWire(.{}, allocator, profile_name);
     }
 
-    pub fn characterIndex(self: *const Config, name: []const u8) ?usize {
+    fn characterIndex(self: *const Config, name: []const u8) ?usize {
         for (self.characters.items, 0..) |character, i| {
             if (std.mem.eql(u8, character.name, name)) return i;
         }

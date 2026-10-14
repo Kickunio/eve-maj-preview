@@ -181,8 +181,28 @@ pub fn planGroupCycle(cycle: GroupCycle, clients: anytype) GroupStep {
     return .{ .refocus_end = .{ .hwnd = hwnd, .position = current, .total_count = total_count } };
 }
 
+/// Takes an optional target since callers pass GetForegroundWindow() directly.
+pub fn indexOfHwnd(hwnds: []const win32.HWND, target: ?win32.HWND) ?usize {
+    return std.mem.findScalar(win32.HWND, hwnds, target orelse return null);
+}
+
+/// `cursors` parallels `groups`; should_reset_on_leave clears the cursor of groups character_name isn't in.
+pub fn syncGroupCycleIndex(groups: []const HotkeyGroupConfig, cursors: []?usize, character_name: []const u8, should_reset_on_leave: bool) void {
+    for (groups, cursors) |*group, *cursor| {
+        if (strings.indexOfString(group.characters.items, character_name)) |index| {
+            if (cursor.* != index) {
+                slog.debug("Updated hotkey group index: {s} now at position {}/{}", .{ character_name, index + 1, group.characters.items.len });
+                cursor.* = index;
+            }
+        } else if (should_reset_on_leave and cursor.* != null) {
+            slog.debug("Reset hotkey group cycle index - {s} left this group", .{character_name});
+            cursor.* = null;
+        }
+    }
+}
+
 /// `position` must be below the chain's total member count.
-pub fn chainMember(groups: []const HotkeyGroupConfig, group_indices: []const usize, position: usize) ChainMember {
+fn chainMember(groups: []const HotkeyGroupConfig, group_indices: []const usize, position: usize) ChainMember {
     var remaining = position;
     for (group_indices) |group_index| {
         const member_count = groups[group_index].characters.items.len;
@@ -193,7 +213,7 @@ pub fn chainMember(groups: []const HotkeyGroupConfig, group_indices: []const usi
 }
 
 /// Prefers the group whose cursor is on the focused character, then the last-cycled one, since a character can sit in several groups.
-pub fn chainCursor(groups: []const HotkeyGroupConfig, group_indices: []const usize, cursors: []const ?usize, last_cycled_group: ?usize, focused_name: ?[]const u8) ?usize {
+fn chainCursor(groups: []const HotkeyGroupConfig, group_indices: []const usize, cursors: []const ?usize, last_cycled_group: ?usize, focused_name: ?[]const u8) ?usize {
     var best: ?usize = null;
     var best_rank: u8 = 0;
     var offset: usize = 0;
@@ -213,26 +233,6 @@ pub fn chainCursor(groups: []const HotkeyGroupConfig, group_indices: []const usi
         }
     }
     return best;
-}
-
-/// Takes an optional target since callers pass GetForegroundWindow() directly.
-pub fn indexOfHwnd(hwnds: []const win32.HWND, target: ?win32.HWND) ?usize {
-    return std.mem.findScalar(win32.HWND, hwnds, target orelse return null);
-}
-
-/// `cursors` parallels `groups`; should_reset_on_leave clears the cursor of groups character_name isn't in.
-pub fn syncGroupCycleIndex(groups: []const HotkeyGroupConfig, cursors: []?usize, character_name: []const u8, should_reset_on_leave: bool) void {
-    for (groups, cursors) |*group, *cursor| {
-        if (strings.indexOfString(group.characters.items, character_name)) |index| {
-            if (cursor.* != index) {
-                slog.debug("Updated hotkey group index: {s} now at position {}/{}", .{ character_name, index + 1, group.characters.items.len });
-                cursor.* = index;
-            }
-        } else if (should_reset_on_leave and cursor.* != null) {
-            slog.debug("Reset hotkey group cycle index - {s} left this group", .{character_name});
-            cursor.* = null;
-        }
-    }
 }
 
 /// Null for an excluded member or one with no running window.

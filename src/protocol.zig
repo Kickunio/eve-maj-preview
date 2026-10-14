@@ -51,48 +51,6 @@ pub const Command = union(enum) {
     }
 };
 
-/// `evemajpreview://action/params`; logs each failure, and the result is freed with Command.deinit.
-pub fn parseUrl(url: []const u8, allocator: std.mem.Allocator) !Command {
-    const protocol_prefix = "evemajpreview://";
-    if (!std.mem.startsWith(u8, url, protocol_prefix)) {
-        slog.err("Failed to parse protocol URL '{s}': it doesn't start with '{s}'", .{ url, protocol_prefix });
-        return error.InvalidProtocol;
-    }
-
-    const path = url[protocol_prefix.len..];
-    var segments = std.mem.splitScalar(u8, path, '/');
-    const action = segments.first();
-
-    if (std.mem.eql(u8, action, "switch")) {
-        const character_name_encoded = segments.next() orelse {
-            slog.err("Failed to parse switch command: no character name", .{});
-            return error.MissingParameter;
-        };
-        const character_name = try urlDecode(allocator, character_name_encoded);
-        return .{ .switch_character = character_name };
-    } else if (std.mem.eql(u8, action, "profile")) {
-        const profile_name_encoded = segments.next() orelse {
-            slog.err("Failed to parse profile command: no profile name", .{});
-            return error.MissingParameter;
-        };
-        const profile_name = try urlDecode(allocator, profile_name_encoded);
-        return .{ .profile = profile_name };
-    } else if (std.mem.eql(u8, action, "hotkey")) {
-        const hotkey_action = segments.next() orelse {
-            slog.err("Failed to parse hotkey command: no action", .{});
-            return error.MissingParameter;
-        };
-        const parsed_action = std.meta.stringToEnum(GlobalAction, hotkey_action) orelse {
-            slog.err("Failed to parse hotkey command: unknown action '{s}'", .{hotkey_action});
-            return error.InvalidGlobalAction;
-        };
-        return .{ .hotkey = parsed_action };
-    } else {
-        slog.err("Failed to parse protocol URL: unknown action '{s}'", .{action});
-        return error.InvalidAction;
-    }
-}
-
 pub fn findExistingInstance() ?win32.HWND {
     return win32.FindWindowA(MAIN_WINDOW_CLASS, null);
 }
@@ -151,7 +109,49 @@ pub fn ensureRegistered(allocator: std.mem.Allocator) void {
     };
 }
 
-pub fn isRegistered() bool {
+/// `evemajpreview://action/params`; logs each failure, and the result is freed with Command.deinit.
+fn parseUrl(url: []const u8, allocator: std.mem.Allocator) !Command {
+    const protocol_prefix = "evemajpreview://";
+    if (!std.mem.startsWith(u8, url, protocol_prefix)) {
+        slog.err("Failed to parse protocol URL '{s}': it doesn't start with '{s}'", .{ url, protocol_prefix });
+        return error.InvalidProtocol;
+    }
+
+    const path = url[protocol_prefix.len..];
+    var segments = std.mem.splitScalar(u8, path, '/');
+    const action = segments.first();
+
+    if (std.mem.eql(u8, action, "switch")) {
+        const character_name_encoded = segments.next() orelse {
+            slog.err("Failed to parse switch command: no character name", .{});
+            return error.MissingParameter;
+        };
+        const character_name = try urlDecode(allocator, character_name_encoded);
+        return .{ .switch_character = character_name };
+    } else if (std.mem.eql(u8, action, "profile")) {
+        const profile_name_encoded = segments.next() orelse {
+            slog.err("Failed to parse profile command: no profile name", .{});
+            return error.MissingParameter;
+        };
+        const profile_name = try urlDecode(allocator, profile_name_encoded);
+        return .{ .profile = profile_name };
+    } else if (std.mem.eql(u8, action, "hotkey")) {
+        const hotkey_action = segments.next() orelse {
+            slog.err("Failed to parse hotkey command: no action", .{});
+            return error.MissingParameter;
+        };
+        const parsed_action = std.meta.stringToEnum(GlobalAction, hotkey_action) orelse {
+            slog.err("Failed to parse hotkey command: unknown action '{s}'", .{hotkey_action});
+            return error.InvalidGlobalAction;
+        };
+        return .{ .hotkey = parsed_action };
+    } else {
+        slog.err("Failed to parse protocol URL: unknown action '{s}'", .{action});
+        return error.InvalidAction;
+    }
+}
+
+fn isRegistered() bool {
     var key: win32.HKEY = undefined;
     const result = win32.RegOpenKeyExA(
         win32.HKEY_CURRENT_USER,

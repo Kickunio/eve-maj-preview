@@ -8,7 +8,7 @@ pub const HOTKEY_ID_CYCLE_GROUP_BASE: c_int = 0;
 /// IDs in the group cycle band, before it runs into the global band.
 pub const CYCLE_GROUP_SLOT_COUNT: usize = 1000;
 
-pub const HOTKEY_ID_GLOBAL_ACTION_BASE: c_int = 1000;
+const HOTKEY_ID_GLOBAL_ACTION_BASE: c_int = 1000;
 
 pub const HOTKEY_ID_PER_CHARACTER_BASE: c_int = 2000;
 

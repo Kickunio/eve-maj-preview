@@ -43,7 +43,7 @@ pub fn enumLabels(comptime E: type) [std.enums.values(E).len][]const u8 {
 }
 
 /// "TopLeft" -> "Top Left", "EVEFocus" -> "EVE Focus", "next_profile" -> "Next profile".
-pub fn spellOut(comptime tag: []const u8) []const u8 {
+fn spellOut(comptime tag: []const u8) []const u8 {
     comptime {
         var out: []const u8 = &.{std.ascii.toUpper(tag[0])};
         for (tag[1..], 1..) |c, i| {

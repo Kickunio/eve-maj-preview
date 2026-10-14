@@ -222,7 +222,7 @@ pub const ThumbnailSet = struct {
     }
 
     /// Returns whether a reflow is needed to refill the spaces.
-    pub fn cleanupClosedThumbnails(self: *ThumbnailSet, closed_windows: []const scout.ClosedWindow) bool {
+    fn cleanupClosedThumbnails(self: *ThumbnailSet, closed_windows: []const scout.ClosedWindow) bool {
         // By source_hwnd, not name: multiple windows can share a name (e.g. "EVE").
         var removed_any = false;
         for (closed_windows) |closed| {
@@ -271,7 +271,7 @@ pub const ThumbnailSet = struct {
     }
 
     /// Reconciles focus, then marks thumbnails dirty whose minimized state changed.
-    pub fn updateThumbnailStates(self: *ThumbnailSet) void {
+    fn updateThumbnailStates(self: *ThumbnailSet) void {
         if (self.thumbnails.items.len == 0) return;
 
         self.reconcileThumbnailStates(win32.GetForegroundWindow());
@@ -325,7 +325,7 @@ pub const ThumbnailSet = struct {
         }
     }
 
-    pub fn autoVisibility(self: *const ThumbnailSet, eve_has_focus: bool) state.VisibilityState {
+    fn autoVisibility(self: *const ThumbnailSet, eve_has_focus: bool) state.VisibilityState {
         return if (self.config.shownAutoHide().is_enabled and !eve_has_focus) .hidden_automatic else .visible;
     }
 
@@ -447,7 +447,7 @@ pub const ThumbnailSet = struct {
     }
 
     /// Reacts to Scout's name-change events (logins, logouts, renames); returns whether the layout needs a reflow.
-    pub fn applyNameChanges(self: *ThumbnailSet, name_changes: []const scout.NameChange) bool {
+    fn applyNameChanges(self: *ThumbnailSet, name_changes: []const scout.NameChange) bool {
         var any_login = false;
         var any_logout = false;
         for (name_changes) |change| {

@@ -44,13 +44,13 @@ pub fn groupSystem(travel: *const TravelConfig, travelers: []const Traveler, now
     return group_system;
 }
 
-/// Counts toward the group, and can be left behind by it.
-pub fn isTracked(traveler: Traveler) bool {
-    return traveler.last_jump_ms != 0 and !traveler.is_excluded;
-}
-
 pub fn isLeftBehind(traveler: Traveler, group_system: []const u8) bool {
     return isTracked(traveler) and !std.mem.eql(u8, traveler.system_name, group_system);
+}
+
+/// Counts toward the group, and can be left behind by it.
+fn isTracked(traveler: Traveler) bool {
+    return traveler.last_jump_ms != 0 and !traveler.is_excluded;
 }
 
 /// How many of the `eligible_count` tracked travelers must share a system for it to count as the group's.

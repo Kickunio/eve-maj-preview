@@ -6,7 +6,7 @@ const ranges_mod = @import("ranges.zig");
 const strings = @import("../util/strings.zig");
 
 pub const LOGIN_SCREEN_NAME = "Login Screen";
-pub const UNASSIGNED_NAME = "Unassigned Characters";
+const UNASSIGNED_NAME = "Unassigned Characters";
 
 pub const ThumbnailSpace = struct {
     name: []const u8 = "",
