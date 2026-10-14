@@ -1,17 +1,14 @@
 //! The enlarged copy of a thumbnail shown while the cursor rests on it.
 const win32 = @import("../platform/win32.zig");
 const config_mod = @import("../config.zig");
-const painter_mod = @import("../painter.zig");
 const window = @import("window.zig");
 const overlay = @import("overlay.zig");
 const font_cache_mod = @import("font_cache.zig");
 const zoom = @import("../layout/zoom.zig");
 const monitors = @import("../layout/monitors.zig");
-const thumbnail_drag = @import("../drag/thumbnail.zig");
 const log = @import("../log.zig");
 
 const ThumbnailWindow = window.ThumbnailWindow;
-const Painter = painter_mod.Painter;
 const Config = config_mod.Config;
 const FontCache = font_cache_mod.FontCache;
 const slog = log.Scoped("hover_zoom");
@@ -106,11 +103,13 @@ pub const HoverZoom = struct {
         self.source_hwnd = null;
     }
 
-    /// `thumbnail` is null once the zoomed client's thumbnail is gone.
-    pub fn hideUnlessHovered(self: *HoverZoom, thumbnail: ?*const ThumbnailWindow) void {
-        if (self.source_hwnd == null) return;
-        if (thumbnail) |hovered| {
-            if (isHovered(hovered)) return;
+    /// Hides the zoom unless the cursor still rests on its thumbnail; also run per tick, since a hidden or moved thumbnail sends no mouse leave.
+    pub fn check(self: *HoverZoom, config: *const Config, thumbnails: []const ThumbnailWindow) void {
+        const source_hwnd = self.source_hwnd orelse return;
+        const interaction = &config.interaction;
+        if (!interaction.hoverZoomEnabled or interaction.clickThrough) return self.hide();
+        for (thumbnails) |*thumbnail| {
+            if (thumbnail.source_hwnd == source_hwnd and isHovered(thumbnail)) return;
         }
         self.hide();
     }
@@ -146,23 +145,6 @@ pub const HoverZoom = struct {
     }
 };
 
-/// From a mouse move on either of `thumbnail`'s windows (`hwnd`).
-pub fn onHover(painter: *Painter, hwnd: win32.HWND, thumbnail: *const ThumbnailWindow) void {
-    if (!painter.config.interaction.hoverZoomEnabled or thumbnail_drag.isDragging(thumbnail)) return;
-
-    // Re-armed on every move, since the cursor crosses between the thumbnail and its text overlay.
-    if (!win32.trackMouseLeave(hwnd)) slog.debug("Failed to track mouse leave for '{s}'", .{thumbnail.character_name});
-    painter.hover_zoom.show(painter.instance, &painter.font_cache, thumbnail, painter.config);
-}
-
-/// Also run per tick, since a hidden or moved thumbnail sends no mouse leave.
-pub fn check(painter: *Painter) void {
-    const source_hwnd = painter.hover_zoom.source_hwnd orelse return;
-    const interaction = &painter.config.interaction;
-    if (!interaction.hoverZoomEnabled or interaction.clickThrough) return painter.hover_zoom.hide();
-    painter.hover_zoom.hideUnlessHovered(painter.getThumbnailBySourceHwnd(source_hwnd));
-}
-
 /// Reuses the thumbnail classes, whose input handling these click-through windows never reach.
 fn create(instance: win32.HINSTANCE) !Windows {
     const hwnd = try createPopup(instance, window.WINDOW_CLASS_NAME);
@@ -192,7 +174,7 @@ fn createPopup(instance: win32.HINSTANCE, class_name: [*:0]const u8) !win32.HWND
 }
 
 fn isHovered(thumbnail: *const ThumbnailWindow) bool {
-    if (!win32.isWindowVisible(thumbnail.hwnd) or thumbnail_drag.isDragging(thumbnail)) return false;
+    if (!win32.isWindowVisible(thumbnail.hwnd) or thumbnail.is_dragged) return false;
 
     var cursor: win32.POINT = undefined;
     if (!win32.toBool(win32.GetCursorPos(&cursor))) return false;

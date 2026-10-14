@@ -172,7 +172,6 @@ pub const ANIMATIONINFO = extern struct {
     iMinAnimate: INT,
 };
 
-/// Payload for a WH_MOUSE_LL hook callback (see SetWindowsHookExA below)
 pub const MSLLHOOKSTRUCT = extern struct {
     pt: POINT,
     mouseData: DWORD,
@@ -181,7 +180,6 @@ pub const MSLLHOOKSTRUCT = extern struct {
     dwExtraInfo: usize,
 };
 
-/// Payload for a WH_KEYBOARD_LL hook callback (see SetWindowsHookExA below)
 pub const KBDLLHOOKSTRUCT = extern struct {
     vkCode: DWORD,
     scanCode: DWORD,
@@ -222,7 +220,6 @@ pub fn rectContains(rect: RECT, pt: POINT) bool {
     return pt.x >= rect.left and pt.x < rect.right and pt.y >= rect.top and pt.y < rect.bottom;
 }
 
-/// Pulls each edge of `rect` into `bounds`.
 pub fn clampRect(rect: RECT, bounds: RECT) RECT {
     return .{
         .left = std.math.clamp(rect.left, bounds.left, bounds.right),
@@ -322,6 +319,7 @@ pub extern "user32" fn MessageBoxA(hWnd: ?HWND, lpText: [*:0]const u8, lpCaption
 
 pub extern "kernel32" fn CreateMutexW(lpMutexAttributes: ?*anyopaque, bInitialOwner: BOOL, lpName: [*:0]const u16) callconv(.c) ?HANDLE;
 pub extern "kernel32" fn GetLastError() callconv(.c) DWORD;
+pub extern "kernel32" fn SetLastError(dwErrCode: DWORD) callconv(.c) void;
 
 pub const EXCEPTION_MAXIMUM_PARAMETERS = 15;
 pub const EXCEPTION_RECORD = extern struct {
@@ -518,7 +516,6 @@ pub const KEYEVENTF_KEYUP: DWORD = 0x0002;
 pub extern "user32" fn RegisterHotKey(hWnd: ?HWND, id: c_int, fsModifiers: UINT, vk: UINT) callconv(.c) BOOL;
 pub extern "user32" fn UnregisterHotKey(hWnd: ?HWND, id: c_int) callconv(.c) BOOL;
 
-// Hotkeys are bound via low-level hooks - see keyboard_hook.zig and mouse_hook.zig.
 pub const HHOOK = HANDLE;
 pub const WH_KEYBOARD_LL: c_int = 13;
 pub const WH_MOUSE_LL: c_int = 14;
@@ -753,7 +750,7 @@ pub const FILETIME = extern struct {
     dwLowDateTime: DWORD,
     dwHighDateTime: DWORD,
 
-    /// Convert to a u64 (100-nanosecond intervals since Jan 1, 1601)
+    /// 100-nanosecond intervals since Jan 1, 1601.
     pub fn toU64(self: FILETIME) u64 {
         return (@as(u64, self.dwHighDateTime) << 32) | @as(u64, self.dwLowDateTime);
     }
@@ -1135,7 +1132,7 @@ pub fn selfExecutableDirPath(buf: []u8) ![]const u8 {
     return std.Io.Dir.path.dirname(full_path) orelse return error.MissingDirname;
 }
 
-/// Opens `target` (a file path or URL) with its default handler via ShellExecuteA. Returns false on failure.
+/// `target` is a file path or URL, opened with its default handler.
 pub fn shellOpen(target: [*:0]const u8, workdir: ?[*:0]const u8) bool {
     const result = ShellExecuteA(null, "open", target, null, workdir, SW_SHOW);
     return @intFromPtr(result) > 32;

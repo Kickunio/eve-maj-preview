@@ -6,6 +6,7 @@ const update = @import("../../update.zig");
 const session = @import("session.zig");
 const style = @import("style.zig");
 const widgets = @import("widgets.zig");
+const lang = @import("../../lang/lang.zig");
 const log = @import("../../log.zig");
 
 const Rect = ui.component.Rect;
@@ -49,10 +50,10 @@ pub fn show(context: *ui.Frame) !void {
     if (!g_is_open) return;
     const dialog = widgets.modal(.src(@src()), &g_is_open, &style.modal_wide);
     _ = try dialog.open(context);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Update Available!", .style = &style.heading });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Update Available!"), .style = &style.heading });
     const line = Rect{ .key = .src(@src()), .style = &style.hint_row };
     _ = try line.open(context);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "A new version is available:", .style = &style.modal_text_inline });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("A new version is available:"), .style = &style.modal_text_inline });
     if ((try context.interact(Button{ .key = .src(@src()), .label = if (g_version.len > 0) g_version else g_url, .style = &style.link })).clicked) {
         if (!win32.shellOpenUrl(g_url)) slog.warn("Failed to open '{s}' in the browser", .{g_url});
     }
@@ -60,7 +61,7 @@ pub fn show(context: *ui.Frame) !void {
     if (g_notes) |notes| try context.e(Text{ .selectable = false, .key = .src(@src()), .content = notes, .style = &style.modal_text });
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Close", .style = &style.outline_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Close"), .style = &style.outline_button })).clicked) {
         g_is_open = false;
         context.requestRedraw();
     }
@@ -80,8 +81,9 @@ fn check(context: *ui.Frame) void {
         g_check = .done;
         return;
     }
-    const version = update.g_update_status.copyVersionZ(&g_version_buf);
-    const url = update.g_update_status.copyUrlZ(&g_url_buf);
+    const io = session.runningApp().io;
+    const version = update.g_update_status.copyVersionZ(io, &g_version_buf);
+    const url = update.g_update_status.copyUrlZ(io, &g_url_buf);
     if (version == null or url == null) {
         if (g_check == .pending) {
             g_check = .retrying;
@@ -94,7 +96,7 @@ fn check(context: *ui.Frame) void {
     g_check = .done;
     g_version = version.?;
     g_url = url.?;
-    g_notes = update.g_update_status.dupeNotes(g_allocator);
+    g_notes = update.g_update_status.dupeNotes(io, g_allocator);
     g_is_open = true;
     context.requestRedraw();
 }

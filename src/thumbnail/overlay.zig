@@ -7,7 +7,6 @@ const types = @import("../config/types.zig");
 const color_mod = @import("../util/color.zig");
 const format = @import("../util/format.zig");
 const stack = @import("../notifications/stack.zig");
-const state_mod = @import("state.zig");
 const draw = @import("draw.zig");
 const font_cache_mod = @import("font_cache.zig");
 const window = @import("window.zig");
@@ -228,7 +227,7 @@ const Layout = struct {
     }
 
     fn position(self: *const Layout, anchor: TextPosition, dims: TextDimensions, offset_x: i32, offset_y: i32) TextOrigin {
-        return draw.calculateTextPosition(anchor, dims.width, dims.height, self.width, self.height, offset_x, offset_y);
+        return draw.calculateTextPosition(anchor, dims, .{ .width = self.width, .height = self.height }, offset_x, offset_y);
     }
 
     fn add(self: *Layout, line: DrawLine) void {
@@ -251,13 +250,13 @@ const Layout = struct {
             block.height += dims[i].height;
         }
         const origin = self.position(anchor, block, offset_x, offset_y);
-        const h_align = draw.horizontalAlignOf(anchor);
+        const horizontal_align = draw.horizontalAlignOf(anchor);
         var y = origin.y;
         for (texts, dims[0..texts.len]) |text, line_dims| {
             self.add(.{
                 .font = font,
                 .text = text,
-                .render_origin = .{ .x = draw.alignedLineX(origin.x, block.width, line_dims.width, h_align), .y = y },
+                .render_origin = .{ .x = draw.alignedLineX(origin.x, block.width, line_dims.width, horizontal_align), .y = y },
                 .background_origin = .{ .x = origin.x, .y = y },
                 .background_dimensions = .{ .width = block.width, .height = line_dims.height },
                 .color = color,
@@ -320,7 +319,7 @@ pub fn renderOverlay(font_cache: *FontCache, cache: *RenderCache, target_hwnd: w
     overlay.clear();
 
     if (settings.show_exclusion_overlay) {
-        draw.drawExclusionOverlay(overlay.pixels, overlay.width, overlay.height, settings.exclusion_overlay_color, settings.exclusion_overlay_style);
+        draw.drawExclusionOverlay(overlay.canvas(), settings.exclusion_overlay_color, settings.exclusion_overlay_style);
     }
 
     const dpi: u32 = win32.GetDpiForWindow(thumbnail.hwnd);
@@ -345,14 +344,14 @@ pub fn renderOverlay(font_cache: *FontCache, cache: *RenderCache, target_hwnd: w
     const lines = layout.lines[0..layout.count];
     // Before the border, so it paints over them.
     for (lines) |line| {
-        draw.fillTextBackground(overlay.pixels, overlay.width, overlay.height, line.background_origin.x, line.background_origin.y, line.background_dimensions.width, line.background_dimensions.height, line.bg_color);
+        draw.fillTextBackground(overlay.canvas(), line.background_origin.x, line.background_origin.y, line.background_dimensions.width, line.background_dimensions.height, line.bg_color);
     }
     if (notifications) |block| {
-        draw.fillTextBackground(overlay.pixels, overlay.width, overlay.height, block.origin.x, block.origin.y, block.dims.width, block.dims.height, settings.notifications_bg_color);
+        draw.fillTextBackground(overlay.canvas(), block.origin.x, block.origin.y, block.dims.width, block.dims.height, settings.notifications_bg_color);
     }
 
     if (settings.show_border) {
-        draw.drawBorder(overlay.pixels, overlay.width, overlay.height, @intCast(settings.border_width), settings.border_color, settings.border_style);
+        draw.drawBorder(overlay.canvas(), @intCast(settings.border_width), settings.border_color, settings.border_style);
     }
 
     for (lines) |line| {
@@ -370,10 +369,10 @@ pub fn renderOverlay(font_cache: *FontCache, cache: *RenderCache, target_hwnd: w
 
     // Bounded to where text was drawn instead of scanning the whole overlay.
     for (lines) |line| {
-        pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, line.background_origin.x, line.background_origin.y, line.background_dimensions.width, line.background_dimensions.height);
+        pixel_buffer.fixTextAlphaRect(overlay.canvas(), line.background_origin.x, line.background_origin.y, line.background_dimensions.width, line.background_dimensions.height);
     }
     if (notifications) |block| {
-        pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, block.origin.x, block.origin.y, block.dims.width, block.dims.height);
+        pixel_buffer.fixTextAlphaRect(overlay.canvas(), block.origin.x, block.origin.y, block.dims.width, block.dims.height);
     }
 
     gdi_overlay.presentLayered(target_hwnd, overlay, settings.overlay_alpha);
@@ -664,7 +663,7 @@ fn resolveTextBgColor(state_config: config_mod.StateVisualConfig, base_color: u3
 }
 
 /// Colour precedence, lowest first: the Active/Inactive base, the state's own override, the newest notification's type while alerting, then the character's own colours.
-fn resolveBorder(config: *const config_mod.Config, thumbnail: *const ThumbnailWindow, state: state_mod.ThumbnailState, state_config: config_mod.StateVisualConfig, flags: BorderFlags) Border {
+fn resolveBorder(config: *const config_mod.Config, thumbnail: *const ThumbnailWindow, state: config_mod.ThumbnailState, state_config: config_mod.StateVisualConfig, flags: BorderFlags) Border {
     const thumbnail_config = &config.thumbnail;
     const is_focused = flags.is_focused;
     // Alert builds on Active, being an attention event.
@@ -711,8 +710,8 @@ fn overlaySize(config: *const config_mod.Config, thumbnail: *const ThumbnailWind
         }
     }
     const character_size = thumbnail.cached_thumbnail_size;
-    const width = if (character_size) |cs| cs.width orelse config.thumbnail.width else config.thumbnail.width;
-    const height = if (character_size) |cs| cs.height orelse config.thumbnail.height else config.thumbnail.height;
+    const width = if (character_size) |own_size| own_size.width orelse config.thumbnail.width else config.thumbnail.width;
+    const height = if (character_size) |own_size| own_size.height orelse config.thumbnail.height else config.thumbnail.height;
     return .{ .width = scalePixels(width, dpi_scale), .height = scalePixels(height, dpi_scale) };
 }
 

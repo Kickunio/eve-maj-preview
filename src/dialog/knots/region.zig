@@ -1,7 +1,6 @@
 //! Drawing a thumbnail space on screen with the app's region overlay, and storing the result in the edited profile; main thread only.
 const std = @import("std");
 const win32 = @import("../../platform/win32.zig");
-const painter_mod = @import("../../painter.zig");
 const config = @import("../../config.zig");
 const monitors = @import("../../layout/monitors.zig");
 const spaces = @import("../../layout/spaces.zig");
@@ -9,6 +8,7 @@ const region_select = @import("../tools/region_select.zig");
 const session = @import("session.zig");
 const status = @import("status.zig");
 const host = @import("host.zig");
+const lang = @import("../../lang/lang.zig");
 const log = @import("../../log.zig");
 
 const slog = log.Scoped("dialog_knots");
@@ -25,12 +25,20 @@ pub fn init(allocator: std.mem.Allocator) void {
 
 /// Starts the overlay for the space with id `space_id`; `is_editing` adjusts its current rectangle instead of dragging a new one.
 pub fn start(space_id: u32, is_editing: bool) void {
-    const painter = painter_mod.g_painter_ptr orelse return;
+    const thumbnail_set = session.runningApp().thumbnail_set orelse return;
     const current = rect(space_id);
     if (is_editing and current == null) return;
     const should_hide = session.profile().ptr.display.hideThumbnailsDuringRegionSelect;
     const edit_region: ?win32.RECT = if (is_editing) current else null;
-    const labels = region_select.Labels{};
+    const labels = region_select.Labels{
+        .save = region_select.fixedText(region_select.BUTTON_LABEL_SIZE, lang.text("Save")),
+        .cancel = region_select.fixedText(region_select.BUTTON_LABEL_SIZE, lang.text("Cancel")),
+        .hint_new = region_select.fixedText(region_select.HINT_SIZE, lang.text("Drag to draw the region, then drag its edges to adjust")),
+        .hint_edit = region_select.fixedText(region_select.HINT_SIZE, lang.text("Drag the edges to resize, or the inside to move")),
+        .hint_confirm = region_select.fixedText(region_select.HINT_SIZE, lang.text("Enter or Save to confirm, Esc or right-click to cancel")),
+        .width_prefix = region_select.fixedText(region_select.FIELD_PREFIX_SIZE, lang.text("W")),
+        .height_prefix = region_select.fixedText(region_select.FIELD_PREFIX_SIZE, lang.text("H")),
+    };
     comptime std.debug.assert(region_select.MAX_OTHER_REGIONS >= spaces.MAX_SPACES);
     var others: [region_select.MAX_OTHER_REGIONS]win32.RECT = undefined;
     var other_count: usize = 0;
@@ -40,19 +48,25 @@ pub fn start(space_id: u32, is_editing: bool) void {
         other_count += 1;
     }
 
-    if (should_hide) painter.hideVisibleThumbnails(g_allocator, &g_hidden);
+    if (should_hide) thumbnail_set.hideVisibleThumbnails(g_allocator, &g_hidden);
     const cursor = monitors.cursorMonitorBounds();
-    const text_color = painter.config.thumbnail.characterNameColor | 0xFF000000;
-    region_select.start(painter.instance, painter.config.accentColor, text_color, edit_region, others[0..other_count], labels, onFinished, onSelected) catch |err| {
+    const text_color = thumbnail_set.config.thumbnail.characterNameColor | 0xFF000000;
+    region_select.start(thumbnail_set.instance, .{
+        .accent_color = thumbnail_set.config.accentColor,
+        .label_color = text_color,
+        .edit_region = edit_region,
+        .other_regions = others[0..other_count],
+        .labels = labels,
+    }, onFinished, onSelected) catch |err| {
         onFinished();
         slog.err("Failed to start region selection: {}", .{err});
-        status.show(.failure, "Failed to start region selection: {}", .{err});
+        status.show(.failure, "Failed to start region selection: {err}", .{ .err = err });
         return;
     };
     g_target_space_id = space_id;
     if (region_select.textFont()) |font| {
         const line1 = region_select.labelText(if (edit_region != null) &labels.hint_edit else &labels.hint_new);
-        painter.hint_box.show(painter.instance, font, text_color, line1, region_select.labelText(&labels.hint_confirm), cursor.bounds);
+        thumbnail_set.hint_box.show(thumbnail_set.instance, font, text_color, line1, region_select.labelText(&labels.hint_confirm), cursor.bounds);
     }
 }
 
@@ -110,7 +124,7 @@ fn onFinished() void {
         g_hidden.deinit(g_allocator);
         g_hidden = .empty;
     }
-    const painter = painter_mod.g_painter_ptr orelse return;
-    painter.showThumbnails(g_hidden.items);
-    painter.hint_box.hide();
+    const thumbnail_set = session.runningApp().thumbnail_set orelse return;
+    thumbnail_set.showThumbnails(g_hidden.items);
+    thumbnail_set.hint_box.hide();
 }

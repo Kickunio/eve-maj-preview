@@ -2,7 +2,6 @@
 const std = @import("std");
 const win32 = @import("../../platform/win32.zig");
 const config = @import("../../config.zig");
-const files = @import("../../config/files.zig");
 const esi_prices = @import("../tools/esi_prices.zig");
 const log = @import("../../log.zig");
 
@@ -42,9 +41,9 @@ pub fn isFetching() bool {
 }
 
 /// `timer_hwnd` receives `command` with the result; returns false if a fetch is already running or couldn't start.
-pub fn fetch(timer_hwnd: win32.HWND, command: usize) bool {
+pub fn fetch(io: std.Io, timer_hwnd: win32.HWND, command: usize) bool {
     if (g_is_busy.swap(true, .acq_rel)) return false;
-    const thread = std.Thread.spawn(.{}, fetchThread, .{ timer_hwnd, command }) catch |err| {
+    const thread = std.Thread.spawn(.{}, fetchThread, .{ io, timer_hwnd, command }) catch |err| {
         slog.err("Failed to fetch ore prices: {}", .{err});
         g_is_busy.store(false, .release);
         return false;
@@ -54,14 +53,14 @@ pub fn fetch(timer_hwnd: win32.HWND, command: usize) bool {
 }
 
 /// The fetch's thread; touches nothing of the main thread's but the allocator and the posted message.
-fn fetchThread(timer_hwnd: win32.HWND, command: usize) void {
+fn fetchThread(io: std.Io, timer_hwnd: win32.HWND, command: usize) void {
     defer g_is_busy.store(false, .release);
     const fetched = g_allocator.create(Fetched) catch |err| {
         slog.err("Failed to fetch ore prices: {}", .{err});
         return;
     };
     fetched.* = .{ .arena = .init(g_allocator), .prices = &.{}, .has_failed = false };
-    if (esi_prices.fetchOrePrices(g_allocator, fetched.arena.allocator(), files.g_io, &NAMES)) |prices| {
+    if (esi_prices.fetchOrePrices(g_allocator, fetched.arena.allocator(), io, &NAMES)) |prices| {
         fetched.prices = prices.items;
     } else |err| {
         slog.err("Failed to fetch ore prices: {}", .{err});

@@ -1,11 +1,11 @@
 //! Folder and file pickers, run on a thread of their own since a picker's modal loop on the main thread would stall the input hooks.
 const std = @import("std");
 const win32 = @import("../../platform/win32.zig");
+const lang = @import("../../lang/lang.zig");
 const log = @import("../../log.zig");
 
 const slog = log.Scoped("dialog_knots");
 
-/// What a picked path is for.
 pub const Target = enum {
     chatlog_dir,
     gamelog_dir,
@@ -37,24 +37,34 @@ pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
 }
 
-/// `timer_hwnd` receives `command` with the result, unless the user cancels.
+/// `timer_hwnd` receives `command` with the result, unless the user cancels; `title` is in English, and shown translated.
 pub fn browse(target: Target, index: usize, title: []const u8, owner: ?win32.HWND, timer_hwnd: win32.HWND, command: usize) void {
     if (g_is_busy.swap(true, .acq_rel)) return;
-    const thread = std.Thread.spawn(.{}, pickerThread, .{ target, index, title, owner, timer_hwnd, command }) catch |err| {
+    startPicker(target, index, title, owner, timer_hwnd, command) catch |err| {
         slog.err("Failed to open the picker: {}", .{err});
         g_is_busy.store(false, .release);
-        return;
     };
+}
+
+/// Copies the wording, since the language module is the main thread's.
+fn startPicker(target: Target, index: usize, title: []const u8, owner: ?win32.HWND, timer_hwnd: win32.HWND, command: usize) !void {
+    const shown_title = try g_allocator.dupe(u8, lang.text(title));
+    errdefer g_allocator.free(shown_title);
+    const file_type_name = try g_allocator.dupe(u8, lang.text(fileTypeName(target)));
+    errdefer g_allocator.free(file_type_name);
+    const thread = try std.Thread.spawn(.{}, pickerThread, .{ target, index, shown_title, file_type_name, owner, timer_hwnd, command });
     thread.detach();
 }
 
-/// The picker's thread; touches nothing of the main thread's but the allocator and the posted message.
-fn pickerThread(target: Target, index: usize, title: []const u8, owner: ?win32.HWND, timer_hwnd: win32.HWND, command: usize) void {
+/// The picker's thread, which owns and frees `title` and `file_type_name`; touches nothing of the main thread's but the allocator and the posted message.
+fn pickerThread(target: Target, index: usize, title: []const u8, file_type_name: []const u8, owner: ?win32.HWND, timer_hwnd: win32.HWND, command: usize) void {
     defer g_is_busy.store(false, .release);
+    defer g_allocator.free(title);
+    defer g_allocator.free(file_type_name);
     const shown = switch (target) {
         .chatlog_dir, .gamelog_dir => win32.showFolderPicker(g_allocator, title, owner),
-        .sound_file => win32.showFilePicker(g_allocator, title, "Audio Files (*.wav, *.mp3)", "*.wav;*.mp3", owner),
-        .import_file => win32.showFilePicker(g_allocator, title, "Settings Files (*.json, *.ini)", "*.json;*.ini", owner),
+        .sound_file => win32.showFilePicker(g_allocator, title, file_type_name, "*.wav;*.mp3", owner),
+        .import_file => win32.showFilePicker(g_allocator, title, file_type_name, "*.json;*.ini", owner),
     };
     const path = shown catch |err| {
         slog.err("Failed to open the picker: {}", .{err});
@@ -70,4 +80,12 @@ fn pickerThread(target: Target, index: usize, title: []const u8, owner: ?win32.H
         slog.err("Failed to pass on the picked path: error {d}", .{win32.GetLastError()});
         picked.deinit();
     }
+}
+
+fn fileTypeName(target: Target) []const u8 {
+    return switch (target) {
+        .chatlog_dir, .gamelog_dir => "",
+        .sound_file => "Audio Files (*.wav, *.mp3)",
+        .import_file => "Settings Files (*.json, *.ini)",
+    };
 }

@@ -4,12 +4,11 @@ const ui = @import("ui");
 const win32 = @import("../../platform/win32.zig");
 const vk = @import("../../platform/virtual_keys.zig");
 const key_list = @import("../../config/key_list.zig");
-const hotkeys = @import("../../hotkeys/manager.zig");
 const keyboard_hook = @import("../../hotkeys/keyboard_hook.zig");
-const main = @import("../../main.zig");
 const session = @import("session.zig");
 const style = @import("style.zig");
 const widgets = @import("widgets.zig");
+const lang = @import("../../lang/lang.zig");
 const log = @import("../../log.zig");
 
 const Rect = ui.component.Rect;
@@ -35,7 +34,6 @@ const KEYCAP_KEY_BASE = 100;
 /// Bindings that may share a combo with their own kind, cycling through each other in order.
 const HolderKind = enum { other, character, group_forward, group_backward };
 
-/// How many bindings hold a combo, and whether they're all of one kind.
 const Holders = struct { total: usize = 0, kind: HolderKind = .other, is_mixed: bool = false };
 
 /// A field waiting for a key; the window's messages feed it until something is captured or it's cancelled.
@@ -148,9 +146,9 @@ pub fn field(context: *ui.Frame, ref: anytype, comptime field_name: []const u8) 
         const box = Button{ .key = key, .style = try sized(context, state_style, width) };
         const response = try box.openResponse(context);
         if (is_recording) {
-            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = RECORDING_PROMPT, .style = &style.hotkey_prompt });
+            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = lang.text(RECORDING_PROMPT), .style = &style.hotkey_prompt });
         } else if (current.len == 0) {
-            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = CLICK_TO_BIND, .style = &style.hotkey_placeholder });
+            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = lang.text(CLICK_TO_BIND), .style = &style.hotkey_placeholder });
         } else {
             try keycaps(context, key, current);
         }
@@ -317,7 +315,6 @@ fn isRecordingField(id: u64) bool {
     return recording.id == id;
 }
 
-/// The manual edit open on field `id`, if any.
 fn manualEditFor(id: u64) ?*ManualEdit {
     const edit = if (g_manual) |*open| open else return null;
     return if (edit.id == id) edit else null;
@@ -363,14 +360,15 @@ fn startRecording(id: u64) void {
     endManual();
     g_recording = .{ .id = id };
     // The low-level hooks swallow matched keys system-wide, so the window would never see a bound key otherwise.
-    if (hotkeys.g_hotkey_manager_ptr) |manager| manager.dialogSuspendHotkeys();
+    if (session.runningApp().hotkey_manager) |manager| manager.dialogSuspendHotkeys();
 }
 
 fn stopRecording() void {
     if (g_recording == null) return;
     g_recording = null;
-    const manager = hotkeys.g_hotkey_manager_ptr orelse return;
-    const timer_hwnd = main.g_timer_hwnd orelse return;
+    const app = session.runningApp();
+    const manager = app.hotkey_manager orelse return;
+    const timer_hwnd = app.timer_hwnd orelse return;
     manager.dialogResumeHotkeys(timer_hwnd);
 }
 

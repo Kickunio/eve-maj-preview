@@ -4,8 +4,10 @@ const ui = @import("ui");
 const config = @import("../../../config.zig");
 const host = @import("../host.zig");
 const profiles = @import("../profiles.zig");
+const session = @import("../session.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
+const lang = @import("../../../lang/lang.zig");
 const log = @import("../../../log.zig");
 
 const Text = ui.component.Text;
@@ -45,7 +47,7 @@ pub fn show(context: *ui.Frame) !void {
         const row = try widgets.openRow(context, ROW_KEY.indexed(index));
         const parsed = config.parseBackupName(backup);
         try context.e(Text{ .selectable = false, .key = ROW_KEY.indexed(index).indexed(1), .content = try label(arena, parsed), .style = &style.label_aligned });
-        if ((try context.interact(Button{ .key = ROW_KEY.indexed(index).indexed(2), .label = "Restore", .style = &style.plain_button })).clicked) {
+        if ((try context.interact(Button{ .key = ROW_KEY.indexed(index).indexed(2), .label = lang.text("Restore"), .style = &style.plain_button })).clicked) {
             host.restoreBackup(backup, parsed.name);
             // The prompt it opens is drawn by the header, which this frame has already drawn.
             context.requestRedraw();
@@ -80,7 +82,7 @@ fn scan() void {
     g_scanned_revision = profiles.revision();
     if (g_arena) |*arena| arena.deinit();
     g_arena = .init(g_allocator);
-    const names = config.listProfileBackups(g_arena.?.allocator()) catch |err| {
+    const names = config.listProfileBackups(g_arena.?.allocator(), session.runningApp().io) catch |err| {
         slog.err("Failed to list profile backups: {}", .{err});
         g_backups = &.{};
         return;

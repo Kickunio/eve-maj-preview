@@ -1,12 +1,10 @@
 //! The Import Settings dialog: reading another preview tool's file or an EVE-Maj profile, and choosing its sections and where they go; main thread only.
 const std = @import("std");
 const ui = @import("ui");
-const files = @import("../../config/files.zig");
 const importer = @import("../../config/import/importer.zig");
 const session = @import("session.zig");
 const host = @import("host.zig");
-const header = @import("header.zig");
-const lang = @import("lang.zig");
+const lang = @import("../../lang/lang.zig");
 const profiles = @import("profiles.zig");
 const status = @import("status.zig");
 const style = @import("style.zig");
@@ -17,13 +15,26 @@ const log = @import("../../log.zig");
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
+const Tooltip = ui.component.Tooltip;
 const TextInput = ui.component.TextInput;
 const SelectInput = ui.component.SelectInput;
-const ColorPicker = ui.component.ColorPicker;
 const slog = log.Scoped("dialog_knots");
 
 const FILE_HINT = "Select an old EVE-X Preview (.json), EVE-O Preview (.json), or EVE-APM Preview (.ini) file, or an EVE-Maj Preview profile (.json) \u{2014} format is detected automatically. Nothing is saved until you review and click Save.";
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
+
+/// An EVE-Maj profile's sections under one of the sidebar's headings.
+const Group = struct { label: []const u8, ids: []const []const u8 };
+
+/// EVE-Maj profile sections grouped like the sidebar's tabs, by Config field name; a section left out lands in "Other".
+const MAJ_GROUPS = [_]Group{
+    .{ .label = "Clients", .ids = &.{ "characters", "hotkeyGroups", "windowFilters", "exclusion" } },
+    .{ .label = "Display", .ids = &.{ "display", "thumbnail", "thumbnailSpaces", "snapping", "autoMovePosition" } },
+    .{ .label = "Input", .ids = &.{ "hotkeys", "interaction", "autoMinimize", "closeAll" } },
+    .{ .label = "Alerts", .ids = &.{ "chatlog", "travel", "systemColors" } },
+    .{ .label = "Overlays", .ids = &.{ "mining", "combat", "bounty", "resources" } },
+    .{ .label = "App", .ids = &.{ "timer", "accentColor" } },
+};
 
 const Section = struct {
     id: []const u8,
@@ -46,6 +57,9 @@ const Summary = struct {
     skipped: []const []const u8,
 };
 
+/// Which sections, available ones only, a list shows: all, one of MAJ_GROUPS, or those no group lists.
+const Filter = union(enum) { all, ids: []const []const u8, ungrouped };
+
 var g_allocator: std.mem.Allocator = undefined;
 var g_is_open: bool = false;
 /// Holds the file, the analysis and the summary; reset each time the dialog opens.
@@ -54,13 +68,15 @@ var g_arena: std.heap.ArenaAllocator = undefined;
 var g_file_text: ?[]const u8 = null;
 /// Borrows from g_arena.
 var g_file_name: []const u8 = "";
-/// Under the Browse button: reading, what was detected, or why it failed; a literal, or borrowed from g_arena.
+/// Under the file row: what was detected, or why it failed; a literal, or borrowed from g_arena.
 var g_file_status: []const u8 = "";
 var g_analysis: ?Analysis = null;
 var g_imports_into_new: bool = false;
 /// Owned; freed in reset.
 var g_new_name: std.ArrayList(u8) = .empty;
 var g_new_accent: ui.Color = undefined;
+/// The rainbow picker chose g_new_accent; see widgets.accentChoices.
+var g_is_new_accent_custom: bool = false;
 var g_summary: ?Summary = null;
 
 pub fn init(allocator: std.mem.Allocator) void {
@@ -81,8 +97,15 @@ pub fn open() void {
     clearArena();
     g_imports_into_new = false;
     g_new_name.clearRetainingCapacity();
-    g_new_accent = color_convert.fromArgb(header.DEFAULT_ACCENT);
+    g_new_accent = color_convert.fromArgb(profiles.DEFAULT_ACCENT);
+    g_is_new_accent_custom = false;
     g_is_open = true;
+}
+
+/// The accent picked for a new profile, previewed on the window while the dialog is open.
+pub fn previewAccent() ?u32 {
+    if (!g_is_open or !g_imports_into_new or g_summary != null) return null;
+    return color_convert.toArgb(g_new_accent);
 }
 
 /// From the file picker, between frames.
@@ -103,7 +126,7 @@ pub fn show(context: *ui.Frame) !void {
     if (!g_is_open) return clearArena();
     const dialog = widgets.modal(.src(@src()), &g_is_open, &style.modal_wide);
     _ = try dialog.open(context);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Import Settings", .style = &style.heading });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Import Settings"), .style = &style.heading });
     if (g_summary) |summary| {
         try summaryView(context, summary);
     } else {
@@ -114,32 +137,32 @@ pub fn show(context: *ui.Frame) !void {
     try dialog.close(context);
 }
 
-/// Applies the chosen sections to the profile the window edits; called again by the header's action once a new profile exists.
+/// Applies the chosen sections to the running profile; called by the profile action once a new profile exists.
 pub fn applyImport() void {
     applyChosen() catch |err| {
         slog.err("Failed to import settings: {}", .{err});
-        status.show(.failure, "Import failed: {t}", .{err});
+        status.show(.failure, "Import failed: {err}", .{ .err = err });
     };
 }
 
 fn readFile(path: []const u8) !void {
-    g_file_text = try std.Io.Dir.cwd().readFileAlloc(files.g_io, path, arena(), .limited(MAX_FILE_BYTES));
+    g_file_text = try std.Io.Dir.cwd().readFileAlloc(session.runningApp().io, path, arena(), .limited(MAX_FILE_BYTES));
     g_file_name = try arena().dupe(u8, std.fs.path.basename(path));
 }
 
 fn fileStep(context: *ui.Frame) !void {
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = FILE_HINT, .style = &style.hint });
-    const row = Rect{ .key = .src(@src()), .style = &style.inline_row };
-    _ = try row.open(context);
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Choose File...", .style = &style.plain_button })).clicked) host.browseImportFile();
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = g_file_name, .style = &style.detail_value });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text(FILE_HINT), .style = &style.hint });
+    const row = try widgets.openRow(context, .src(@src()));
+    const has_file = g_file_name.len > 0;
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = if (has_file) g_file_name else lang.text("No file chosen"), .style = if (has_file) &style.label_aligned else &style.import_file_none });
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Browse"), .style = &style.plain_button })).clicked) host.browseImportFile();
     try row.close(context);
-    if (g_file_status.len > 0) try context.e(Text{ .selectable = false, .key = .src(@src()), .content = g_file_status, .style = &style.hint });
+    if (g_file_status.len > 0) try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text(g_file_status), .style = &style.hint });
 }
 
 fn optionsStep(context: *ui.Frame, analysis: *Analysis) !void {
     if (analysis.profiles.len > 1) {
-        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Old profile to import from", .style = &style.inline_label });
+        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Old profile to import from"), .style = &style.inline_label });
         const values = try context.arena().alloc(u32, analysis.profiles.len);
         for (values, 0..) |*value, index| value.* = @intCast(index);
         const response = try context.interact(SelectInput(u32){ .key = .src(@src()), .labels = analysis.profiles, .values = values, .initial_selected = analysis.source_index, .style = &style.select_fill, .parts = .{ .popup = &style.select_popup } });
@@ -153,38 +176,137 @@ fn optionsStep(context: *ui.Frame, analysis: *Analysis) !void {
         }
     }
 
-    try widgets.boxedText(context, .src(@src()), "Import into", &style.modal_subheading_box, &style.subheading);
-    const editing = profiles.displayName(session.profile().ptr.profile_name);
-    var imports_into_current = !g_imports_into_new;
-    if (try widgets.checkbox(context, .src(@src()), try std.fmt.allocPrint(context.arena(), "Current profile ({s})", .{editing}), &imports_into_current)) g_imports_into_new = false;
-    var imports_into_new = g_imports_into_new;
-    if (try widgets.checkbox(context, .src(@src()), "New profile", &imports_into_new)) g_imports_into_new = true;
+    const target_row = try widgets.openModalRow(context, .src(@src()), "Import into");
+    const running = try std.fmt.allocPrint(context.arena(), "'{s}'", .{profiles.displayName(session.profile().ptr.profile_name)});
+    if (try widgets.segmented(context, .src(@src()), &.{ running, "New Profile" }, @intFromBool(g_imports_into_new))) |index| {
+        g_imports_into_new = index == 1;
+        context.requestRedraw();
+    }
+    try target_row.close(context);
+    try widgets.hintText(context, .src(@src()), "New Profile leaves your current settings untouched.");
     if (g_imports_into_new) {
-        const row = Rect{ .key = .src(@src()), .style = &style.inline_row };
-        _ = try row.open(context);
-        try context.e(TextInput{ .key = .str("knots.import.new_name"), .buf = &g_new_name, .style = &style.text_input, .placeholder = "New profile name" });
-        _ = try context.interact(ColorPicker{ .key = .src(@src()), .value = &g_new_accent, .style = &style.color_picker_swatch, .parts = .{ .swatch = &style.color_swatch_fill, .popup = &style.color_popup }, .show_hex = false, .show_alpha = false });
-        try row.close(context);
+        const name_row = try widgets.openModalRow(context, .src(@src()), "Name");
+        try context.e(TextInput{ .key = .str("knots.import.new_name"), .buf = &g_new_name, .style = &style.text_input_aligned, .placeholder = lang.text("Profile name") });
+        try name_row.close(context);
+        try widgets.hintText(context, .src(@src()), "Use " ++ profiles.NAME_RULES ++ ".");
+        if (profiles.nameProblem(context.arena(), newName())) |message| try widgets.boxedText(context, .src(@src()), message, &style.hint_box, &style.field_error);
+        const color_row = try widgets.openModalRow(context, .src(@src()), "Color");
+        try widgets.accentChoices(context, .src(@src()), &g_new_accent, &g_is_new_accent_custom);
+        try color_row.close(context);
+        try widgets.hintText(context, .src(@src()), "Marks it in the profile menu and tints this window.");
     }
 
-    try widgets.boxedText(context, .src(@src()), "Sections to import", &style.modal_subheading_box, &style.subheading);
-    for (analysis.sections, 0..) |*section, index| {
-        const item = try widgets.openGroup(context, ui.Key.str("knots.import.section").indexed(index), section.is_available);
-        const row = Rect{ .key = ui.Key.str("knots.import.section.row").indexed(index), .style = &style.inline_row };
-        _ = try row.open(context);
-        _ = try widgets.checkbox(context, ui.Key.str("knots.import.section.check").indexed(index), section.title, &section.is_chosen);
-        const hint = if (section.is_available) section.hint else "Nothing to import for this section";
-        try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.import.section.hint").indexed(index), .content = hint, .style = &style.hint_inline });
-        try row.close(context);
-        try item.close(context);
+    try sectionsHeading(context, analysis.sections);
+    const arena_allocator = context.arena();
+    if (std.mem.eql(u8, analysis.format, "maj")) {
+        for (MAJ_GROUPS, 0..) |group, index| {
+            try sectionGroup(context, index, group.label, analysis.sections, try sectionIndices(arena_allocator, analysis.sections, .{ .ids = group.ids }));
+        }
+        try sectionGroup(context, MAJ_GROUPS.len, "Other", analysis.sections, try sectionIndices(arena_allocator, analysis.sections, .ungrouped));
+    } else {
+        try sectionGrid(context, .str("knots.import.sections"), &style.import_section_grid, analysis.sections, try sectionIndices(arena_allocator, analysis.sections, .all));
     }
 }
 
+fn sectionsHeading(context: *ui.Frame, sections: []Section) !void {
+    const row = Rect{ .key = .src(@src()), .style = &style.import_sections_heading };
+    _ = try row.open(context);
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Sections to import"), .style = &style.subheading });
+    try context.e(Rect{ .key = .src(@src()), .style = &style.spacer });
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("All"), .style = &style.link })).clicked) chooseAll(context, sections, true);
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("None"), .style = &style.link })).clicked) chooseAll(context, sections, false);
+    try row.close(context);
+}
+
+fn chooseAll(context: *ui.Frame, sections: []Section, is_chosen: bool) void {
+    for (sections) |*section| {
+        if (section.is_available) section.is_chosen = is_chosen;
+    }
+    context.requestRedraw();
+}
+
+/// Indices into `sections`, in their order.
+fn sectionIndices(arena_allocator: std.mem.Allocator, sections: []const Section, filter: Filter) ![]const usize {
+    var indices: std.ArrayList(usize) = .empty;
+    for (sections, 0..) |section, index| {
+        if (!section.is_available) continue;
+        const is_shown = switch (filter) {
+            .all => true,
+            .ids => |ids| isListed(ids, section.id),
+            .ungrouped => for (MAJ_GROUPS) |group| {
+                if (isListed(group.ids, section.id)) break false;
+            } else true,
+        };
+        if (is_shown) try indices.append(arena_allocator, index);
+    }
+    return indices.items;
+}
+
+fn isListed(ids: []const []const u8, id: []const u8) bool {
+    for (ids) |listed| {
+        if (std.mem.eql(u8, listed, id)) return true;
+    }
+    return false;
+}
+
+/// A checkbox for the whole group, ticked while all of it is, over the group's sections; nothing when the file has none of them.
+fn sectionGroup(context: *ui.Frame, group_index: usize, label: []const u8, sections: []Section, indices: []const usize) !void {
+    if (indices.len == 0) return;
+    const key = ui.Key.str("knots.import.group").indexed(group_index);
+    const box = Rect{ .key = key, .style = &style.import_section_group };
+    _ = try box.open(context);
+    var is_all_chosen = true;
+    for (indices) |index| is_all_chosen = is_all_chosen and sections[index].is_chosen;
+    if (try widgets.checkbox(context, key.indexed(1), label, &is_all_chosen)) {
+        for (indices) |index| sections[index].is_chosen = is_all_chosen;
+        context.requestRedraw();
+    }
+    try sectionGrid(context, key.indexed(2), &style.import_section_grid_grouped, sections, indices);
+    try box.close(context);
+}
+
+fn sectionGrid(context: *ui.Frame, key: ui.Key, grid_style: *const ui.Style, sections: []Section, indices: []const usize) !void {
+    const grid = Rect{ .key = key, .style = grid_style };
+    _ = try grid.open(context);
+    var position: usize = 0;
+    while (position < indices.len) : (position += 2) {
+        const pair = Rect{ .key = ui.Key.str("knots.import.section.pair").indexed(indices[position]), .style = &style.import_section_pair };
+        _ = try pair.open(context);
+        try sectionCheckbox(context, sections, indices[position]);
+        if (position + 1 < indices.len) {
+            try sectionCheckbox(context, sections, indices[position + 1]);
+        } else {
+            try context.e(Rect{ .key = ui.Key.str("knots.import.section.filler").indexed(indices[position]), .style = &style.import_section_cell });
+        }
+        try pair.close(context);
+    }
+    try grid.close(context);
+}
+
+/// Its hint, e.g. how many characters it holds, shows on hover.
+fn sectionCheckbox(context: *ui.Frame, sections: []Section, index: usize) !void {
+    const section = &sections[index];
+    const cell = Rect{ .key = ui.Key.str("knots.import.section.cell").indexed(index), .style = &style.import_section_cell };
+    _ = try cell.open(context);
+    const tip = Tooltip{ .key = ui.Key.str("knots.import.section.tip").indexed(index), .content = section.hint };
+    if (section.hint.len > 0) _ = try tip.open(context);
+    _ = try widgets.checkbox(context, ui.Key.str("knots.import.section.check").indexed(index), section.title, &section.is_chosen);
+    if (section.hint.len > 0) try tip.close(context);
+    try cell.close(context);
+}
+
+fn isAnyChosen(sections: []const Section) bool {
+    for (sections) |section| {
+        if (section.is_available and section.is_chosen) return true;
+    }
+    return false;
+}
+
 fn summaryView(context: *ui.Frame, summary: Summary) !void {
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Import complete", .style = &style.hint });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Import complete"), .style = &style.hint });
     const arena_allocator = context.arena();
     if (summary.skipped.len > 0) {
-        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = try std.fmt.allocPrint(arena_allocator, "{d} setting(s) couldn't be read and were left unchanged:", .{summary.skipped.len}), .style = &style.status_failure });
+        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = try lang.format(arena_allocator, "{n} setting(s) couldn't be read and were left unchanged:", .{ .n = summary.skipped.len }), .style = &style.status_failure });
         for (summary.skipped, 0..) |path, index| {
             try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.import.skipped").indexed(index), .content = try std.fmt.allocPrint(arena_allocator, "\u{2022} {s}", .{path}), .style = &style.muted_text });
         }
@@ -192,35 +314,36 @@ fn summaryView(context: *ui.Frame, summary: Summary) !void {
     for (summary.notes, 0..) |note, index| {
         try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.import.note").indexed(index), .content = try std.fmt.allocPrint(arena_allocator, "\u{2022} {s}", .{note}), .style = &style.modal_text });
     }
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Review the affected tabs, then click Save to keep these changes.", .style = &style.hint });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Review the affected tabs, then click Save to keep these changes."), .style = &style.hint });
 }
 
 fn buttons(context: *ui.Frame) !void {
     const row = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try row.open(context);
-    if ((try context.interact(Button{ .key = .src(@src()), .label = if (g_summary == null) "Cancel" else "Done", .style = &style.outline_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text(if (g_summary == null) "Cancel" else "Done"), .style = &style.outline_button })).clicked) {
         g_is_open = false;
         context.requestRedraw();
     }
     if (g_summary == null) {
-        const can_import = g_analysis != null;
-        if ((try context.interact(Button{ .key = .src(@src()), .label = "Import", .disabled = !can_import, .style = if (can_import) &style.primary_button else &style.disabled_button })).clicked and can_import) runImport();
+        const has_sections = if (g_analysis) |analysis| isAnyChosen(analysis.sections) else false;
+        const can_import = has_sections and (!g_imports_into_new or (newName().len > 0 and profiles.nameProblem(context.arena(), newName()) == null));
+        if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Import"), .disabled = !can_import, .style = if (can_import) &style.primary_button else &style.disabled_primary_button })).clicked and can_import) runImport();
     }
     try row.close(context);
 }
 
-/// Into the profile being edited now, or into a new one once the header's profile action has created it and switched the window to it.
+/// Into the running profile, or into a new one once the profile action has created it and switched to it.
 fn runImport() void {
     if (!g_imports_into_new) {
         applyImport();
         return;
     }
-    const name = std.mem.trim(u8, g_new_name.items, " ");
-    if (name.len == 0) {
-        status.show(.failure, "Enter a valid name for the new profile", .{});
-        return;
-    }
-    host.importIntoNewProfile(name, color_convert.toArgb(g_new_accent));
+    host.importIntoNewProfile(newName(), color_convert.toArgb(g_new_accent));
+}
+
+/// Borrows from g_new_name.
+fn newName() []const u8 {
+    return std.mem.trim(u8, g_new_name.items, " ");
 }
 
 fn applyChosen() !void {
@@ -231,7 +354,7 @@ fn applyChosen() !void {
         if (section.is_available and section.is_chosen) try chosen.append(arena(), section.id);
     }
     const source: ?[]const u8 = if (analysis.profiles.len > 0) analysis.profiles[analysis.source_index] else null;
-    const built = try importer.build(arena(), text, source, chosen.items, "Cycle Group {n}", session.profile().ptr);
+    const built = try importer.build(arena(), text, source, chosen.items, lang.text("Cycle Group {n}"), session.profile().ptr);
     try session.applyOps(arena(), built.ops);
     const notes = try arena().alloc([]const u8, built.notes.len);
     for (built.notes, notes) |note, *out| out.* = try translate(arena(), note);
@@ -272,11 +395,12 @@ fn analyzeFile(source_profile: ?[]const u8) !void {
     var sections: std.ArrayList(Section) = .empty;
     if (root.object.get("sections")) |list| {
         if (list == .array) for (list.array.items) |item| {
+            if (item != .object) continue;
             const is_available = if (item.object.get("available")) |flag| flag == .bool and flag.bool else false;
             const title = stringAt(item, "title") orelse "";
             try sections.append(allocator, .{
                 .id = stringAt(item, "id") orelse continue,
-                .title = lang.text(title, title),
+                .title = lang.text(title),
                 .hint = if (item.object.get("hint")) |hint| try translateValue(allocator, hint) else "",
                 .is_available = is_available,
                 .is_chosen = is_available,
@@ -285,13 +409,13 @@ fn analyzeFile(source_profile: ?[]const u8) !void {
     }
     if (g_new_name.items.len == 0 or source_profile != null) {
         g_new_name.clearRetainingCapacity();
-        try g_new_name.appendSlice(g_allocator, stringAt(root, "defaultName") orelse "Imported");
+        try g_new_name.appendSlice(g_allocator, stringAt(root, "defaultName") orelse lang.text("Imported"));
     }
     g_analysis = .{ .format = format, .profiles = profile_names.items, .source_index = source_index, .sections = sections.items };
     g_file_status = if (std.mem.eql(u8, format, "maj"))
         "Detected EVE-Maj Preview profile file."
     else if (std.mem.eql(u8, format, "evex"))
-        try std.fmt.allocPrint(allocator, "Detected an EVE-X Preview settings file with {d} profile(s).", .{profile_names.items.len})
+        try lang.format(allocator, "Detected an EVE-X Preview settings file with {n} profile(s).", .{ .n = profile_names.items.len })
     else if (std.mem.eql(u8, format, "eveo"))
         "Detected EVE-O Preview settings file."
     else
@@ -304,11 +428,11 @@ fn stringAt(value: std.json.Value, name: []const u8) ?[]const u8 {
     return if (field == .string) field.string else null;
 }
 
-/// A note in words: its key's English text with each {parameter} filled in, translating the ones that are keys themselves.
+/// A note in words: its English text translated, with each {parameter} filled in, translating the ones marked for it.
 fn translate(allocator: std.mem.Allocator, note: importer.Text) ![]const u8 {
-    var out: []const u8 = try allocator.dupe(u8, lang.text(note.key, note.key));
+    var out: []const u8 = try allocator.dupe(u8, lang.text(note.key));
     for (note.parameters) |parameter| {
-        const value = if (parameter.should_translate) lang.text(parameter.value, parameter.value) else parameter.value;
+        const value = if (parameter.should_translate) lang.text(parameter.value) else parameter.value;
         out = try replace(allocator, out, parameter.name, value);
     }
     return out;
@@ -317,14 +441,14 @@ fn translate(allocator: std.mem.Allocator, note: importer.Text) ![]const u8 {
 /// The same for a section hint, which arrives as the analysis JSON's `{key, params}`.
 fn translateValue(allocator: std.mem.Allocator, hint: std.json.Value) ![]const u8 {
     const key = stringAt(hint, "key") orelse return "";
-    var out: []const u8 = try allocator.dupe(u8, lang.text(key, key));
+    var out: []const u8 = try allocator.dupe(u8, lang.text(key));
     if (hint.object.get("params")) |parameters| {
         if (parameters == .object) {
             var it = parameters.object.iterator();
             while (it.next()) |entry| {
                 const value = switch (entry.value_ptr.*) {
                     .string => |text| text,
-                    .object => if (stringAt(entry.value_ptr.*, "t")) |nested| lang.text(nested, nested) else "",
+                    .object => if (stringAt(entry.value_ptr.*, "t")) |nested| lang.text(nested) else "",
                     else => "",
                 };
                 out = try replace(allocator, out, entry.key_ptr.*, value);

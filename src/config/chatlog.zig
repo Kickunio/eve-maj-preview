@@ -24,12 +24,15 @@ pub const ChatlogConfig = struct {
 
     pub fn validate(self: *ChatlogConfig) void {
         ranges_mod.clamp(ChatlogConfig, self);
+    }
 
+    /// Run once a profile is loaded.
+    pub fn warnUnreachableDirs(self: *const ChatlogConfig, io: std.Io) void {
         if (self.enabled) {
             if (self.chatlogDir.len == 0) {
                 slog.warn("Chatlog monitoring enabled but chatlogDir is empty", .{});
             } else {
-                std.Io.Dir.cwd().access(files.g_io, self.chatlogDir, .{}) catch |err| {
+                std.Io.Dir.cwd().access(io, self.chatlogDir, .{}) catch |err| {
                     slog.warn("Failed to access chatlog directory '{s}': {}", .{ self.chatlogDir, err });
                 };
             }
@@ -37,7 +40,7 @@ pub const ChatlogConfig = struct {
             if (self.gamelogDir.len == 0) {
                 slog.warn("Chatlog monitoring enabled but gamelogDir is empty", .{});
             } else {
-                std.Io.Dir.cwd().access(files.g_io, self.gamelogDir, .{}) catch |err| {
+                std.Io.Dir.cwd().access(io, self.gamelogDir, .{}) catch |err| {
                     slog.warn("Failed to access gamelog directory '{s}': {}", .{ self.gamelogDir, err });
                 };
             }

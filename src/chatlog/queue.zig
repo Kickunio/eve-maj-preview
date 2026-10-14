@@ -16,7 +16,7 @@ pub const Command = union(enum) {
     }
 };
 
-/// Worker to main thread, which resolves the hwnd since only it may touch Scout and Painter. Owned; freed in deinit.
+/// Worker to main thread, which resolves the hwnd since only it may touch Scout and ThumbnailSet. Owned; freed in deinit.
 pub const SystemUpdate = struct {
     character_name: []const u8,
     system_name: []const u8,

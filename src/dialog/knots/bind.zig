@@ -5,6 +5,7 @@ const style = @import("style.zig");
 const widgets = @import("widgets.zig");
 const color_convert = @import("color_convert.zig");
 const labels = @import("labels.zig");
+const lang = @import("../../lang/lang.zig");
 
 const Text = ui.component.Text;
 const TextInput = ui.component.TextInput;
@@ -145,7 +146,7 @@ pub fn styledTextBox(context: *ui.Frame, ref: anytype, comptime field: []const u
         try syncText(state, current);
     }
     const typed_hash = std.hash.Wyhash.hash(0, state.text.items);
-    try context.e(TextInput{ .key = box_key, .buf = &state.text, .style = box_style, .placeholder = placeholder });
+    try context.e(TextInput{ .key = box_key, .buf = &state.text, .style = box_style, .placeholder = lang.text(placeholder) });
     // What shows the typed text above the box, e.g. liveText's list row, catches up on the next frame.
     if (std.hash.Wyhash.hash(0, state.text.items) != typed_hash) context.requestRedraw();
 }
@@ -170,7 +171,7 @@ pub fn stringBox(context: *ui.Frame, key: ui.Key, current: []const u8, placehold
         }
         try syncText(state, committed orelse current);
     }
-    try context.e(TextInput{ .key = key, .buf = &state.text, .style = box_style, .placeholder = placeholder });
+    try context.e(TextInput{ .key = key, .buf = &state.text, .style = box_style, .placeholder = lang.text(placeholder) });
     return committed;
 }
 
@@ -201,7 +202,7 @@ pub fn optionalValueBox(context: *ui.Frame, key: ui.Key, value: ?f64, placeholde
             try syncText(state, "");
         }
     }
-    try context.e(TextInput{ .key = key, .buf = &state.text, .style = box_style, .placeholder = placeholder });
+    try context.e(TextInput{ .key = key, .buf = &state.text, .style = box_style, .placeholder = lang.text(placeholder) });
     return typed;
 }
 
@@ -253,7 +254,7 @@ pub fn csvBox(context: *ui.Frame, ref: anytype, comptime field: []const u8, plac
         const items: []const []const u8 = ref.get(field).items;
         try syncText(state, try std.mem.join(arena, ", ", items));
     }
-    try context.e(TextInput{ .key = box_key, .buf = &state.text, .style = &style.text_input, .placeholder = placeholder });
+    try context.e(TextInput{ .key = box_key, .buf = &state.text, .style = &style.text_input, .placeholder = lang.text(placeholder) });
 }
 
 pub fn slider(context: *ui.Frame, ref: anytype, comptime field: []const u8, label: []const u8, options: SliderOptions) !void {
@@ -479,7 +480,9 @@ fn sliderControls(context: *ui.Frame, key: ui.Key, value: f32, min: f32, max: f3
 fn dropdown(context: *ui.Frame, ref: anytype, comptime field: []const u8, is_row_only: bool) !void {
     const F = FieldOf(@TypeOf(ref), field);
     const values = comptime std.enums.values(F);
-    const option_labels = comptime labels.enumLabels(F);
+    const english_labels = comptime labels.enumLabels(F);
+    const option_labels = try context.arena().alloc([]const u8, english_labels.len);
+    for (english_labels, option_labels) |english, *shown| shown.* = lang.text(english);
     const box_key = fieldKey(ref, field).indexed(2);
     const current: u32 = @intCast(std.mem.indexOfScalar(F, values, ref.get(field)) orelse 0);
     // The dropdown keeps its own selection; while closed it follows the setting, which may have changed elsewhere.
@@ -488,10 +491,10 @@ fn dropdown(context: *ui.Frame, ref: anytype, comptime field: []const u8, is_row
     }
     const response = try context.interact(SelectInput(F){
         .key = box_key,
-        .labels = &option_labels,
+        .labels = option_labels,
         .values = values,
         .initial_selected = current,
-        .style = if (is_row_only) try widgets.rowSelect(context, &option_labels) else try widgets.fittedSelect(context, &option_labels),
+        .style = if (is_row_only) try widgets.rowSelect(context, option_labels) else try widgets.fittedSelect(context, option_labels),
         .parts = .{ .popup = &style.select_popup },
     });
     if (response.selected) |selected| ref.set(field, selected.value);

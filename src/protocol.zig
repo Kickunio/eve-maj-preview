@@ -138,26 +138,6 @@ pub fn copyDataBytes(copy_data: *const win32.COPYDATASTRUCT) ?[]const u8 {
     return @as([*]const u8, @ptrCast(data_ptr))[0..copy_data.cbData];
 }
 
-/// Returns the protocol URL if --protocol was passed (caller must free), otherwise null.
-pub fn checkCommandLine(process_args: std.process.Args, allocator: std.mem.Allocator) !?[]const u8 {
-    // toSlice's result references several internal allocations, so it requires an arena rather than a plain allocator.
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const args = try process_args.toSlice(arena_state.allocator());
-
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--protocol")) {
-            if (i + 1 < args.len) {
-                // Must duplicate before the arena is freed.
-                return try allocator.dupe(u8, args[i + 1]);
-            }
-        }
-    }
-
-    return null;
-}
-
 /// Registers the evemajpreview:// handler unless it already is; failures are logged, not fatal.
 pub fn ensureRegistered(allocator: std.mem.Allocator) void {
     if (isRegistered()) {
@@ -293,24 +273,28 @@ fn urlDecode(allocator: std.mem.Allocator, encoded: []const u8) ![]const u8 {
     var i: usize = 0;
     while (i < encoded.len) {
         if (encoded[i] == '%' and i + 2 < encoded.len) {
-            const hex = encoded[i + 1 .. i + 3];
-            const value = std.fmt.parseInt(u8, hex, 16) catch {
-                try result.append(allocator, encoded[i]);
-                i += 1;
-                continue;
-            };
-            try result.append(allocator, value);
-            i += 3;
-        } else if (encoded[i] == '+') {
-            try result.append(allocator, ' ');
-            i += 1;
-        } else {
-            try result.append(allocator, encoded[i]);
-            i += 1;
+            if (hexDigit(encoded[i + 1])) |high| {
+                if (hexDigit(encoded[i + 2])) |low| {
+                    try result.append(allocator, high * 16 + low);
+                    i += 3;
+                    continue;
+                }
+            }
         }
+        try result.append(allocator, if (encoded[i] == '+') ' ' else encoded[i]);
+        i += 1;
     }
 
     return result.toOwnedSlice(allocator);
+}
+
+fn hexDigit(char: u8) ?u8 {
+    return switch (char) {
+        '0'...'9' => char - '0',
+        'a'...'f' => char - 'a' + 10,
+        'A'...'F' => char - 'A' + 10,
+        else => null,
+    };
 }
 
 /// Synchronous, so `payload` only has to outlive the call; an empty payload is sent as a null lpData.
@@ -366,4 +350,8 @@ test "urlDecode keeps a malformed or truncated escape as written" {
     const truncated = try urlDecode(testing.allocator, "abc%4");
     defer testing.allocator.free(truncated);
     try testing.expectEqualStrings("abc%4", truncated);
+
+    const signed = try urlDecode(testing.allocator, "%+1");
+    defer testing.allocator.free(signed);
+    try testing.expectEqualStrings("% 1", signed);
 }

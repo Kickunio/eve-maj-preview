@@ -1,4 +1,4 @@
-//! The footer's settings search: an index of each tab's section text, built by drawing every tab once out of sight, and which sections match; main thread only.
+//! The header's settings search: an index of each tab's section text, built by drawing every tab once out of sight, and which sections match; main thread only.
 const std = @import("std");
 const log = @import("../../log.zig");
 

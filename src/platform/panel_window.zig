@@ -3,21 +3,16 @@ const std = @import("std");
 const win32 = @import("win32.zig");
 const fonts = @import("fonts.zig");
 const gdi_overlay = @import("gdi_overlay.zig");
+const log = @import("../log.zig");
+
+const slog = log.Scoped("panel_window");
 
 pub const PanelWindow = struct {
     hwnd: win32.HWND,
     allocator: std.mem.Allocator,
-    font: ?win32.HFONT = null,
-    /// The settings `font` was made from; owns its name, since the config frees its own on a rename.
-    font_name: []const u8 = "",
-    font_size: i32 = 0,
-    font_weight: fonts.FontWeight = .Regular,
+    font: gdi_overlay.CachedFont = .{},
     /// A smaller font for headers and secondary text; ensureSmallFont makes it.
-    small_font: ?win32.HFONT = null,
-    /// Owned; freed in deinit.
-    small_font_name: []const u8 = "",
-    small_font_size: i32 = 0,
-    small_font_weight: fonts.FontWeight = .Regular,
+    small_font: gdi_overlay.CachedFont = .{},
     bitmap: ?gdi_overlay.OverlayBitmap = null,
     // -1 forces a resize on the first frame.
     width: i32 = -1,
@@ -53,21 +48,19 @@ pub const PanelWindow = struct {
 
     pub fn deinit(self: *PanelWindow) void {
         if (self.bitmap) |bitmap| bitmap.deinit();
-        if (self.font) |font| _ = win32.DeleteObject(font);
-        self.allocator.free(self.font_name);
-        if (self.small_font) |font| _ = win32.DeleteObject(font);
-        self.allocator.free(self.small_font_name);
+        self.font.deinit(self.allocator);
+        self.small_font.deinit(self.allocator);
         _ = win32.DestroyWindow(self.hwnd);
     }
 
     /// Makes `font` match these settings, recreating it after a live-previewed change.
     pub fn ensureFont(self: *PanelWindow, context: []const u8, name: []const u8, size: i32, weight: fonts.FontWeight) !void {
-        try gdi_overlay.ensureFont(self.allocator, context, &self.font, &self.font_name, &self.font_size, &self.font_weight, name, size, weight);
+        try self.font.ensure(self.allocator, context, name, size, weight);
     }
 
     /// Like ensureFont, for `small_font`.
     pub fn ensureSmallFont(self: *PanelWindow, context: []const u8, name: []const u8, size: i32, weight: fonts.FontWeight) !void {
-        try gdi_overlay.ensureFont(self.allocator, context, &self.small_font, &self.small_font_name, &self.small_font_size, &self.small_font_weight, name, size, weight);
+        try self.small_font.ensure(self.allocator, context, name, size, weight);
     }
 
     /// Whether `signature` matches the last frame shown, so there's nothing to redraw; keeps the window shown either way.
@@ -105,9 +98,13 @@ pub const PanelWindow = struct {
         _ = win32.ShowWindow(self.hwnd, win32.SW_HIDE);
     }
 
-    pub fn topLeft(self: *const PanelWindow) win32.POINT {
+    /// Null, logged, if the window's position can't be read.
+    pub fn topLeft(self: *const PanelWindow) ?win32.POINT {
         var rect: win32.RECT = undefined;
-        _ = win32.GetWindowRect(self.hwnd, &rect);
+        if (!win32.toBool(win32.GetWindowRect(self.hwnd, &rect))) {
+            slog.warn("Failed to read the panel's position, keeping the saved one", .{});
+            return null;
+        }
         return .{ .x = rect.left, .y = rect.top };
     }
 };

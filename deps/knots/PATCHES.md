@@ -30,6 +30,10 @@ Vendored from [knots-ui/knots](https://github.com/knots-ui/knots) at commit `9cd
 
 - `inert_depth` (default 0): while above 0, `openWith` makes every element it opens non-interactive and non-focusable, so a disabled group of controls takes no clicks and drops out of Tab order.
 
+## `src/ui/component/Tooltip.zig`
+
+- `align_start` (default false): a tooltip above or below its trigger starts at the trigger's left edge instead of centring on it, so a row label's tooltip sits over its words rather than the middle of a stretched label cell.
+
 ## `src/ui/State.zig`
 
 - No widget state is copied into the state bridge (`bridged` is always false). The bridge only feeds knots' hot reload, which EVE-Maj doesn't use, and it never drops a widget's entry once its state is evicted, so browsing tabs for long enough filled its 1024 entries and stopped the window with `TooManyStateValues`.

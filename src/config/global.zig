@@ -4,6 +4,7 @@ const wire = @import("wire.zig");
 const key_list = @import("key_list.zig");
 const files = @import("files.zig");
 const ranges_mod = @import("ranges.zig");
+const types = @import("types.zig");
 const log = @import("../log.zig");
 
 const KeyList = key_list.KeyList;
@@ -38,7 +39,6 @@ pub const DEFAULT_ORE_TABLE = [_]OreEntry{
 
     .{ .name = "Bitumens", .category = "Moons", .volumeM3 = 10.00, .price = 1164 },
     .{ .name = "Coesite", .category = "Moons", .volumeM3 = 10.00, .price = 0 },
-    .{ .name = "Evaporite Deposits", .category = "Moons", .volumeM3 = 10.00, .price = 0 },
     .{ .name = "Sylvite", .category = "Moons", .volumeM3 = 10.00, .price = 801 },
     .{ .name = "Cobaltite", .category = "Moons", .volumeM3 = 10.00, .price = 285.8 },
     .{ .name = "Euxenite", .category = "Moons", .volumeM3 = 10.00, .price = 900.6 },
@@ -110,7 +110,7 @@ pub const OreEntry = struct {
     price: f64 = 0,
 };
 
-/// The only per-ore state GlobalConfig actually persists - name/category/volumeM3 come from DEFAULT_ORE_TABLE instead, since those never vary by user.
+/// Only the price is saved; the rest comes from DEFAULT_ORE_TABLE.
 pub const OrePriceConfig = struct {
     name: []const u8 = "",
     price: f64 = 0,
@@ -127,7 +127,6 @@ pub const OrePriceConfig = struct {
     pub const Wire = wire.Wire(OrePriceConfig);
 };
 
-/// Binding of a hotkey to a specific target profile ("quick switch")
 pub const ProfileSwitchHotkeyConfig = struct {
     hotkey: KeyList = .empty,
     targetProfile: []const u8 = "",
@@ -135,7 +134,7 @@ pub const ProfileSwitchHotkeyConfig = struct {
     pub const Wire = wire.Wire(ProfileSwitchHotkeyConfig);
 };
 
-/// Binding of a hotkey to an external application, matched by executable name at press time (mirrors AutoHotkey's ahk_exe).
+/// Matched by executable name at press time.
 pub const AppHotkeyConfig = struct {
     hotkey: KeyList = .empty,
     executableName: []const u8 = "",
@@ -143,7 +142,7 @@ pub const AppHotkeyConfig = struct {
     pub const Wire = wire.Wire(AppHotkeyConfig);
 };
 
-/// Binding of a hotkey to a URL, opened via ShellExecute (or, with uploadClipboard, POSTed as a paste upload first - see paste_upload.zig).
+/// With uploadClipboard, the clipboard is POSTed as a paste first (see paste_upload.zig).
 pub const UrlHotkeyConfig = struct {
     hotkey: KeyList = .empty,
     url: []const u8 = "",
@@ -156,6 +155,7 @@ pub const GlobalConfig = struct {
     allocator: std.mem.Allocator,
     lastUsedProfile: []const u8 = files.DEFAULT_PROFILE,
     logLevel: log.LogLevel = .err,
+    language: types.Language = .en,
     hotkeyNextProfile: KeyList = .empty,
     hotkeyPreviousProfile: KeyList = .empty,
     hotkeyCycleAllClientsForward: KeyList = .empty,
@@ -175,6 +175,8 @@ pub const GlobalConfig = struct {
     alwaysOnTop: bool = true,
     advancedMode: bool = false,
     oreTable: std.ArrayList(OrePriceConfig) = .empty,
+    /// Unix seconds of the last successful price fetch, or 0 if never.
+    orePricesFetchedAtSeconds: i64 = 0,
     dialogX: ?i32 = null,
     dialogY: ?i32 = null,
 
@@ -220,14 +222,14 @@ pub const GlobalConfig = struct {
     }
 
     /// Falls back to defaults on a missing, unreadable or malformed file.
-    pub fn load(allocator: std.mem.Allocator) !GlobalConfig {
-        const content = std.Io.Dir.cwd().readFileAlloc(files.g_io, files.GLOBAL_SETTINGS_FILE, allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
+    pub fn load(allocator: std.mem.Allocator, io: std.Io) !GlobalConfig {
+        const content = std.Io.Dir.cwd().readFileAlloc(io, files.GLOBAL_SETTINGS_FILE, allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
             if (err == error.FileNotFound) {
                 slog.debug("No global settings file, using defaults", .{});
                 return GlobalConfig.fromWire(.{}, allocator);
             }
             slog.err("Failed to read global settings file: {}", .{err});
-            std.Io.Dir.cwd().deleteFile(files.g_io, files.GLOBAL_SETTINGS_FILE) catch |delete_err| {
+            std.Io.Dir.cwd().deleteFile(io, files.GLOBAL_SETTINGS_FILE) catch |delete_err| {
                 slog.warn("Failed to delete unreadable global settings file: {}", .{delete_err});
             };
             return GlobalConfig.fromWire(.{}, allocator);
@@ -237,7 +239,7 @@ pub const GlobalConfig = struct {
         const settings = loadFromJson(allocator, content) catch |err| {
             slog.warn("Failed to parse global settings file, using defaults and keeping it as '{s}': {}", .{ UNREADABLE_BACKUP_FILE, err });
             const cwd = std.Io.Dir.cwd();
-            cwd.rename(files.GLOBAL_SETTINGS_FILE, cwd, UNREADABLE_BACKUP_FILE, files.g_io) catch |rename_err| {
+            cwd.rename(files.GLOBAL_SETTINGS_FILE, cwd, UNREADABLE_BACKUP_FILE, io) catch |rename_err| {
                 slog.err("Failed to keep unreadable global settings as '{s}': {}", .{ UNREADABLE_BACKUP_FILE, rename_err });
             };
             return GlobalConfig.fromWire(.{}, allocator);
@@ -258,11 +260,11 @@ pub const GlobalConfig = struct {
         return wire.toJsonAlloc(allocator, self);
     }
 
-    pub fn save(self: *GlobalConfig) !void {
+    pub fn save(self: *GlobalConfig, io: std.Io) !void {
         const json = try self.toJsonString(self.allocator);
         defer self.allocator.free(json);
 
-        try files.atomicWriteFile(self.allocator, files.g_io, files.GLOBAL_SETTINGS_FILE, json);
+        try files.atomicWriteFile(self.allocator, io, files.GLOBAL_SETTINGS_FILE, json);
 
         slog.debug("Saved global settings", .{});
     }
@@ -271,7 +273,7 @@ pub const GlobalConfig = struct {
         wire.logJson(self.allocator, self);
     }
 
-    pub fn updateLastUsed(self: *GlobalConfig, profile_name: []const u8) !void {
+    pub fn updateLastUsed(self: *GlobalConfig, io: std.Io, profile_name: []const u8) !void {
         const is_same_profile = self.lastUsedProfile.len > 0 and std.mem.eql(u8, self.lastUsedProfile, profile_name);
 
         if (!is_same_profile) {
@@ -281,14 +283,14 @@ pub const GlobalConfig = struct {
             self.allocator.free(self.lastUsedProfile);
             self.lastUsedProfile = new_profile;
 
-            try self.save();
+            try self.save(io);
         }
     }
 
-    pub fn saveDialogPosition(self: *GlobalConfig, x: i32, y: i32) !void {
+    pub fn saveDialogPosition(self: *GlobalConfig, io: std.Io, x: i32, y: i32) !void {
         self.dialogX = x;
         self.dialogY = y;
-        try self.save();
+        try self.save(io);
     }
 
     /// Takes `edited`'s settings but running_fields, leaving it holding the replaced values to free; only while the chatlog worker, which reads ore prices, is stopped.

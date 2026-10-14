@@ -8,6 +8,8 @@ const slog = log.Scoped("notification");
 
 /// For the dialog's preview; Test uses each thumbnail's own name.
 pub const SAMPLE_CHARACTER = "Your Pilot";
+/// The most a notification's text holds once its placeholders are filled; template.render cuts the rest.
+pub const TEXT_MAX: usize = 128;
 
 const CHARACTER: Placeholder = .{ .name = "character", .field = .character };
 const CHARACTER_ONLY = [_]Placeholder{CHARACTER};

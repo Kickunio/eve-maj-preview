@@ -2,12 +2,12 @@
 const std = @import("std");
 
 /// On the tick nearest `interval_ms` rather than the first past it, so a tick landing a few ms early doesn't push the work a whole tick later.
-pub fn isDue(elapsed_ms: i64, interval_ms: i64, tick_interval_ms: i64) bool {
-    return elapsed_ms + @divTrunc(tick_interval_ms, 2) >= interval_ms;
+pub fn isDue(elapsed_ms: u64, interval_ms: u64, tick_interval_ms: u64) bool {
+    return elapsed_ms + tick_interval_ms / 2 >= interval_ms;
 }
 
 /// For work whose gaps must never pass `interval_ms`: true on the last tick before waiting one more would.
-pub fn nextTickWouldBeLate(elapsed_ms: i64, interval_ms: i64, tick_interval_ms: i64) bool {
+pub fn nextTickWouldBeLate(elapsed_ms: u64, interval_ms: u64, tick_interval_ms: u64) bool {
     return elapsed_ms + tick_interval_ms > interval_ms;
 }
 

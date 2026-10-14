@@ -1,4 +1,4 @@
-//! Process-wide I/O handles and the on-disk layout of the app's profile and data files.
+//! The process environment and the on-disk layout of the app's profile and data files.
 const std = @import("std");
 const log = @import("../log.zig");
 
@@ -16,7 +16,6 @@ pub const CHARACTER_IDS_FILE = DATA_DIR ++ "/character_ids.json";
 /// Downloaded character portraits, one `{id}.jpg` each, kept for good.
 pub const PORTRAITS_DIR = DATA_DIR ++ "/portraits";
 
-/// Files older versions kept beside the exe, and where they live now.
 const LEGACY_FILES = [_]struct { from: []const u8, to: []const u8 }{
     .{ .from = "eve-maj.log", .to = log.LOG_FILE_NAME },
     .{ .from = "eve-maj.log.old", .to = log.LOG_FILE_NAME_OLD },
@@ -25,13 +24,7 @@ const LEGACY_FILES = [_]struct { from: []const u8, to: []const u8 }{
     .{ .from = "character_ids.json", .to = CHARACTER_IDS_FILE },
 };
 
-pub var g_io: std.Io = undefined;
 var g_environ_map: ?*const std.process.Environ.Map = null;
-
-/// Must be called once before any Config/GlobalConfig load/save function is used.
-pub fn setIo(io: std.Io) void {
-    g_io = io;
-}
 
 /// Must be called once before any function that reads environment variables (path %VAR% expansion, USERPROFILE fallback).
 pub fn setEnvironMap(environ_map: *const std.process.Environ.Map) void {
@@ -50,21 +43,21 @@ pub fn environmentVariable(name: []const u8) ?[]const u8 {
 }
 
 /// Moves files older versions kept beside the exe into DATA_DIR and log.LOG_DIR, never replacing one; call once the cwd is the exe folder, before anything logs.
-pub fn migrateLegacyLayout() void {
+pub fn migrateLegacyLayout(io: std.Io) void {
     const cwd = std.Io.Dir.cwd();
     for ([_][]const u8{ DATA_DIR, log.LOG_DIR }) |dir| {
-        createDirIfMissing(dir) catch |err| slog.err("Failed to create folder '{s}': {}", .{ dir, err });
+        createDirIfMissing(io, dir) catch |err| slog.err("Failed to create folder '{s}': {}", .{ dir, err });
     }
 
     // Log files come first in LEGACY_FILES, so the old log is moved before these messages reopen it.
     for (LEGACY_FILES) |file| {
-        cwd.access(g_io, file.from, .{}) catch continue;
-        const target_exists = if (cwd.access(g_io, file.to, .{})) |_| true else |_| false;
+        cwd.access(io, file.from, .{}) catch continue;
+        const target_exists = if (cwd.access(io, file.to, .{})) |_| true else |_| false;
         if (target_exists) {
             slog.debug("Left '{s}' in place: '{s}' already exists", .{ file.from, file.to });
             continue;
         }
-        cwd.rename(file.from, cwd, file.to, g_io) catch |err| {
+        cwd.rename(file.from, cwd, file.to, io) catch |err| {
             slog.warn("Failed to move '{s}' to '{s}': {}", .{ file.from, file.to, err });
             continue;
         };
@@ -72,15 +65,15 @@ pub fn migrateLegacyLayout() void {
     }
 }
 
-/// An existing folder isn't a failure; doesn't log.
-pub fn createDirIfMissing(path: []const u8) !void {
-    std.Io.Dir.cwd().createDir(g_io, path, .default_dir) catch |err| switch (err) {
+/// Doesn't log.
+pub fn createDirIfMissing(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().createDir(io, path, .default_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 }
 
-/// Writes via a temp file + rename so a failed write can't corrupt the destination file. Logs every failure itself.
+/// Logs every failure itself.
 pub fn atomicWriteFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8, content: []const u8) !void {
     // Unique per call so overlapping saves of the same path can't share a temp file.
     const unique = blk: {

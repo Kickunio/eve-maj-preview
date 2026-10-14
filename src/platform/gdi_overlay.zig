@@ -25,6 +25,10 @@ pub const OverlayBitmap = struct {
     height: usize,
     old_bitmap: win32.HANDLE,
 
+    pub fn canvas(self: *const OverlayBitmap) pixel_buffer.Canvas {
+        return .{ .pixels = self.pixels, .width = self.width, .height = self.height };
+    }
+
     pub fn init(screen_dc: win32.HDC, width: i32, height: i32) !OverlayBitmap {
         const mem_dc = win32.CreateCompatibleDC(screen_dc) orelse return error.CreateDCFailed;
         errdefer _ = win32.DeleteDC(mem_dc);
@@ -61,7 +65,6 @@ pub const OverlayBitmap = struct {
         _ = win32.DeleteDC(self.mem_dc);
     }
 
-    /// Clears every pixel to fully transparent.
     pub fn clear(self: *const OverlayBitmap) void {
         @memset(self.pixels[0 .. self.width * self.height], 0);
     }
@@ -85,6 +88,66 @@ pub const ButtonFace = struct {
     text_color: u32,
     radius: usize,
     border_px: usize,
+};
+
+/// One GDI font, remade only when its settings change; for a single-font-at-a-time caller, unlike thumbnail/font_cache.zig's per-slot/DPI `FontCache`.
+pub const CachedFont = struct {
+    /// Null until the first ensure, and after one whose font couldn't be created.
+    handle: ?win32.HFONT = null,
+    /// The settings `handle` was made from; owns `name`, since the config frees its own on a rename.
+    name: []const u8 = "",
+    size: i32 = 0,
+    weight: fonts.FontWeight = .Regular,
+
+    pub fn deinit(self: *CachedFont, allocator: std.mem.Allocator) void {
+        if (self.handle) |font| _ = win32.DeleteObject(font);
+        allocator.free(self.name);
+        self.* = .{};
+    }
+
+    /// Makes `handle` match these settings; `context` names the font in log messages.
+    pub fn ensure(self: *CachedFont, allocator: std.mem.Allocator, context: []const u8, name: []const u8, size: i32, weight: fonts.FontWeight) !void {
+        const is_unchanged = self.handle != null and std.mem.eql(u8, self.name, name) and self.size == size and self.weight == weight;
+        if (is_unchanged) return;
+
+        if (self.handle) |old| _ = win32.DeleteObject(old);
+        self.handle = null;
+
+        const name_z = allocator.dupeSentinel(u8, name, 0) catch |err| {
+            slog.err("Failed to allocate {s} font name: {}", .{ context, err });
+            return err;
+        };
+        defer allocator.free(name_z);
+
+        const name_copy = allocator.dupe(u8, name) catch |err| {
+            slog.err("Failed to allocate {s} font name: {}", .{ context, err });
+            return err;
+        };
+
+        self.handle = win32.CreateFontA(
+            -size,
+            0,
+            0,
+            0,
+            weight.toWin32Weight(),
+            if (weight.isItalic()) 1 else 0,
+            0,
+            0,
+            win32.DEFAULT_CHARSET,
+            win32.OUT_DEFAULT_PRECIS,
+            win32.CLIP_DEFAULT_PRECIS,
+            win32.CLEARTYPE_QUALITY,
+            win32.DEFAULT_PITCH,
+            name_z,
+        );
+        // Cached anyway, so a failing font isn't retried and logged every frame.
+        if (self.handle == null) slog.err("Failed to create {s} font '{s}'", .{ context, name });
+
+        allocator.free(self.name);
+        self.name = name_copy;
+        self.size = size;
+        self.weight = weight;
+    }
 };
 
 /// A topmost, click-through two-line hint box centred in given bounds for dragging and region select, created on first use and hidden between uses.
@@ -154,7 +217,7 @@ pub const HintBox = struct {
         }
 
         const overlay = &self.bitmap.?;
-        pixel_buffer.fillRect(overlay.pixels, overlay.width, overlay.height, 0, 0, overlay.width, overlay.height, HINT_BACKGROUND_COLOR);
+        pixel_buffer.fillRect(overlay.canvas(), 0, 0, overlay.width, overlay.height, HINT_BACKGROUND_COLOR);
 
         const old_font = win32.SelectObject(overlay.mem_dc, font);
         defer {
@@ -162,11 +225,11 @@ pub const HintBox = struct {
         }
 
         drawTextUtf8(HINT_TEXT_MAX, overlay.mem_dc, box_padding + HINT_LINE_PAD_X, box_padding + HINT_LINE_PAD_Y, line1, text_color);
-        pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, box_padding, box_padding, line1_size.width, line1_size.height);
+        pixel_buffer.fixTextAlphaRect(overlay.canvas(), box_padding, box_padding, line1_size.width, line1_size.height);
 
         const line2_y: i32 = @intCast(box_padding + line1_size.height + line_gap);
         drawTextUtf8(HINT_TEXT_MAX, overlay.mem_dc, box_padding + HINT_LINE_PAD_X, line2_y + HINT_LINE_PAD_Y, line2, text_color);
-        pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, box_padding, line2_y, line2_size.width, line2_size.height);
+        pixel_buffer.fixTextAlphaRect(overlay.canvas(), box_padding, line2_y, line2_size.width, line2_size.height);
 
         presentLayered(hwnd, overlay, 255);
 
@@ -199,11 +262,11 @@ pub fn toBufZ(comptime buf_size: usize, text: []const u8) [buf_size:0]u8 {
     return buf;
 }
 
-/// Measures `text` (truncated to `buf_size - 1` bytes) using the currently selected font.
+/// Measures `text` (truncated to `buf_size - 1` bytes) using the currently selected font; a failed measure reads as empty, since it runs every render.
 pub fn measureTextSize(comptime buf_size: usize, dc: win32.HDC, text: []const u8) win32.SIZE {
     const buf = toBufZ(buf_size, text);
     const copy_len = @min(text.len, buf_size - 1);
-    var size: win32.SIZE = undefined;
+    var size = win32.SIZE{ .cx = 0, .cy = 0 };
     _ = win32.GetTextExtentPoint32A(dc, &buf, @intCast(copy_len), &size);
     return size;
 }
@@ -261,8 +324,8 @@ pub fn drawButtonFace(bitmap: *const OverlayBitmap, rect: win32.RECT, label: []c
     const y: usize = @intCast(rect.top);
     const width: usize = @intCast(win32.rectWidth(rect));
     const height: usize = @intCast(win32.rectHeight(rect));
-    pixel_buffer.fillRoundedRect(bitmap.pixels, bitmap.width, bitmap.height, x, y, width, height, face.radius, face.border);
-    pixel_buffer.fillRoundedRect(bitmap.pixels, bitmap.width, bitmap.height, x + face.border_px, y + face.border_px, width - 2 * face.border_px, height - 2 * face.border_px, face.radius -| face.border_px, face.fill);
+    pixel_buffer.fillRoundedRect(bitmap.canvas(), x, y, width, height, face.radius, face.border);
+    pixel_buffer.fillRoundedRect(bitmap.canvas(), x + face.border_px, y + face.border_px, width - 2 * face.border_px, height - 2 * face.border_px, face.radius -| face.border_px, face.fill);
 
     const old_font = win32.SelectObject(bitmap.mem_dc, font);
     defer {
@@ -275,7 +338,7 @@ pub fn drawButtonFace(bitmap: *const OverlayBitmap, rect: win32.RECT, label: []c
     const text_x: i32 = @intCast(x + (width -| text_width) / 2);
     const text_y: i32 = @intCast(y + (height -| text_height) / 2);
     drawTextUtf8(label_buf_size, bitmap.mem_dc, text_x, text_y, label, face.text_color);
-    pixel_buffer.fixTextAlphaRect(bitmap.pixels, bitmap.width, bitmap.height, text_x, text_y, text_width, text_height);
+    pixel_buffer.fixTextAlphaRect(bitmap.canvas(), text_x, text_y, text_width, text_height);
 }
 
 /// Pushes the bitmap to a layered window at its origin using per-pixel alpha, scaled by `opacity`.
@@ -299,7 +362,8 @@ pub fn truncateTextToFit(comptime buf_size: usize, dc: win32.HDC, out: *[buf_siz
     const original_len = @min(text.len, buf_size - 4);
     @memcpy(buf[0..original_len], text[0..original_len]);
     buf[original_len] = 0;
-    var size: win32.SIZE = undefined;
+    // A failed measure reads as empty, like measureTextSize's.
+    var size = win32.SIZE{ .cx = 0, .cy = 0 };
     _ = win32.GetTextExtentPoint32A(dc, &buf, @intCast(original_len), &size);
     if (@as(usize, @intCast(@max(0, size.cx))) <= max_width) {
         @memcpy(out[0..original_len], text[0..original_len]);
@@ -308,7 +372,7 @@ pub fn truncateTextToFit(comptime buf_size: usize, dc: win32.HDC, out: *[buf_siz
     }
 
     const ellipsis = "...";
-    var ellipsis_size: win32.SIZE = undefined;
+    var ellipsis_size = win32.SIZE{ .cx = 0, .cy = 0 };
     _ = win32.GetTextExtentPoint32A(dc, ellipsis, ellipsis.len, &ellipsis_size);
     const budget: i32 = @as(i32, @intCast(max_width)) - ellipsis_size.cx;
     if (budget <= 0) return out[0..0];
@@ -359,63 +423,6 @@ pub fn registerWindowClass(
     if (win32.RegisterClassExA(&window_class) == 0) {
         return error.RegisterClassFailed;
     }
-}
-
-/// For a single-font-at-a-time caller; thumbnail/font_cache.zig's per-slot/DPI `FontCache` needs its own since it juggles many fonts at once.
-pub fn ensureFont(
-    allocator: std.mem.Allocator,
-    context: []const u8,
-    font: *?win32.HFONT,
-    cached_name: *[]const u8,
-    cached_size: *i32,
-    cached_weight: *fonts.FontWeight,
-    want_name: []const u8,
-    want_size: i32,
-    want_weight: fonts.FontWeight,
-) !void {
-    const is_unchanged = font.* != null and
-        std.mem.eql(u8, cached_name.*, want_name) and
-        cached_size.* == want_size and
-        cached_weight.* == want_weight;
-    if (is_unchanged) return;
-
-    if (font.*) |old| _ = win32.DeleteObject(old);
-    font.* = null;
-
-    const name_z = allocator.dupeSentinel(u8, want_name, 0) catch |err| {
-        slog.err("Failed to allocate {s} font name: {}", .{ context, err });
-        return err;
-    };
-    defer allocator.free(name_z);
-
-    const name_copy = allocator.dupe(u8, want_name) catch |err| {
-        slog.err("Failed to allocate {s} font name: {}", .{ context, err });
-        return err;
-    };
-
-    font.* = win32.CreateFontA(
-        -want_size,
-        0,
-        0,
-        0,
-        want_weight.toWin32Weight(),
-        if (want_weight.isItalic()) 1 else 0,
-        0,
-        0,
-        win32.DEFAULT_CHARSET,
-        win32.OUT_DEFAULT_PRECIS,
-        win32.CLIP_DEFAULT_PRECIS,
-        win32.CLEARTYPE_QUALITY,
-        win32.DEFAULT_PITCH,
-        name_z,
-    );
-    // Cached anyway, so a failing font isn't retried and logged every frame.
-    if (font.* == null) slog.err("Failed to create {s} font '{s}'", .{ context, want_name });
-
-    allocator.free(cached_name.*);
-    cached_name.* = name_copy;
-    cached_size.* = want_size;
-    cached_weight.* = want_weight;
 }
 
 /// UTF-8 to UTF-16 into `out`, truncating to `buf_size` bytes; returns the number of UTF-16 units written.

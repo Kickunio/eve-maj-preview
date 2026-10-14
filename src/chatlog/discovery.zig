@@ -27,9 +27,8 @@ pub const Changes = struct {
 pub const LogFinder = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
-    /// Owned; freed in deinit.
+    /// Both dirs owned; freed in deinit.
     chatlog_dir: []const u8,
-    /// Owned; freed in deinit.
     gamelog_dir: []const u8,
     /// Borrowed; outlives the finder.
     character_ids: ?*CharacterIds,

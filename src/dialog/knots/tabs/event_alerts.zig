@@ -4,12 +4,11 @@ const ui = @import("ui");
 const config = @import("../../../config.zig");
 const notification = @import("../../../notifications/notification.zig");
 const template = @import("../../../notifications/template.zig");
-const painter_mod = @import("../../../painter.zig");
 const overlay = @import("../../../thumbnail/overlay.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
 const host = @import("../host.zig");
-const lang = @import("../lang.zig");
+const lang = @import("../../../lang/lang.zig");
 const status = @import("../status.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
@@ -28,6 +27,8 @@ const slog = log.Scoped("dialog_knots");
 /// The most a custom text box takes.
 const CUSTOM_TEXT_MAX_LENGTH = 100;
 const NEWLINE_TOKEN = "\\n";
+/// Holds notification.defaultText, which the box and its preview both show.
+const DEFAULT_TEXT_SIZE = 128;
 
 /// Every type, by category, then as declared.
 const TYPES_IN_ORDER = blk: {
@@ -70,10 +71,10 @@ pub fn typeRef(index: usize) TypeRef {
 
 pub fn show(context: *ui.Frame) !void {
     const is_enabled = session.profile().ptr.thumbnail.notifications.enabled;
-    if (!session.profile().ptr.chatlog.enabled) {
-        try widgets.notice(context, .src(@src()), "Event Alerts requires Log Monitoring enabled to read logs and trigger alerts.");
-    } else if (!is_enabled) {
+    if (!is_enabled) {
         try widgets.notice(context, .src(@src()), "Event Alerts requires Notification System switched on in the Notifications tab.");
+    } else if (!session.profile().ptr.chatlog.enabled) {
+        try widgets.notice(context, .src(@src()), "Without Log Monitoring, only alerts for your own actions, like Profile Switch, are shown.");
     }
     const section = try widgets.openSection(context, "Event Alerts", "Per-event notification, suppression, speech, and border behavior. Select an event on the left to edit it.", &style.fill_section);
     const options = try widgets.openFillGroup(context, .src(@src()), is_enabled);
@@ -87,12 +88,120 @@ pub fn show(context: *ui.Frame) !void {
 }
 
 fn typeLabel(notification_type: NotificationType) []const u8 {
-    return lang.textFmt("notification.{s}.label", .{@tagName(notification_type)}, @tagName(notification_type));
+    return lang.text(englishLabel(notification_type));
 }
 
 /// The short name keeps the roster narrow; the detail header uses the full one.
 fn typeShortLabel(notification_type: NotificationType) []const u8 {
-    return lang.textFmt("notification.{s}.shortLabel", .{@tagName(notification_type)}, typeLabel(notification_type));
+    return lang.text(englishShortLabel(notification_type));
+}
+
+/// In English, capitalised like the sidebar's headings; boxedText translates it.
+fn categoryHeading(category: notification.NotificationCategory) []const u8 {
+    return switch (category) {
+        .Fleet => "FLEET",
+        .Mining => "MINING",
+        .Combat => "COMBAT",
+        .Navigation => "NAVIGATION",
+        .General => "GENERAL",
+    };
+}
+
+fn englishLabel(notification_type: NotificationType) []const u8 {
+    return switch (notification_type) {
+        .AggressionCantJump => "Aggression Cant Jump",
+        .AsteroidDepleted => "Asteroid Depleted",
+        .AutoMinimizeToggle => "Auto-Minimize Toggle",
+        .AutopilotApproaching => "Autopilot Approaching",
+        .AutopilotReached => "Autopilot Reached",
+        .BombLauncherEmpty => "Bomb Launcher Empty",
+        .CargoFull => "Cargo Full",
+        .CloakFailed => "Cloak Failed",
+        .ConduitJump => "Conduit Jump",
+        .ConversationInvite => "Conversation Invite",
+        .CrystalBroke => "Crystal Broke",
+        .CycleExclusion => "Cycle Exclusion",
+        .Decloak => "Decloak",
+        .Docking => "Docking",
+        .FleetDisband => "Fleet Disband",
+        .FleetFollow => "Fleet Follow into Warp",
+        .FleetInvite => "Fleet Invite",
+        .FleetRegroup => "Fleet Regrouped",
+        .Generic => "Generic",
+        .GroupMembership => "Group Membership",
+        .HotkeySuspend => "Hotkeys Suspended/Resumed",
+        .JumpCloning => "Jump Cloning",
+        .JumpRange => "Jump Range",
+        .MiningCompression => "Mining Compression",
+        .MiningIdle => "Mining Idle",
+        .MiningStopped => "Mining Stopped",
+        .ObservatoryDecloak => "Observatory Decloak",
+        .ProfileSwitch => "Profile Switch",
+        .SavedPositionMove => "Moved to Saved Position",
+        .SelfDestruct => "Self-Destruct",
+        .SystemChange => "System Change",
+        .TakingDamage => "Taking Damage",
+        .TravelLeftBehind => "Left Behind",
+        .WarpBubble => "Warp Disrupted Bubble",
+        .WarpDisrupted => "Warp Disrupted",
+        .WarpScrambled => "Warp Scrambled",
+    };
+}
+
+fn englishShortLabel(notification_type: NotificationType) []const u8 {
+    return switch (notification_type) {
+        .AggressionCantJump => "Aggression Timer",
+        .AsteroidDepleted => "Asteroid Empty",
+        .AutoMinimizeToggle => "Auto-Minimize",
+        .AutopilotApproaching => "AP Approaching",
+        .AutopilotReached => "Waypoint Reached",
+        .BombLauncherEmpty => "Out of Bombs",
+        .CargoFull => "Cargo Full",
+        .CloakFailed => "Cloak Failed",
+        .ConduitJump => "Conduit Jump",
+        .ConversationInvite => "Convo Invite",
+        .CrystalBroke => "Crystal Broke",
+        .CycleExclusion => "Cycle Exclusion",
+        .Decloak => "Decloak",
+        .Docking => "Docking",
+        .FleetDisband => "Fleet Disband",
+        .FleetFollow => "Fleet Follow",
+        .FleetInvite => "Fleet Invite",
+        .FleetRegroup => "Fleet Regrouped",
+        .Generic => "Generic",
+        .GroupMembership => "Group Membership",
+        .HotkeySuspend => "Hotkey Suspend",
+        .JumpCloning => "Jump Cloning",
+        .JumpRange => "Jump Range",
+        .MiningCompression => "Compression",
+        .MiningIdle => "Mining Idle",
+        .MiningStopped => "Mining Stopped",
+        .ObservatoryDecloak => "Obs Decloak",
+        .ProfileSwitch => "Profile Switch",
+        .SavedPositionMove => "Saved Position",
+        .SelfDestruct => "Self-Destruct",
+        .SystemChange => "System Change",
+        .TakingDamage => "Taking Damage",
+        .TravelLeftBehind => "Left Behind",
+        .WarpBubble => "Warp Bubble",
+        .WarpDisrupted => "Warp Disrupted",
+        .WarpScrambled => "Warp Scrambled",
+    };
+}
+
+fn englishStateLabel(state: notification.State) []const u8 {
+    return switch (state) {
+        .started => "Started",
+        .aborted => "Aborted",
+        .suspended => "Suspended",
+        .resumed => "Resumed",
+        .on => "On",
+        .off => "Off",
+        .added => "Added",
+        .removed => "Removed",
+        .excluded => "Excluded",
+        .included => "Included",
+    };
 }
 
 fn matchesSearch(notification_type: NotificationType) bool {
@@ -103,7 +212,7 @@ fn matchesSearch(notification_type: NotificationType) bool {
 
 /// Grouped under category headings; each row's dot is filled while its event is enabled.
 fn typeRoster(context: *ui.Frame) !void {
-    const roster = Rect{ .key = .src(@src()), .style = &style.roster };
+    const roster = Rect{ .key = .src(@src()), .style = try rosterStyle(context) };
     _ = try roster.open(context);
     try widgets.searchBox(context, .str("knots.events.search"), &g_search, "Search events...");
     const rows = try widgets.openScrollPane(context, .str("knots.events.rows"), style.roster_scroll);
@@ -114,8 +223,7 @@ fn typeRoster(context: *ui.Frame) !void {
         const category = notification.notificationCategory(notification_type);
         if (last_category != category) {
             last_category = category;
-            const heading = try std.ascii.allocUpperString(context.arena(), @tagName(category));
-            try widgets.boxedText(context, ui.Key.str("knots.events.category").indexed(@backingInt(category)), heading, &style.roster_category, &style.tab_category_text);
+            try widgets.boxedText(context, ui.Key.str("knots.events.category").indexed(@backingInt(category)), categoryHeading(category), &style.roster_category, &style.tab_category_text);
         }
         const is_selected = notification_type == g_selected;
         const row = Button{ .key = ui.Key.str("knots.events.row").indexed(index), .style = if (is_selected) &style.roster_row_selected else &style.roster_row };
@@ -139,9 +247,24 @@ fn typeRoster(context: *ui.Frame) !void {
     try roster.close(context);
 }
 
+/// style.roster, widened so each name's longest word fits beside a row's dot and a marker, rather than breaking mid-word.
+fn rosterStyle(context: *ui.Frame) !*const ui.Style {
+    var widest: f32 = 0;
+    for (TYPES_IN_ORDER) |notification_type| {
+        var words = std.mem.tokenizeScalar(u8, typeShortLabel(notification_type), ' ');
+        while (words.next()) |word| widest = @max(widest, try widgets.textWidth(context, word, &style.roster_name_selected));
+    }
+    const frame_padding = comptime style.roster.padding.?;
+    const row_padding = comptime style.roster_row.padding.?;
+    const row_gap = comptime style.roster_row.gap.?;
+    const around = frame_padding.left() + frame_padding.right() + style.ROW_SCROLLBAR_GUTTER + row_padding.left() + row_padding.right() + style.EVENT_DOT_SIZE + 2 * row_gap + style.ROSTER_MARKER_SIZE;
+    const width = std.math.clamp(@ceil(widest + around), style.ROSTER_WIDTH, style.ROSTER_MAX_WIDTH);
+    return widgets.withWidth(context, &style.roster, width);
+}
+
 /// A small glyph after an event's name, which a tooltip names.
 fn marker(context: *ui.Frame, key: ui.Key, glyph: glyphs.Glyph, tip: []const u8) !void {
-    const tooltip = Tooltip{ .key = key, .content = tip };
+    const tooltip = Tooltip{ .key = key, .content = lang.text(tip) };
     _ = try tooltip.open(context);
     const glyph_key = key.indexed(1);
     try context.e(Canvas{
@@ -161,19 +284,20 @@ fn typeDetail(context: *ui.Frame, notification_type: NotificationType) !void {
     const header = try widgets.openDetailHeader(context, .src(@src()));
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = typeLabel(notification_type), .style = &style.roster_name_selected });
     var is_enabled: bool = ref.get("enabled");
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "\u{25B6} Test", .disabled = !is_enabled, .style = &style.plain_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("\u{25B6} Test"), .disabled = !is_enabled, .style = &style.plain_button })).clicked) {
         testNotification(notification_type);
     }
     try header.close(context);
     if (try widgets.switchRow(context, ui.Key.str("knots.events.enabled").indexed(ref.index), "Enabled", &is_enabled)) ref.set("enabled", is_enabled);
+    try widgets.hintText(context, .src(@src()), "When off, this event never alerts.");
     try widgets.separator(context, .str("knots.events.separator.enabled"));
 
     const rest = try widgets.openGroup(context, .src(@src()), is_enabled);
     const timing = try widgets.openFieldGroup(context, .str("knots.events.timing"), "Timing");
     try bind.number(context, ref, "duration_ms", "Duration", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "How long the alert stays on screen; 0 keeps it up until dismissed.");
+    try widgets.hintText(context, .src(@src()), "How long the alert shows; 0 keeps it until dismissed.");
     try bind.number(context, ref, "throttle_ms", "Limit", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "Drops repeats of this alert that happen within this many seconds of the last one shown.");
+    try widgets.hintText(context, .src(@src()), "Ignores repeats within this time.");
     try timing.close(context);
     try widgets.separator(context, .str("knots.events.separator.timing"));
 
@@ -182,22 +306,26 @@ fn typeDetail(context: *ui.Frame, notification_type: NotificationType) !void {
 
     const behavior = try widgets.openFieldGroup(context, .str("knots.events.behavior"), "Behavior");
     try bind.toggle(context, ref, "suppress_when_focused", "Suppress While Focused");
-    try widgets.hintText(context, .src(@src()), "Skips this alert while that character's EVE window is the one currently focused.");
+    try widgets.hintText(context, .src(@src()), "Skips the alert while you're on that character.");
     try bind.toggle(context, ref, "suppress_when_clicked", "Suppress After Click");
-    try widgets.hintText(context, .src(@src()), "Skips this alert for a short time after you click the character's thumbnail.");
+    try widgets.hintText(context, .src(@src()), "Skips the alert briefly after you click that character.");
     try bind.toggle(context, ref, "show_hidden_thumbnail", "Show Hidden Thumbnail");
-    try widgets.hintText(context, .src(@src()), "Shows the thumbnail for the alert's duration even while it's hidden by Hide When No EVE Focus or the visibility toggle.");
+    try widgets.hintText(context, .src(@src()), "Shows the thumbnail during the alert, even if it's hidden.");
     try bind.toggle(context, ref, "tts_enabled", "Speak Aloud (TTS)");
+    try widgets.hintText(context, .src(@src()), "Reads the alert out loud. Voice settings are on the Notifications tab.");
     try behavior.close(context);
     try widgets.separator(context, .str("knots.events.separator.behavior"));
 
     const border = try widgets.openFieldGroup(context, .str("knots.events.border"), "Border");
     try bind.toggle(context, ref, "show_border", "Show Border");
+    try widgets.hintText(context, .src(@src()), "Marks the thumbnail with a colored border during the alert.");
     // A hidden border has no colour to set and nothing to flash.
     const border_options = try widgets.openGroup(context, .src(@src()), ref.get("show_border"));
     try bind.toggle(context, ref, "flash_border", "Flash Border");
+    try widgets.hintText(context, .src(@src()), "Makes the border blink.");
     const defaults = config.ThumbnailConfig{};
     try bind.optionalColor(context, ref, "border_color", "Border Color", defaults.inactiveBorderColor);
+    try widgets.hintText(context, .src(@src()), "Reset uses the default color.");
     try border_options.close(context);
     try border.close(context);
     try widgets.separator(context, .str("knots.events.separator.border"));
@@ -207,7 +335,6 @@ fn typeDetail(context: *ui.Frame, notification_type: NotificationType) !void {
     try stack.close(context);
 }
 
-/// One box per state the type has, the placeholder chips that fill in event values, a preview of each box, and the text colour.
 fn customText(context: *ui.Frame, ref: TypeRef, notification_type: NotificationType) !void {
     const primary_sample = notification.sample(notification_type);
     const alt_state = notification.altState(notification_type);
@@ -241,17 +368,18 @@ fn customText(context: *ui.Frame, ref: TypeRef, notification_type: NotificationT
         alt_sample.state = state;
         try preview(context, notification_type, .custom_text_alt, ref.get("custom_text_alt"), alt_sample);
     }
-    try widgets.hintText(context, .src(@src()), "Leave empty to use the default wording shown in grey. Click a placeholder to insert it; it's filled in from the event. Type \\n for a new line.");
+    try widgets.paragraph(context, .src(@src()), "Click a tag to add it to the text.");
     try bind.optionalColor(context, ref, "text_color", "Text Color", session.profile().ptr.thumbnail.notifications.color);
+    try widgets.hintText(context, .src(@src()), "Reset uses the Notification text's color on the Appearance tab.");
     try group.close(context);
 }
 
 fn textBox(context: *ui.Frame, ref: TypeRef, notification_type: NotificationType, comptime field: TextField, sample: notification.Notification, has_states: bool) !void {
     const name = @tagName(field);
     const state = sample.state orelse .on;
-    const label = if (has_states) lang.textFmt("notification.state.{s}.label", .{@tagName(state)}, @tagName(state)) else "Text";
+    const label = if (has_states) englishStateLabel(state) else "Text";
     const row = try widgets.openBinding(context, ui.Key.str("knots.events.text:" ++ name).indexed(ref.index), label);
-    var buf: [128]u8 = undefined;
+    var buf: [DEFAULT_TEXT_SIZE]u8 = undefined;
     // The box keeps its placeholder until the frame is drawn, so it can't point at this stack buffer.
     try bind.styledTextBox(context, ref, name, try context.arena().dupe(u8, notification.defaultText(sample, &buf)), &style.custom_text_input);
     if (context.ui().focused(bind.boxKey(ref, name).hash())) g_last_text_field.set(notification_type, field);
@@ -259,6 +387,7 @@ fn textBox(context: *ui.Frame, ref: TypeRef, notification_type: NotificationType
         ref.set(name, null);
     }
     try row.close(context);
+    try widgets.hintText(context, ui.Key.str("knots.events.text.hint:" ++ name).indexed(ref.index), "Leave empty for the grey default. Type \\n for a new line.");
 }
 
 /// Inserts at the caret of the box last focused, as long as it still fits.
@@ -282,8 +411,8 @@ fn insertToken(context: *ui.Frame, ref: TypeRef, notification_type: Notification
 
 /// Mirrors notifications/template.zig's render with each placeholder's sample value.
 fn preview(context: *ui.Frame, notification_type: NotificationType, comptime field: TextField, custom: ?[]const u8, sample: notification.Notification) !void {
-    var default_buf: [128]u8 = undefined;
-    var render_buf: [256]u8 = undefined;
+    var default_buf: [DEFAULT_TEXT_SIZE]u8 = undefined;
+    var render_buf: [notification.TEXT_MAX]u8 = undefined;
     const typed = std.mem.trim(u8, custom orelse "", " ");
     const shown = if (typed.len == 0) notification.defaultText(sample, &default_buf) else template.render(typed, notification.placeholders(notification_type), .{
         .source = sample.source,
@@ -302,7 +431,7 @@ fn preview(context: *ui.Frame, notification_type: NotificationType, comptime fie
     const key = ui.Key.str("knots.events.preview:" ++ @tagName(field)).indexed(@backingInt(notification_type));
     const row = Rect{ .key = key, .style = &style.chip_row };
     _ = try row.open(context);
-    try widgets.boxedText(context, key.indexed(1), try std.fmt.allocPrint(context.arena(), "Preview: {s}", .{kept.items}), &style.chip_box, &style.hint);
+    try widgets.boxedText(context, key.indexed(1), try lang.format(context.arena(), "Preview: {text}", .{ .text = kept.items }), &style.chip_box, &style.hint);
     try row.close(context);
 }
 
@@ -310,26 +439,29 @@ fn preview(context: *ui.Frame, notification_type: NotificationType, comptime fie
 fn sound(context: *ui.Frame, ref: TypeRef, type_index: usize) !void {
     const group = try widgets.openFieldGroup(context, .str("knots.events.sound"), "Sound");
     try bind.toggle(context, ref, "sound_enabled", "Play Custom Sound");
+    try widgets.hintText(context, .src(@src()), "Plays a sound file of your choice with the alert.");
     const options = try widgets.openGroup(context, .src(@src()), ref.get("sound_enabled"));
     const row = try widgets.openBinding(context, .src(@src()), "Sound File");
     const path = ref.get("sound_path") orelse "";
     try widgets.boxedText(context, .src(@src()), if (path.len == 0) "None" else std.fs.path.basename(path), &style.path_box, if (path.len == 0) &style.path_text_empty else &style.path_text);
     if (path.len > 0 and (try context.interact(Button{ .key = .src(@src()), .label = "\u{00D7}", .style = &style.icon_button_danger_text })).clicked) ref.set("sound_path", null);
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Browse", .style = &style.plain_button })).clicked) host.browseSoundFile(type_index);
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Browse"), .style = &style.plain_button })).clicked) host.browseSoundFile(type_index);
     try row.close(context);
+    try widgets.hintText(context, .src(@src()), "A WAV or MP3 file.");
     try bind.slider(context, ref, "sound_volume", "Volume", .{ .display = .percent });
+    try widgets.hintText(context, .src(@src()), "Only affects this alert's sound.");
     try options.close(context);
     try group.close(context);
 }
 
 /// Fires the type on every thumbnail with the settings the window has for it, saved or not.
 fn testNotification(notification_type: NotificationType) void {
-    const painter = painter_mod.g_painter_ptr orelse {
-        slog.warn("Failed to test notification: the painter isn't ready", .{});
+    const thumbnail_set = session.runningApp().thumbnail_set orelse {
+        slog.warn("Failed to test notification: the thumbnail set isn't ready", .{});
         return;
     };
-    painter.showTestNotification(notification_type, session.profile().ptr.thumbnail.notifications.getTypeConfig(notification_type)) catch |err| {
+    thumbnail_set.showTestNotification(notification_type, session.profile().ptr.thumbnail.notifications.getTypeConfig(notification_type)) catch |err| {
         slog.err("Failed to test notification: {}", .{err});
-        status.show(.failure, "Failed to test notification: {}", .{err});
+        status.show(.failure, "Failed to test notification: {err}", .{ .err = err });
     };
 }

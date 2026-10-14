@@ -1,10 +1,10 @@
-//! Actions on every EVE client at once: minimize, close, and move to saved positions.
+//! Actions on EVE clients: minimizing, closing, and moving them to saved positions.
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const config_mod = @import("../config.zig");
 const scout = @import("scout.zig");
 const animation = @import("animation.zig");
-const exclusions = @import("../hotkeys/exclusions.zig");
+const exclusions_mod = @import("exclusions.zig");
 const log = @import("../log.zig");
 
 const slog = log.Scoped("actions");
@@ -45,7 +45,13 @@ pub fn clampOntoScreen(position: config_mod.Position) config_mod.Position {
     return clampToRect(position, monitor_rect);
 }
 
-/// Moves a window's top-left corner to `position`, restoring it first if minimized/maximized.
+/// Ignores excludeFromMinimize: a new client is still at the login screen, so it has no character yet.
+pub fn minimizeNewClient(config: *const config_mod.Config, source_hwnd: win32.HWND) void {
+    animation.showClient(config, source_hwnd, win32.SW_FORCEMINIMIZE);
+    slog.info("Started a new client minimized", .{});
+}
+
+/// Restores a minimized or maximized window first.
 pub fn moveClientToPosition(config: *const config_mod.Config, hwnd: win32.HWND, position: config_mod.Position) void {
     if (!win32.isWindow(hwnd)) return;
 
@@ -68,8 +74,8 @@ pub fn moveClientToPosition(config: *const config_mod.Config, hwnd: win32.HWND, 
     _ = win32.SetWindowPos(hwnd, win32.HWND_NOTOPMOST, clamped.x, clamped.y, 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE | win32.SWP_ASYNCWINDOWPOS);
 }
 
-/// `painter` is anything with Painter.notify's signature, told about each client moved.
-pub fn moveAllClientsToSavedPositions(eve_windows: []const scout.EveWindow, config: *const config_mod.Config, painter: anytype) void {
+/// `thumbnail_set` is anything with ThumbnailSet.notify's signature, told about each client moved.
+pub fn moveAllClientsToSavedPositions(eve_windows: []const scout.EveWindow, config: *const config_mod.Config, thumbnail_set: anytype) void {
     slog.info("Moving all EVE clients to saved positions", .{});
 
     var moved_count: usize = 0;
@@ -77,7 +83,7 @@ pub fn moveAllClientsToSavedPositions(eve_windows: []const scout.EveWindow, conf
         if (!eve_window.is_eve_client or config.isExcludedFromAutoMove(eve_window.character_name)) continue;
         const position = config.getCharacterWindowPosition(eve_window.character_name) orelse continue;
         moveClientToPosition(config, eve_window.hwnd, position);
-        painter.notify(eve_window.hwnd, .{ .notification_type = .SavedPositionMove });
+        thumbnail_set.notify(eve_window.hwnd, .{ .notification_type = .SavedPositionMove });
         moved_count += 1;
         slog.debug("Moved {s} to saved position ({}, {})", .{ eve_window.character_name, position.x, position.y });
     }
@@ -89,7 +95,7 @@ pub fn moveAllClientsToSavedPositions(eve_windows: []const scout.EveWindow, conf
     }
 }
 
-pub fn closeAllClients(eve_windows: []const scout.EveWindow, config: *const config_mod.Config) void {
+pub fn closeAllClients(eve_windows: []const scout.EveWindow, config: *const config_mod.Config, exclusions: *const exclusions_mod.Exclusions) void {
     slog.info("Closing all EVE clients (hotkey action)", .{});
 
     var closed_count: usize = 0;
@@ -104,7 +110,7 @@ pub fn closeAllClients(eve_windows: []const scout.EveWindow, config: *const conf
             continue;
         }
 
-        if (config.closeAll.excludeCycleExcludedClients and exclusions.isExcluded(eve_window.character_name)) {
+        if (config.closeAll.excludeCycleExcludedClients and exclusions.contains(eve_window.character_name)) {
             slog.debug("Skipping cycle-excluded character: {s}", .{eve_window.character_name});
             excluded_count += 1;
             continue;

@@ -10,14 +10,16 @@ const FILE_NAME = files.CHARACTER_IDS_FILE;
 
 pub const CharacterIds = struct {
     allocator: std.mem.Allocator,
+    /// Set by load and never changed, so both threads read it unlocked.
+    io: std.Io,
     /// Guarded by mutex; the chatlog worker adds to it while the config window reads it for portraits.
     map: std.StringHashMapUnmanaged([]const u8) = .empty,
     mutex: std.Io.Mutex = .init,
 
     /// Starts empty if the file is missing or unreadable; the monitor learns the IDs again as it needs them.
-    pub fn load(allocator: std.mem.Allocator) CharacterIds {
-        var ids: CharacterIds = .{ .allocator = allocator };
-        const content = std.Io.Dir.cwd().readFileAlloc(files.g_io, FILE_NAME, allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
+    pub fn load(allocator: std.mem.Allocator, io: std.Io) CharacterIds {
+        var ids: CharacterIds = .{ .allocator = allocator, .io = io };
+        const content = std.Io.Dir.cwd().readFileAlloc(io, FILE_NAME, allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
             if (err != error.FileNotFound) slog.warn("Failed to read '{s}': {}", .{ FILE_NAME, err });
             return ids;
         };
@@ -65,15 +67,15 @@ pub const CharacterIds = struct {
     }
 
     pub fn contains(self: *CharacterIds, name: []const u8) !bool {
-        try self.mutex.lock(files.g_io);
-        defer self.mutex.unlock(files.g_io);
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
         return self.map.contains(name);
     }
 
     /// Caller owns the result.
     pub fn get(self: *CharacterIds, allocator: std.mem.Allocator, name: []const u8) !?[]const u8 {
-        try self.mutex.lock(files.g_io);
-        defer self.mutex.unlock(files.g_io);
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
         const id = self.map.get(name) orelse return null;
         return try allocator.dupe(u8, id);
     }
@@ -81,8 +83,8 @@ pub const CharacterIds = struct {
     /// Saves the file when `id` is new for `name`.
     pub fn put(self: *CharacterIds, name: []const u8, id: []const u8) !void {
         const json = blk: {
-            try self.mutex.lock(files.g_io);
-            defer self.mutex.unlock(files.g_io);
+            try self.mutex.lock(self.io);
+            defer self.mutex.unlock(self.io);
             if (self.map.get(name)) |existing| {
                 if (std.mem.eql(u8, existing, id)) return;
             }
@@ -91,13 +93,13 @@ pub const CharacterIds = struct {
         };
         defer self.allocator.free(json);
         slog.info("Cached character ID: {s} -> {s}", .{ name, id });
-        try files.atomicWriteFile(self.allocator, files.g_io, FILE_NAME, json);
+        try files.atomicWriteFile(self.allocator, self.io, FILE_NAME, json);
     }
 
     /// `{name: id}`.
     pub fn write(self: *CharacterIds, json_writer: *std.json.Stringify) !void {
-        try self.mutex.lock(files.g_io);
-        defer self.mutex.unlock(files.g_io);
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
         try writeMap(&self.map, json_writer);
     }
 

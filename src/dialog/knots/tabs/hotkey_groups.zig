@@ -10,6 +10,7 @@ const suggest = @import("../suggest.zig");
 const status = @import("../status.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
+const lang = @import("../../../lang/lang.zig");
 const log = @import("../../../log.zig");
 
 const Rect = ui.component.Rect;
@@ -24,8 +25,8 @@ const GROUP_ROW_KEY: ui.Key = .str("knots.groups.row");
 const MEMBER_ROW_KEY: ui.Key = .str("knots.groups.member");
 const MEMBERS_KEY: ui.Key = .str("knots.groups.members");
 const ADD_MEMBER_KEY: ui.Key = .str("knots.groups.add_member");
-/// What an unnamed group is called, numbered from 1, wherever the dialog shows it.
-pub const UNNAMED_GROUP_FORMAT = "Hotkey Group {d}";
+/// An unnamed group's name wherever the dialog shows it; English, for lang.format with `.n` counting from 1.
+pub const UNNAMED_GROUP_FORMAT = "Hotkey Group {n}";
 
 var g_allocator: std.mem.Allocator = undefined;
 var g_selected_index: usize = 0;
@@ -70,12 +71,13 @@ pub fn show(context: *ui.Frame) !void {
     // Its own card, so it doesn't read as a setting of the selected group.
     const all = try widgets.openSection(context, "All Groups", "", &style.section);
     try bind.toggle(context, profile.child("hotkeys"), "resetGroupIndexOnNonGroupFocus", "Reset Cycle Position When Leaving a Group");
+    try widgets.hintText(context, .src(@src()), "Cycling a group again starts from its first character.");
     try all.close(context);
 }
 
 fn groupName(context: *ui.Frame, index: usize) ![]const u8 {
     const name = try bind.liveText(context, session.profile().item("hotkeyGroups", index), "name");
-    return if (name.len > 0) name else try std.fmt.allocPrint(context.arena(), UNNAMED_GROUP_FORMAT, .{index + 1});
+    return if (name.len > 0) name else try lang.format(context.arena(), UNNAMED_GROUP_FORMAT, .{ .n = index + 1 });
 }
 
 fn roster(context: *ui.Frame, profile: ProfileRef) !void {
@@ -115,32 +117,38 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     defer widgets.restoreRows(previous_rows);
 
     const header = try widgets.openDetailHeader(context, .src(@src()));
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Group Name", .style = &style.detail_label });
+    const name_label = lang.text("Group Name");
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = name_label, .style = try widgets.detailLabelStyle(context, name_label) });
     const name_before = try context.arena().dupe(u8, group.get("name"));
-    try bind.textBox(context, group, "name", try std.fmt.allocPrint(context.arena(), UNNAMED_GROUP_FORMAT, .{index + 1}));
+    try bind.textBox(context, group, "name", try lang.format(context.arena(), UNNAMED_GROUP_FORMAT, .{ .n = index + 1 }));
     const removed = try widgets.confirmButton(context, ui.Key.str("knots.groups.remove").indexed(index), "Remove", "Confirm", &style.plain_button, &style.confirm_button);
     try header.close(context);
     carryToSpaces(profile, name_before, group.get("name"));
 
     const keys = try widgets.openFieldGroup(context, .str("knots.groups.keys"), "Keys");
     // Marked with the Hotkeys tab's pair arrows; a pair on one row doesn't fit this pane.
-    inline for (.{ .{ "backwardKey", "Cycle Backward", "\u{2190}" }, .{ "forwardKey", "Cycle Forward", "\u{2192}" } }) |key| {
+    inline for (.{ .{ "backwardKey", "Cycle Backward", "\u{2190}", "Switches to the previous character in this group." }, .{ "forwardKey", "Cycle Forward", "\u{2192}", "Switches to the next character in this group." } }) |key| {
         const row = try widgets.openMarkedBinding(context, .str("knots.groups.key:" ++ key[0]), key[1], key[2]);
         try hotkey.field(context, group, key[0]);
         try row.close(context);
+        try widgets.hintText(context, .str("knots.groups.key.hint:" ++ key[0]), key[3]);
     }
     const assign = try widgets.openBinding(context, .str("knots.groups.key:assignKey"), "Assign Key");
     try hotkey.field(context, group, "assignKey");
     try assign.close(context);
-    try widgets.hintText(context, .src(@src()), "Hover a thumbnail and press Assign Key to toggle that character in or out of this group's Characters list.");
+    try widgets.hintText(context, .src(@src()), "Hover a thumbnail and press this to add or remove it.");
     try keys.close(context);
     try widgets.separator(context, .str("knots.groups.separator.keys"));
 
     const behavior = try widgets.openFieldGroup(context, .str("knots.groups.behavior"), "Behavior");
     try bind.toggle(context, group, "includeNotLoggedIn", "Include Logged-Out Clients");
+    try widgets.hintText(context, .src(@src()), "Clients at the login screen come after the group's characters.");
     try bind.toggle(context, group, "stopAtEnds", "Stop at First/Last Character (Don't Loop)");
+    try widgets.hintText(context, .src(@src()), "Pressing again at the end goes back to that character if you've switched away.");
     try bind.toggle(context, group, "temporaryMembership", "Temporary Membership (Resets on Restart)");
+    try widgets.hintText(context, .src(@src()), "Changes made with Assign Key aren't saved.");
     try bind.toggle(context, group, "showBadge", "Show Group Badge on Thumbnails");
+    try widgets.hintText(context, .src(@src()), "Shows the group's name on its characters' thumbnails.");
     try behavior.close(context);
     try widgets.separator(context, .str("knots.groups.separator.behavior"));
 
@@ -170,18 +178,21 @@ fn groupRow(context: *ui.Frame, group: *const config.HotkeyGroupConfig, index: u
         g_selected_index = index;
         context.requestRedraw();
     }
+    const name = try groupName(context, index);
     try context.e(Text{
         .selectable = false,
         .key = ui.Key.str("knots.groups.name").indexed(index),
-        .content = try groupName(context, index),
+        .content = name,
         .style = if (is_selected) &style.roster_name_selected else &style.roster_name,
     });
+    const badge = if (group.temporaryMembership) lang.text("Temporary") else try std.fmt.allocPrint(arena, "{d}", .{group.characters.items.len});
     try context.e(Text{
         .selectable = false,
         .key = ui.Key.str("knots.groups.badge").indexed(index),
-        .content = if (group.temporaryMembership) "Temporary" else try std.fmt.allocPrint(arena, "{d}", .{group.characters.items.len}),
+        .content = badge,
         .style = &style.roster_badge,
     });
+    try widgets.fitRosterRow(context, name, 0, badge);
     try row.close(context);
 }
 
@@ -232,7 +243,7 @@ fn members(context: *ui.Frame, group: GroupRef) !void {
     const add_row = Rect{ .key = .src(@src()), .style = &style.member_add_row };
     _ = try add_row.open(context);
     const is_focused = context.ui().focused(ADD_MEMBER_KEY.hash());
-    try context.e(TextInput{ .key = ADD_MEMBER_KEY, .buf = &g_new_member, .style = &style.text_input, .placeholder = "Add character name\u{2026}" });
+    try context.e(TextInput{ .key = ADD_MEMBER_KEY, .buf = &g_new_member, .style = &style.text_input, .placeholder = lang.text("Add character name\u{2026}") });
     const is_add_clicked = try widgets.glyphButton(context, .str("knots.groups.member.add"), .add, "Add", &style.add_button, false);
     if (is_add_clicked or (is_focused and context.ui().input.containsKey(.enter))) addMember(group);
     if (try widgets.addOpenClientsButton(context, .src(@src()), &style.plain_button)) fillFromClients(context, group);
@@ -250,7 +261,7 @@ fn addMember(group: GroupRef) void {
     g_new_member.clearRetainingCapacity();
 }
 
-/// One member: its drag handle, name box and remove button; returns whether remove was clicked.
+/// Returns whether remove was clicked.
 fn memberRow(context: *ui.Frame, group: GroupRef, member_index: usize, row_style: *const ui.Style) !bool {
     const row = Rect{ .key = MEMBER_ROW_KEY.indexed(member_index), .style = row_style };
     _ = try row.open(context);
@@ -273,7 +284,7 @@ fn memberHandleKey(member_index: usize) ui.Key {
 fn fillFromClients(context: *ui.Frame, group: GroupRef) void {
     const names = positions.openClients(context.arena()) catch |err| {
         slog.err("Failed to fill hotkey group from open clients: {}", .{err});
-        status.show(.failure, "Failed to scan clients: {}", .{err});
+        status.show(.failure, "Failed to scan clients: {err}", .{ .err = err });
         return;
     };
     if (names.len == 0) {
@@ -290,7 +301,7 @@ fn fillFromClients(context: *ui.Frame, group: GroupRef) void {
         added_count += 1;
     }
     if (added_count > 0) {
-        status.show(.success, "Added {d} character(s) to hotkey group", .{added_count});
+        status.show(.success, "Added {n} character(s) to hotkey group", .{ .n = added_count });
     } else {
         status.show(.info, "All open EVE clients are already in this group", .{});
     }

@@ -7,7 +7,7 @@ const log = @import("log.zig");
 
 const slog = log.Scoped("update");
 
-/// Mutex-guarded holder for the latest known update result, written by the background check thread and read by the tray menu on the main thread.
+/// Written by the background check thread, read on the main thread.
 pub const UpdateStatus = struct {
     mutex: std.Io.Mutex = .init,
     version: ?[]const u8 = null,
@@ -16,8 +16,8 @@ pub const UpdateStatus = struct {
     notes: ?[]const u8 = null,
     allocator: ?std.mem.Allocator = null,
 
-    /// Stores a fresh update result, freeing any previous one first; copies `version`/`url`/`notes` rather than taking ownership of the passed-in slices.
-    pub fn set(self: *UpdateStatus, allocator: std.mem.Allocator, version: []const u8, url: []const u8, notes: ?[]const u8) !void {
+    /// Copies its arguments rather than taking ownership of them.
+    pub fn set(self: *UpdateStatus, io: std.Io, allocator: std.mem.Allocator, version: []const u8, url: []const u8, notes: ?[]const u8) !void {
         const version_copy = try allocator.dupe(u8, version);
         errdefer allocator.free(version_copy);
         const url_copy = try allocator.dupe(u8, url);
@@ -25,8 +25,8 @@ pub const UpdateStatus = struct {
         const notes_copy = if (notes) |n| try allocator.dupe(u8, n) else null;
         errdefer if (notes_copy) |n| allocator.free(n);
 
-        try self.mutex.lock(g_io);
-        defer self.mutex.unlock(g_io);
+        try self.mutex.lock(io);
+        defer self.mutex.unlock(io);
         self.freeLocked();
         self.version = version_copy;
         self.url = url_copy;
@@ -41,40 +41,40 @@ pub const UpdateStatus = struct {
         if (self.notes) |n| allocator.free(n);
     }
 
-    pub fn deinit(self: *UpdateStatus) void {
-        self.mutex.lock(g_io) catch return;
-        defer self.mutex.unlock(g_io);
+    pub fn deinit(self: *UpdateStatus, io: std.Io) void {
+        self.mutex.lock(io) catch return;
+        defer self.mutex.unlock(io);
         self.freeLocked();
         self.version = null;
         self.url = null;
         self.notes = null;
     }
 
-    pub fn isAvailable(self: *UpdateStatus) bool {
-        self.mutex.lock(g_io) catch |err| {
+    pub fn isAvailable(self: *UpdateStatus, io: std.Io) bool {
+        self.mutex.lock(io) catch |err| {
             slog.warn("Failed to lock update status mutex: {}", .{err});
             return false;
         };
-        defer self.mutex.unlock(g_io);
+        defer self.mutex.unlock(io);
         return self.version != null;
     }
 
-    /// Copies the stored release URL, null-terminated, into `buf`; returns null if no update is available or the URL doesn't fit.
-    pub fn copyUrlZ(self: *UpdateStatus, buf: []u8) ?[:0]const u8 {
-        return self.copyFieldZ("url", buf);
+    /// Null if no update is available or the URL doesn't fit in `buf`.
+    pub fn copyUrlZ(self: *UpdateStatus, io: std.Io, buf: []u8) ?[:0]const u8 {
+        return self.copyFieldZ(io, "url", buf);
     }
 
-    /// Copies the stored latest version, null-terminated, into `buf`; returns null if no update is available or the version doesn't fit.
-    pub fn copyVersionZ(self: *UpdateStatus, buf: []u8) ?[:0]const u8 {
-        return self.copyFieldZ("version", buf);
+    /// Null if no update is available or the version doesn't fit in `buf`.
+    pub fn copyVersionZ(self: *UpdateStatus, io: std.Io, buf: []u8) ?[:0]const u8 {
+        return self.copyFieldZ(io, "version", buf);
     }
 
-    fn copyFieldZ(self: *UpdateStatus, comptime field: []const u8, buf: []u8) ?[:0]const u8 {
-        self.mutex.lock(g_io) catch |err| {
+    fn copyFieldZ(self: *UpdateStatus, io: std.Io, comptime field: []const u8, buf: []u8) ?[:0]const u8 {
+        self.mutex.lock(io) catch |err| {
             slog.warn("Failed to lock update status mutex: {}", .{err});
             return null;
         };
-        defer self.mutex.unlock(g_io);
+        defer self.mutex.unlock(io);
         const value = @field(self, field) orelse return null;
         if (value.len >= buf.len) return null;
         @memcpy(buf[0..value.len], value);
@@ -82,13 +82,13 @@ pub const UpdateStatus = struct {
         return buf[0..value.len :0];
     }
 
-    /// Returns an allocator-owned copy of the stored release notes (caller frees); null if unavailable, since notes are unbounded unlike the other fixed-buffer fields.
-    pub fn dupeNotes(self: *UpdateStatus, allocator: std.mem.Allocator) ?[]const u8 {
-        self.mutex.lock(g_io) catch |err| {
+    /// Caller frees; allocated rather than copied into a buffer, since notes are unbounded.
+    pub fn dupeNotes(self: *UpdateStatus, io: std.Io, allocator: std.mem.Allocator) ?[]const u8 {
+        self.mutex.lock(io) catch |err| {
             slog.warn("Failed to lock update status mutex: {}", .{err});
             return null;
         };
-        defer self.mutex.unlock(g_io);
+        defer self.mutex.unlock(io);
         const notes = self.notes orelse return null;
         return allocator.dupe(u8, notes) catch |err| {
             slog.warn("Failed to copy the release notes: {}", .{err});
@@ -99,18 +99,19 @@ pub const UpdateStatus = struct {
 
 pub const UpdateChecker = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     current_version: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator) UpdateChecker {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) UpdateChecker {
         return .{
             .allocator = allocator,
+            .io = io,
             .current_version = build_options.version,
         };
     }
 
     pub fn deinit(self: *UpdateChecker) void {
-        _ = self;
-        g_update_status.deinit();
+        g_update_status.deinit(self.io);
     }
 
     /// Strips a leading "v" (GitHub tag convention) and parses the rest as semver.
@@ -122,7 +123,7 @@ pub const UpdateChecker = struct {
     pub fn checkForUpdates(self: *const UpdateChecker) !?UpdateInfo {
         slog.info("Checking for updates (current: {s})", .{self.current_version});
 
-        var client: std.http.Client = .{ .allocator = self.allocator, .io = g_io };
+        var client: std.http.Client = .{ .allocator = self.allocator, .io = self.io };
         defer client.deinit();
 
         // per_page=100 covers skipping many releases at once; unauthenticated requests only ever see published (non-draft) releases anyway.
@@ -205,8 +206,8 @@ pub const UpdateChecker = struct {
         return .{ .version = version, .url = url, .notes = notes };
     }
 
-    pub fn checkForUpdatesBackground(allocator: std.mem.Allocator) void {
-        var checker = UpdateChecker.init(allocator);
+    pub fn checkForUpdatesBackground(allocator: std.mem.Allocator, io: std.Io) void {
+        var checker = UpdateChecker.init(allocator, io);
 
         const update_info = checker.checkForUpdates() catch |err| {
             slog.warn("Failed to check for updates: {}", .{err});
@@ -218,7 +219,7 @@ pub const UpdateChecker = struct {
             defer allocator.free(info.url);
             defer if (info.notes) |n| allocator.free(n);
 
-            g_update_status.set(allocator, info.version, info.url, info.notes) catch |err| {
+            g_update_status.set(io, allocator, info.version, info.url, info.notes) catch |err| {
                 slog.warn("Failed to store update status: {}", .{err});
                 return;
             };
@@ -234,18 +235,11 @@ pub const UpdateInfo = struct {
     notes: ?[]const u8,
 };
 
-var g_io: std.Io = undefined;
-
 pub var g_update_status: UpdateStatus = .{};
 
-/// Must be called once before any update-checking function is used.
-pub fn setIo(io: std.Io) void {
-    g_io = io;
-}
-
-pub fn openReleasesPage() void {
+pub fn openReleasesPage(io: std.Io) void {
     var url_buffer: [512]u8 = undefined;
-    const url = g_update_status.copyUrlZ(&url_buffer) orelse "https://github.com/mrmjstc/eve-maj-preview/releases";
+    const url = g_update_status.copyUrlZ(io, &url_buffer) orelse "https://github.com/mrmjstc/eve-maj-preview/releases";
 
     slog.info("Opening releases page: {s}", .{url});
 

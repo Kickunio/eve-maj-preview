@@ -42,7 +42,6 @@ pub fn clamp(comptime R: type, value: *R) void {
     }
 }
 
-/// `value` brought within field `name`'s limits, for code that takes a setting in before storing it.
 pub fn clampValue(comptime R: type, comptime name: []const u8, value: @FieldType(R, name)) @FieldType(R, name) {
     var result = value;
     clampField(R, name, &result);

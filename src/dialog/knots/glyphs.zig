@@ -6,7 +6,6 @@ const DrawCmd = ui.component.Canvas.DrawCmd;
 
 /// A sidebar glyph's box: an 11px glyph in a 14px-wide cell.
 pub const TAB_SIZE = 14;
-/// A header icon's box.
 pub const ICON_SIZE = 16;
 
 pub const Glyph = enum {
@@ -33,6 +32,8 @@ pub const Glyph = enum {
     grip,
     speech,
     speaker,
+    check,
+    chevron,
 };
 
 /// The glyph centred in a `box`-sized square, moved onto whole device pixels by `snap` (see snapOffset).
@@ -347,6 +348,23 @@ fn bitmap(glyph: Glyph) []const []const u8 {
             "#####.#.#",
             "#####...#",
             "...##..#.",
+            "....#....",
+        },
+        .check => &.{
+            "........#",
+            ".......##",
+            "#.....##.",
+            "##...##..",
+            ".##.##...",
+            "..###....",
+            "...#.....",
+        },
+        .chevron => &.{
+            "#.......#",
+            "##.....##",
+            ".##...##.",
+            "..##.##..",
+            "...###...",
             "....#....",
         },
     };

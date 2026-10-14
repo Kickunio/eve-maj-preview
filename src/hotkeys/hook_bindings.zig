@@ -6,7 +6,6 @@ const log = @import("../log.zig");
 
 const slog = log.Scoped("hotkeys");
 
-/// One low-level hook's bindings; the hook is installed only while something is bound.
 pub const HookBindings = struct {
     hook_type: c_int,
     proc: win32.HOOKPROC,

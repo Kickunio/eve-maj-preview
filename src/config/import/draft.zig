@@ -21,7 +21,7 @@ const MERGED_LISTS = [_]MergedList{
 /// A list whose items are matched on `key_field`; one that `keeps_ids` is edited item by item, any other is replaced whole.
 const MergedList = struct { name: []const u8, key_field: []const u8, keeps_ids: bool };
 
-/// A translation key and its parameters, which the config dialog puts into words.
+/// English text and its {parameters}, which the config dialog translates and fills in.
 pub const Text = struct {
     key: []const u8,
     parameters: []const Parameter = &.{},
@@ -49,7 +49,7 @@ pub const Section = struct {
     available: bool,
 };
 
-/// `should_translate` marks `value` as a translation key of its own, e.g. the label of the hotkey a note is about.
+/// `should_translate` marks `value` as English text to translate too, e.g. the label of the hotkey a note is about.
 pub const Parameter = struct { name: []const u8, value: []const u8, should_translate: bool = false };
 
 pub const Draft = struct {

@@ -1,7 +1,6 @@
 //! Changes to cycle exclusions and hotkey-group membership.
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
-const input = @import("../thumbnail/input.zig");
 const animation = @import("../clients/animation.zig");
 const scout = @import("../clients/scout.zig");
 const manager_mod = @import("manager.zig");
@@ -10,9 +9,9 @@ const log = @import("../log.zig");
 const HotkeyManager = manager_mod.HotkeyManager;
 const slog = log.Scoped("hotkeys");
 
-/// Toggles a client in/out of cycling, with visual feedback via a semi-transparent overlay.
 pub fn toggleThumbnailExclusion(manager: *HotkeyManager, source_hwnd: win32.HWND) void {
-    const thumbnail = manager.painter.getThumbnailBySourceHwnd(source_hwnd) orelse return;
+    const thumbnail_set = manager.app.thumbnail_set orelse return;
+    const thumbnail = thumbnail_set.getThumbnailBySourceHwnd(source_hwnd) orelse return;
     const character_name = thumbnail.character_name;
 
     // Exclusions are by name, and every login-screen window shares "EVE", so one toggle would hit them all.
@@ -27,15 +26,15 @@ pub fn toggleThumbnailExclusion(manager: *HotkeyManager, source_hwnd: win32.HWND
     };
     // The excluded list's order changed, so its cycle position no longer means anything.
     manager.cycle.excluded_index = null;
-    manager.painter.refreshExclusion(thumbnail);
+    thumbnail_set.refreshExclusion(thumbnail);
 
     if (thumbnail.is_excluded_from_cycle and manager.live().exclusion.autoMinimizeExcluded) {
         animation.showClient(manager.live(), source_hwnd, win32.SW_FORCEMINIMIZE);
     }
 
-    manager.painter.notify(source_hwnd, .{ .notification_type = .CycleExclusion, .state = if (thumbnail.is_excluded_from_cycle) .excluded else .included });
+    thumbnail_set.notify(source_hwnd, .{ .notification_type = .CycleExclusion, .state = if (thumbnail.is_excluded_from_cycle) .excluded else .included });
 
-    manager.painter.renderThumbnail(thumbnail) catch |err| {
+    thumbnail_set.renderThumbnail(thumbnail) catch |err| {
         slog.err("Failed to render thumbnail after exclusion toggle: {}", .{err});
     };
 
@@ -51,14 +50,15 @@ pub fn clearLoggedOutExclusion(manager: *HotkeyManager, character_name: []const 
     slog.info("Cleared cycle exclusion for {s} on logout", .{character_name});
 }
 
-/// Toggle the thumbnail currently under the cursor in/out of a group; no-op if nothing's hovered.
+/// No-op if nothing's hovered.
 pub fn assignHoveredToGroup(manager: *HotkeyManager, group_index: usize) void {
     if (group_index >= manager.config.hotkeyGroups.items.len) {
         slog.err("Failed to assign to group: index {} is out of range", .{group_index});
         return;
     }
 
-    const thumbnail = input.resolveThumbnailUnderCursor() orelse {
+    const thumbnail_set = manager.app.thumbnail_set orelse return;
+    const thumbnail = thumbnail_set.thumbnailUnderCursor() orelse {
         slog.debug("Group {} assign pressed but no thumbnail is under the cursor", .{group_index});
         return;
     };
@@ -80,10 +80,10 @@ pub fn assignHoveredToGroup(manager: *HotkeyManager, group_index: usize) void {
     manager.cycle.group_cursors[group_index] = null;
 
     // Before the reflow, so the reflow's render already has the new label.
-    manager.painter.refreshGroupBadge(thumbnail);
+    thumbnail_set.refreshGroupBadge(thumbnail);
     // Membership decides which space a character goes to, and its order there.
-    manager.painter.reflowIfSpacesActive();
-    manager.painter.renderThumbnail(thumbnail) catch |err| {
+    thumbnail_set.reflowIfSpacesActive();
+    thumbnail_set.renderThumbnail(thumbnail) catch |err| {
         slog.err("Failed to render thumbnail after group assignment: {}", .{err});
     };
 
@@ -92,5 +92,5 @@ pub fn assignHoveredToGroup(manager: *HotkeyManager, group_index: usize) void {
         group.name
     else
         std.mem.print(&group_label_buf, "Hotkey Group {}", .{group_index + 1}) catch unreachable;
-    manager.painter.notify(thumbnail.source_hwnd, .{ .notification_type = .GroupMembership, .state = if (added) .added else .removed, .target = group_label });
+    thumbnail_set.notify(thumbnail.source_hwnd, .{ .notification_type = .GroupMembership, .state = if (added) .added else .removed, .target = group_label });
 }

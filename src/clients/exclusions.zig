@@ -12,12 +12,7 @@ pub const Exclusions = struct {
         return .{ .allocator = allocator };
     }
 
-    pub fn setGlobalInstance(self: *Exclusions) void {
-        g_exclusions_ptr = self;
-    }
-
     pub fn deinit(self: *Exclusions) void {
-        if (g_exclusions_ptr == self) g_exclusions_ptr = null;
         for (self.names.items) |name| self.allocator.free(name);
         self.names.deinit(self.allocator);
     }
@@ -42,15 +37,6 @@ pub const Exclusions = struct {
         return true;
     }
 };
-
-/// Set by main.zig for code that can't be handed it directly (Painter, travel).
-pub var g_exclusions_ptr: ?*Exclusions = null;
-
-/// False before main.zig sets the instance.
-pub fn isExcluded(character_name: []const u8) bool {
-    const exclusions = g_exclusions_ptr orelse return false;
-    return exclusions.contains(character_name);
-}
 
 const testing = std.testing;
 

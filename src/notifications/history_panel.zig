@@ -8,8 +8,8 @@ const list_look = @import("../thumbnail/list_look.zig");
 const notification = @import("notification.zig");
 const history = @import("history.zig");
 const history_look = @import("history_look.zig");
-const painter_mod = @import("../painter.zig");
-const activation = @import("../clients/activation.zig");
+const app = @import("../app.zig");
+const activation = @import("../control/activation.zig");
 const drag_panel = @import("../drag/panel.zig");
 const pixel_buffer = @import("../util/pixel_buffer.zig");
 const log = @import("../log.zig");
@@ -24,7 +24,6 @@ const TIMESTAMP_BUCKET_MS: u64 = 15_000;
 
 const HISTORY_PANEL_WINDOW_CLASS = "EVE_HISTORY_PANEL_CLASS";
 
-/// The fonts the text draws with, and their line heights.
 const PanelText = struct {
     name_font: win32.HFONT,
     small_font: win32.HFONT,
@@ -54,7 +53,7 @@ pub const HistoryPanel = struct {
         self.window = null;
     }
 
-    /// Whether the panel is actually on-screen, accounting for hideNotifInfoPanelWhenNoCharacters and the tray-toggle override; drives both the render/hide gate and the tray menu's checked state.
+    /// Accounts for hideNotifInfoPanelWhenNoCharacters and the tray-toggle override.
     pub fn isVisible(self: *const HistoryPanel, config: *const config_mod.Config, any_character_logged_in: bool) bool {
         if (self.window == null) return false;
         if (!config.display.hideNotifInfoPanelWhenNoCharacters) return true;
@@ -94,14 +93,14 @@ pub const HistoryPanel = struct {
         if (self.window) |*window| window.panel.followPosition(store.live.display.notifInfoPanelX, store.live.display.notifInfoPanelY);
     }
 
-    /// Per-tick: renders the panel from the painter's live history, or hides it.
-    pub fn update(self: *HistoryPanel, painter: *const painter_mod.Painter, any_character_logged_in: bool) void {
+    /// Per-tick: renders the panel from `notifications`, or hides it.
+    pub fn update(self: *HistoryPanel, notifications: *const history.NotificationHistory, config: *const config_mod.Config, any_character_logged_in: bool) void {
         if (self.had_characters and !any_character_logged_in) self.is_forced_visible = false;
         self.had_characters = any_character_logged_in;
 
         const window = if (self.window) |*w| w else return;
-        if (self.isVisible(painter.config, any_character_logged_in)) {
-            window.render(painter) catch |err| {
+        if (self.isVisible(config, any_character_logged_in)) {
+            window.render(notifications) catch |err| {
                 slog.err("Failed to render History Panel window: {}", .{err});
             };
         } else {
@@ -149,7 +148,7 @@ pub const HistoryPanelWindow = struct {
 
     fn saveWindowPosition(self: *const HistoryPanelWindow) void {
         if (!self.config.display.rememberNotifInfoPanelPosition) return;
-        const top_left = self.panel.topLeft();
+        const top_left = self.panel.topLeft() orelse return;
         self.store.update(.{ .display = .{ .notifInfoPanelX = top_left.x, .notifInfoPanelY = top_left.y } });
     }
 
@@ -162,7 +161,7 @@ pub const HistoryPanelWindow = struct {
         setCategoryEnabled(self.store, category, !history_look.isCategoryEnabled(&self.config.display, category));
     }
 
-    fn computeRenderSignature(self: *const HistoryPanelWindow, painter: *const painter_mod.Painter) u64 {
+    fn computeRenderSignature(self: *const HistoryPanelWindow, notifications: *const history.NotificationHistory) u64 {
         var hasher = std.hash.Wyhash.init(0);
         hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelWidth));
         hasher.update(std.mem.asBytes(&self.config.display.notifInfoPanelHeight));
@@ -179,13 +178,13 @@ pub const HistoryPanelWindow = struct {
             const is_enabled = history_look.isCategoryEnabled(&self.config.display, category);
             hasher.update(std.mem.asBytes(&is_enabled));
         }
-        hasher.update(std.mem.asBytes(&painter.notification_history.revision));
+        hasher.update(std.mem.asBytes(&notifications.revision));
 
         const shows_timestamp = self.config.display.notifInfoPanelShowTimestamp;
         const now = win32.Ticks.now();
 
         var entry_buf: [history.CAPACITY]history.Entry = undefined;
-        const entries = painter.notification_history.snapshot(&entry_buf);
+        const entries = notifications.snapshot(&entry_buf);
         for (entries) |*entry| {
             hasher.update(entry.characterName());
             hasher.update(entry.text());
@@ -232,17 +231,17 @@ pub const HistoryPanelWindow = struct {
         self.history_row_count = shown_count;
     }
 
-    /// Called every painter tick; redraws only when the render signature changed.
-    pub fn render(self: *HistoryPanelWindow, painter: *const painter_mod.Painter) !void {
+    /// Called every tick; redraws only when the render signature changed.
+    pub fn render(self: *HistoryPanelWindow, notifications: *const history.NotificationHistory) !void {
         const display = &self.config.display;
         try self.panel.ensureFont("History Panel", display.notifInfoPanelFontName, display.notifInfoPanelFontSize, display.notifInfoPanelFontWeight);
         try self.panel.ensureSmallFont("History Panel small", display.notifInfoPanelFontName, list_look.smallFontSize(display.notifInfoPanelFontSize), display.notifInfoPanelFontWeight);
 
-        const signature = self.computeRenderSignature(painter);
+        const signature = self.computeRenderSignature(notifications);
         if (self.panel.isUnchanged(signature)) return;
 
         var entry_buf: [history.CAPACITY]history.Entry = undefined;
-        const entries = painter.notification_history.snapshot(&entry_buf);
+        const entries = notifications.snapshot(&entry_buf);
         const sizes = history_look.metrics(display);
         self.buildRows(entries, history_look.rowCapacity(display, sizes));
 
@@ -255,19 +254,19 @@ pub const HistoryPanelWindow = struct {
         // A large font can leave no room below the header.
         const footer_top = @max(sizes.header_height, panel_height - sizes.footer_height);
 
-        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, 0, width, height, list_look.PANEL);
-        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
+        pixel_buffer.fillRect(bitmap.canvas(), 0, 0, width, height, list_look.PANEL);
+        pixel_buffer.fillRect(bitmap.canvas(), 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
         if (sizes.footer_height > 0) {
-            pixel_buffer.fillRect(bitmap.pixels, width, height, 0, @intCast(footer_top), width, 1, list_look.DIVIDER);
+            pixel_buffer.fillRect(bitmap.canvas(), 0, @intCast(footer_top), width, 1, list_look.DIVIDER);
             for (history_look.CATEGORY_ORDER, 0..) |category, index| {
                 if (!history_look.isCategoryEnabled(display, category)) continue;
                 const span = history_look.filterSpan(panel_width, index);
-                pixel_buffer.fillRoundedRect(bitmap.pixels, width, height, @intCast(span.left), @intCast(footer_top + history_look.FILTER_GAP), @intCast(span.right - span.left), @intCast(sizes.header_height), history_look.FILTER_RADIUS, history_look.FILTER_ON);
+                pixel_buffer.fillRoundedRect(bitmap.canvas(), @intCast(span.left), @intCast(footer_top + history_look.FILTER_GAP), @intCast(span.right - span.left), @intCast(sizes.header_height), history_look.FILTER_RADIUS, history_look.FILTER_ON);
             }
         }
 
-        if (self.panel.font) |name_font| {
-            if (self.panel.small_font) |small_font| {
+        if (self.panel.font.handle) |name_font| {
+            if (self.panel.small_font.handle) |small_font| {
                 const old_font = win32.SelectObject(dc, small_font);
                 // A font still selected into the DC can't be deleted when the settings change.
                 defer if (old_font) |font| {
@@ -280,12 +279,11 @@ pub const HistoryPanelWindow = struct {
             }
         }
 
-        pixel_buffer.fixTextAlpha(bitmap.pixels, width, height);
-        pixel_buffer.drawRoundedFrame(bitmap.pixels, bitmap.width, bitmap.height, list_look.CORNER_RADIUS, list_look.BORDER);
+        pixel_buffer.fixTextAlpha(bitmap.canvas());
+        pixel_buffer.drawRoundedFrame(bitmap.canvas(), list_look.CORNER_RADIUS, list_look.BORDER);
         self.panel.present(display.notifInfoPanelOpacity, signature);
     }
 
-    /// The header, the rows (or why there are none) and the filter buttons' labels.
     fn drawText(self: *const HistoryPanelWindow, dc: win32.HDC, entries: []const history.Entry, sizes: history_look.Metrics, panel_width: i32, footer_top: i32, text: PanelText) void {
         _ = win32.SelectObject(dc, text.small_font);
         drawLine(dc, history_look.HEADER_TEXT, list_look.PADDING_X, @divTrunc(sizes.header_height - text.small_height, 2), list_look.MUTED);
@@ -304,7 +302,6 @@ pub const HistoryPanelWindow = struct {
         }
     }
 
-    /// The name (or a merged row's count) then the message in the main font, and the timestamp right-aligned at `right` in the small one.
     fn drawRow(self: *const HistoryPanelWindow, dc: win32.HDC, entries: []const history.Entry, row: HistoryRow, row_top: i32, row_height: i32, right: i32, text: PanelText, now: win32.Ticks) void {
         const entry = &entries[row.first];
         const left = list_look.PADDING_X;
@@ -368,30 +365,29 @@ fn registerWindowClass(instance: win32.HINSTANCE) !void {
 }
 
 fn historyWindow() ?*HistoryPanelWindow {
-    const painter = painter_mod.g_painter_ptr orelse return null;
-    return if (painter.history_panel.window) |*window| window else null;
+    const running = app.g_app orelse return null;
+    return if (running.notifications.panel.window) |*window| window else null;
 }
 
 fn historyPanelWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
-    // The painter only holds the panel once its window exists, so creation's messages go without a header.
+    // The notification center only holds the panel once its window exists, so creation's messages go without a header.
     const header_height = if (historyWindow()) |window| history_look.metrics(&window.config.display).header_height else 0;
-    if (drag_panel.handleMessage(hwnd, msg, lParam, header_height)) |result| return result;
+    if (drag_panel.handleMessage(app.currentThumbnailSet(), hwnd, msg, lParam, header_height)) |result| return result;
     switch (msg) {
         win32.WM_ENTERSIZEMOVE => {
             drag_panel.beginPanelDrag(hwnd);
             // No single character owns this panel, so every saved position shows as a ghost.
-            if (painter_mod.g_painter_ptr) |painter| painter.ghost_overlay.show(painter, "");
+            if (app.currentThumbnailSet()) |thumbnail_set| thumbnail_set.ghost_overlay.show(thumbnail_set.instance, &thumbnail_set.renderer.font_cache, thumbnail_set.config, "");
             return 0;
         },
         win32.WM_EXITSIZEMOVE => {
-            const painter = painter_mod.g_painter_ptr orelse return 0;
-            painter.ghost_overlay.hide();
-            if (painter.history_panel.window) |*window| window.saveWindowPosition();
+            if (app.currentThumbnailSet()) |thumbnail_set| thumbnail_set.ghost_overlay.hide();
+            if (historyWindow()) |window| window.saveWindowPosition();
             return 0;
         },
         win32.WM_LBUTTONDOWN => {
-            const painter = painter_mod.g_painter_ptr orelse return 0;
-            const window = if (painter.history_panel.window) |*w| w else return 0;
+            const running = app.g_app orelse return 0;
+            const window = historyWindow() orelse return 0;
             const sizes = history_look.metrics(&window.config.display);
             const y = win32.lparamY(lParam);
             if (y < sizes.header_height) return 0;
@@ -404,9 +400,9 @@ fn historyPanelWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARA
             if (row_index >= window.history_row_count) return 0;
             const history_row = window.history_rows[row_index];
             if (history_row.count > 1) {
-                painter.notification_history.unmergeRange(history_row.first, history_row.last);
+                running.notifications.history.unmergeRange(history_row.first, history_row.last);
             } else {
-                activation.activate(history_row.hwnd);
+                activation.activate(running, history_row.hwnd);
             }
             return 0;
         },
@@ -427,7 +423,6 @@ fn drawFitted(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32, max_w
     return @intCast(measureTextWidth(dc, fitted));
 }
 
-/// The selected font's line height.
 fn lineHeight(dc: win32.HDC) i32 {
     return gdi_overlay.measureTextSize(MAX_TEXT_LENGTH, dc, "Ag").cy;
 }

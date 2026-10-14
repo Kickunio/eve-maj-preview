@@ -6,7 +6,7 @@ const panel_window = @import("../platform/panel_window.zig");
 const config_mod = @import("../config.zig");
 const types = @import("../config/types.zig");
 const list_look = @import("list_look.zig");
-const painter_mod = @import("../painter.zig");
+const app = @import("../app.zig");
 const window = @import("window.zig");
 const input = @import("input.zig");
 const drag_panel = @import("../drag/panel.zig");
@@ -22,7 +22,6 @@ const RIGHT_SLOT_MIN_WIDTH: i32 = 70;
 
 const LIST_WINDOW_CLASS = "EVE_LIST_CLASS";
 
-/// The fonts rows draw with, and their line heights.
 const RowText = struct {
     name_font: win32.HFONT,
     small_font: win32.HFONT,
@@ -57,7 +56,7 @@ pub const ListWindow = struct {
         self.panel.deinit();
     }
 
-    /// Matches the panel to its configured position; whether it exists at all is the view mode's, which rebuilds the Painter.
+    /// Matches the panel to its configured position; whether it exists at all is the view mode's, which rebuilds the ThumbnailSet.
     pub fn sync(self: *ListWindow) void {
         self.panel.followPosition(self.config.display.startX, self.config.display.startY);
         win32.setClickThroughStyle(self.panel.hwnd, self.config.interaction.clickThrough);
@@ -77,7 +76,7 @@ pub const ListWindow = struct {
 
     fn saveWindowPosition(self: *const ListWindow) void {
         if (!self.config.display.rememberListViewPosition) return;
-        const top_left = self.panel.topLeft();
+        const top_left = self.panel.topLeft() orelse return;
         self.store.update(.{ .display = .{ .startX = top_left.x, .startY = top_left.y } });
     }
 
@@ -91,12 +90,12 @@ pub const ListWindow = struct {
 
     /// Puts `rows` in the configured order and records each row's client.
     fn sortRows(self: *ListWindow, thumbnails: []const ThumbnailWindow) !void {
-        const SortContext = struct {
-            config: *const config_mod.Config,
+        const AlphabeticalContext = struct {
             thumbnails: []const ThumbnailWindow,
-            order_map: ?*const std.StringHashMap(usize),
 
-            fn alphabeticalLessThan(a: *const ThumbnailWindow, b: *const ThumbnailWindow, a_index: usize, b_index: usize) bool {
+            fn lessThan(context: @This(), a_index: usize, b_index: usize) bool {
+                const a = &context.thumbnails[a_index];
+                const b = &context.thumbnails[b_index];
                 switch (std.ascii.orderIgnoreCase(a.cached_display_name, b.cached_display_name)) {
                     .lt => return true,
                     .gt => return false,
@@ -108,32 +107,26 @@ pub const ListWindow = struct {
                     .eq => return a_index < b_index,
                 }
             }
+        };
+        const ConfiguredContext = struct {
+            thumbnails: []const ThumbnailWindow,
+            order_map: *const std.StringHashMap(usize),
 
             fn lessThan(context: @This(), a_index: usize, b_index: usize) bool {
-                const a = &context.thumbnails[a_index];
-                const b = &context.thumbnails[b_index];
-                return switch (context.config.display.listViewOrder) {
-                    .Tracked => a_index < b_index,
-                    .Alphabetical => alphabeticalLessThan(a, b, a_index, b_index),
-                    .ConfiguredCharacters => config_mod.orderMapLessThan(context.order_map.?, a.character_name, b.character_name, a_index, b_index),
-                };
+                return config_mod.orderMapLessThan(context.order_map, context.thumbnails[a_index].character_name, context.thumbnails[b_index].character_name, a_index, b_index);
             }
         };
 
-        // Built once per sort instead of rescanning the configured characters in every comparison.
-        var order_map: ?std.StringHashMap(usize) = null;
-        defer if (order_map) |*m| m.deinit();
-        if (self.config.display.listViewOrder == .ConfiguredCharacters) {
-            order_map = try config_mod.buildCharacterOrderMap(self.config.characters.items, self.panel.allocator);
-        }
-
         // Rows start in tracked order.
-        if (self.config.display.listViewOrder != .Tracked) {
-            std.sort.pdq(usize, self.rows.items, SortContext{
-                .config = self.config,
-                .thumbnails = thumbnails,
-                .order_map = if (order_map) |*m| m else null,
-            }, SortContext.lessThan);
+        switch (self.config.display.listViewOrder) {
+            .Tracked => {},
+            .Alphabetical => std.sort.pdq(usize, self.rows.items, AlphabeticalContext{ .thumbnails = thumbnails }, AlphabeticalContext.lessThan),
+            .ConfiguredCharacters => {
+                // Built once per sort instead of rescanning the configured characters in every comparison.
+                var order_map = try config_mod.buildCharacterOrderMap(self.config.characters.items, self.panel.allocator);
+                defer order_map.deinit();
+                std.sort.pdq(usize, self.rows.items, ConfiguredContext{ .thumbnails = thumbnails, .order_map = &order_map }, ConfiguredContext.lessThan);
+            },
         }
 
         try self.row_source_hwnds.resize(self.panel.allocator, self.rows.items.len);
@@ -193,7 +186,7 @@ pub const ListWindow = struct {
             hasher.update(std.mem.asBytes(&thumbnail.stats.has_mining));
             hasher.update(std.mem.asBytes(&thumbnail.stats.has_bounty));
             if (thumbnail.system_name.len > 0) hasher.update(std.mem.asBytes(&thumbnail.cached_system_color));
-            if (thumbnail.cached_character_color) |cc| hasher.update(std.mem.asBytes(&cc));
+            if (thumbnail.cached_character_color) |character_color| hasher.update(std.mem.asBytes(&character_color));
             if (render_state == .active) {
                 const badge_color = self.resolveActiveBadgeColor(thumbnail);
                 hasher.update(std.mem.asBytes(&badge_color));
@@ -229,7 +222,7 @@ pub const ListWindow = struct {
         return out[0..count];
     }
 
-    /// Called every painter tick; redraws only when the render signature changed.
+    /// Called every tick; redraws only when the render signature changed.
     pub fn render(self: *ListWindow, thumbnails: []const ThumbnailWindow, active_source_hwnd: ?win32.HWND) !void {
         const display = &self.config.display;
         try self.panel.ensureFont("List View", display.listViewFontName, display.listViewFontSize, display.listViewFontWeight);
@@ -262,13 +255,13 @@ pub const ListWindow = struct {
         const height: usize = bitmap.height;
         const dc = bitmap.mem_dc;
 
-        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, 0, width, height, list_look.PANEL);
-        pixel_buffer.fillRect(bitmap.pixels, width, height, 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
+        pixel_buffer.fillRect(bitmap.canvas(), 0, 0, width, height, list_look.PANEL);
+        pixel_buffer.fillRect(bitmap.canvas(), 0, @intCast(sizes.header_height - 1), width, 1, list_look.DIVIDER);
 
         var row_text: ?RowText = null;
         var old_font: ?win32.HANDLE = null;
-        if (self.panel.font) |name_font| {
-            if (self.panel.small_font) |small_font| {
+        if (self.panel.font.handle) |name_font| {
+            if (self.panel.small_font.handle) |small_font| {
                 old_font = win32.SelectObject(dc, small_font);
                 const small_height = lineHeight(dc);
                 var header_buf: [list_look.HEADER_TEXT_MAX]u8 = undefined;
@@ -284,17 +277,15 @@ pub const ListWindow = struct {
 
         for (self.rows.items, 0..) |thumbnail_index, row_index| self.drawRow(bitmap, &thumbnails[thumbnail_index], row_index, columns, sizes, row_text, active_source_hwnd);
 
-        pixel_buffer.fixTextAlpha(bitmap.pixels, width, height);
-        pixel_buffer.drawRoundedFrame(bitmap.pixels, bitmap.width, bitmap.height, list_look.CORNER_RADIUS, list_look.BORDER);
+        pixel_buffer.fixTextAlpha(bitmap.canvas());
+        pixel_buffer.drawRoundedFrame(bitmap.canvas(), list_look.CORNER_RADIUS, list_look.BORDER);
 
         self.panel.present(display.listViewOpacity, signature);
     }
 
-    /// Row `row_index` in display order: its tint, status badge, name, and one right-hand slot for a notification, stats or system.
+    /// `row_index` is in display order.
     fn drawRow(self: *const ListWindow, bitmap: *const gdi_overlay.OverlayBitmap, thumbnail: *const ThumbnailWindow, row_index: usize, columns: i32, sizes: list_look.Metrics, row_text: ?RowText, active_source_hwnd: ?win32.HWND) void {
         const display = &self.config.display;
-        const width: usize = bitmap.width;
-        const height: usize = bitmap.height;
         const column_count: usize = @intCast(columns);
         const row: i32 = @intCast(row_index / column_count);
         const column: i32 = @intCast(row_index % column_count);
@@ -312,7 +303,7 @@ pub const ListWindow = struct {
             list_look.activeTint(active_color)
         else
             null;
-        if (tint) |row_bg| pixel_buffer.fillRect(bitmap.pixels, width, height, @intCast(column_left), @intCast(row_top), @intCast(sizes.column_width), @intCast(sizes.row_height), row_bg);
+        if (tint) |row_bg| pixel_buffer.fillRect(bitmap.canvas(), @intCast(column_left), @intCast(row_top), @intCast(sizes.column_width), @intCast(sizes.row_height), row_bg);
 
         const badge_color: u32 = if (is_excluded)
             list_look.BADGE_EXCLUDED
@@ -367,7 +358,7 @@ pub const ListWindow = struct {
     }
 };
 
-var g_class_registered: bool = false;
+var g_is_class_registered: bool = false;
 
 /// The newest notification's border colour, which tints an alerting row.
 fn alertColor(thumbnail: *const ThumbnailWindow) u32 {
@@ -376,20 +367,20 @@ fn alertColor(thumbnail: *const ThumbnailWindow) u32 {
 }
 
 fn registerWindowClass(instance: win32.HINSTANCE) !void {
-    if (g_class_registered) return;
+    if (g_is_class_registered) return;
     try gdi_overlay.registerWindowClass(instance, listWindowProc, LIST_WINDOW_CLASS, null);
-    g_class_registered = true;
+    g_is_class_registered = true;
 }
 
 fn listWindow() ?*ListWindow {
-    const painter = painter_mod.g_painter_ptr orelse return null;
-    return if (painter.list_window) |*list_window| list_window else null;
+    const thumbnail_set = app.currentThumbnailSet() orelse return null;
+    return if (thumbnail_set.list_window) |*list_window| list_window else null;
 }
 
 fn listWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
-    // The painter only holds the list once its window exists, so creation's messages go without a header.
+    // The thumbnail set only holds the list once its window exists, so creation's messages go without a header.
     const header_height = if (listWindow()) |list_window| list_look.metrics(&list_window.config.display).header_height else 0;
-    if (drag_panel.handleMessage(hwnd, msg, lParam, header_height)) |result| return result;
+    if (drag_panel.handleMessage(app.currentThumbnailSet(), hwnd, msg, lParam, header_height)) |result| return result;
     switch (msg) {
         win32.WM_ENTERSIZEMOVE => {
             drag_panel.beginPanelDrag(hwnd);
@@ -419,21 +410,20 @@ fn listWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPara
     }
 }
 
-/// The row's state marker in `style`, for the row whose top-left is `column_left`, `row_top`.
 fn drawIndicator(bitmap: *const gdi_overlay.OverlayBitmap, style: types.ListIndicatorStyle, column_left: i32, row_top: i32, row_height: i32, argb: u32) void {
-    const width: usize = bitmap.width;
-    const height: usize = bitmap.height;
+    const canvas = bitmap.canvas();
     const radius = list_look.BADGE_RADIUS;
     const center_x = column_left + list_look.PADDING_X + radius;
     const center_y = row_top + @divTrunc(row_height, 2);
     switch (style) {
-        .Dot => drawDot(bitmap.pixels, width, height, center_x, center_y, radius, argb),
-        .Square => pixel_buffer.fillRect(bitmap.pixels, width, height, @intCast(center_x - radius), @intCast(center_y - radius), @intCast(radius * 2), @intCast(radius * 2), argb),
+        .Dot => drawDot(canvas, center_x, center_y, radius, argb),
+        .Square => pixel_buffer.fillRect(canvas, @intCast(center_x - radius), @intCast(center_y - radius), @intCast(radius * 2), @intCast(radius * 2), argb),
         .None => {},
     }
 }
 
-fn drawDot(pixels: [*]u32, width: usize, height: usize, center_x: i32, center_y: i32, radius: i32, argb: u32) void {
+fn drawDot(canvas: pixel_buffer.Canvas, center_x: i32, center_y: i32, radius: i32, argb: u32) void {
+    const width = canvas.width;
     const radius_squared = radius * radius;
     var dy: i32 = -radius;
     while (dy <= radius) : (dy += 1) {
@@ -442,8 +432,8 @@ fn drawDot(pixels: [*]u32, width: usize, height: usize, center_x: i32, center_y:
             if (dx * dx + dy * dy <= radius_squared) {
                 const x: i32 = center_x + dx;
                 const y: i32 = center_y + dy;
-                if (x >= 0 and y >= 0 and @as(usize, @intCast(x)) < width and @as(usize, @intCast(y)) < height) {
-                    pixels[@as(usize, @intCast(y)) * width + @as(usize, @intCast(x))] = argb;
+                if (x >= 0 and y >= 0 and @as(usize, @intCast(x)) < width and @as(usize, @intCast(y)) < canvas.height) {
+                    canvas.pixels[@as(usize, @intCast(y)) * width + @as(usize, @intCast(x))] = argb;
                 }
             }
         }
@@ -459,7 +449,6 @@ fn drawText(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32) void {
     _ = win32.TextOutA(dc, x, y, &text_z, @intCast(length));
 }
 
-/// The selected font's line height.
 fn lineHeight(dc: win32.HDC) i32 {
     return gdi_overlay.measureTextSize(TEXT_BUFFER_SIZE, dc, "Ag").cy;
 }
@@ -499,7 +488,6 @@ fn drawStatsRight(dc: win32.HDC, display: *const config_mod.DisplayConfig, readi
     }
 }
 
-/// Truncated with "..." to fit `max_width` pixels.
 fn drawTextTruncated(dc: win32.HDC, text: []const u8, x: i32, y: i32, rgb: u32, max_width: usize) void {
     var out: [TEXT_BUFFER_SIZE:0]u8 = undefined;
     const truncated = gdi_overlay.truncateTextToFit(TEXT_BUFFER_SIZE, dc, &out, text, max_width);

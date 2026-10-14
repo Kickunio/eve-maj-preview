@@ -118,6 +118,16 @@ pub const NotificationStack = struct {
         return self.removeIf(allocator, Context{});
     }
 
+    /// Removes the ones read from the logs, keeping feedback for the user's own actions; returns whether anything was removed.
+    pub fn dismissLogDriven(self: *NotificationStack, allocator: std.mem.Allocator) bool {
+        const Context = struct {
+            fn shouldRemove(_: @This(), entry: ActiveNotification) bool {
+                return !notification.isUserAction(entry.notification_type);
+            }
+        };
+        return self.removeIf(allocator, Context{});
+    }
+
     /// Returns whether anything expired; duration_ms == 0 means permanent.
     pub fn expire(self: *NotificationStack, allocator: std.mem.Allocator, now: win32.Ticks) bool {
         const Context = struct {
@@ -204,6 +214,18 @@ test "the thumbnail stops being revealed once the revealing entry expires" {
     try testing.expect(notifications.expire(testing.allocator, .{ .ms = 1500 }));
     try testing.expect(!notifications.revealsThumbnail());
     try testing.expectEqual(1, notifications.len);
+}
+
+test "dismissing log-driven entries keeps the user's own actions" {
+    var notifications: NotificationStack = .{};
+    defer notifications.deinit(testing.allocator);
+    notifications.push(testing.allocator, try testEntry(.FleetInvite, false, 0));
+    notifications.push(testing.allocator, try testEntry(.ProfileSwitch, false, 0));
+    notifications.push(testing.allocator, try testEntry(.TakingDamage, false, 0));
+    try testing.expect(notifications.dismissLogDriven(testing.allocator));
+    try testing.expectEqual(1, notifications.len);
+    try testing.expectEqual(notification.NotificationType.ProfileSwitch, notifications.entries[0].notification_type);
+    try testing.expect(!notifications.dismissLogDriven(testing.allocator));
 }
 
 test "pushing a type already shown replaces its entry" {

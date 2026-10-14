@@ -55,7 +55,6 @@ pub const Layout = struct {
         return count;
     }
 
-    /// How many current thumbnails each space holds.
     pub fn spaceCounts(self: Layout) spaces.SpaceCounts {
         var counts: spaces.SpaceCounts = @splat(0);
         for (self.thumbnails) |thumbnail| {

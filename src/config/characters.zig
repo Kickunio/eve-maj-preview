@@ -20,7 +20,6 @@ pub const Position = struct {
     }
 };
 
-/// A saved EVE client window's size, kept beside its windowPosition.
 pub const WindowSize = struct {
     width: i32,
     height: i32,

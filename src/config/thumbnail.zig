@@ -1,6 +1,5 @@
 //! Thumbnail appearance, per-state visuals included.
 const types = @import("types.zig");
-const state_mod = @import("../thumbnail/state.zig");
 const wire = @import("wire.zig");
 const ranges_mod = @import("ranges.zig");
 const notifications_mod = @import("notifications.zig");
@@ -8,6 +7,15 @@ const notifications_mod = @import("notifications.zig");
 const NotificationConfig = notifications_mod.NotificationConfig;
 
 const BORDER_WIDTH = .{ 1, 50 };
+
+/// Which of the per-state visuals a thumbnail draws with; decided live by ThumbnailWindow.effectiveRenderState, never saved.
+pub const ThumbnailState = enum {
+    inactive,
+    active,
+    alert,
+    minimized,
+    dragging,
+};
 
 pub const StateVisualConfig = struct {
     borderWidth: ?u8 = null,
@@ -97,7 +105,7 @@ pub const ThumbnailConfig = struct {
     minimized: StateVisualConfig = .{ .showThumbnail = true },
     dragging: StateVisualConfig = .{ .showThumbnail = true },
 
-    pub fn getStateConfig(self: *const ThumbnailConfig, state: state_mod.ThumbnailState) StateVisualConfig {
+    pub fn getStateConfig(self: *const ThumbnailConfig, state: ThumbnailState) StateVisualConfig {
         return switch (state) {
             .active => self.active,
             .inactive => self.inactive,

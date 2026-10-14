@@ -14,7 +14,7 @@ pub fn show(context: *ui.Frame) !void {
     if (try widgets.checkbox(context, .src(@src()), "Sync Fonts and Backgrounds", &chips.g_should_sync_styling)) {
         if (chips.g_should_sync_styling) chips.syncFromCharacterName();
     }
-    try widgets.hintText(context, .src(@src()), "Editing one overlay's font or background applies it to all the others.");
+    try widgets.hintText(context, .src(@src()), "Changing one text's font or background changes them all.");
     try options.close(context);
     // Outside the group, so it still previews size and opacity while texts are off.
     try stage.show(context);

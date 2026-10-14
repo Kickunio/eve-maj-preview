@@ -54,7 +54,6 @@ pub const NotificationTypeConfig = struct {
     pub const Wire = wire.Wire(NotificationTypeConfig);
 };
 
-/// Each notification type's settings, defaulting to that type's own defaults (see NotificationTypeConfig.defaultFor).
 pub const NotificationTypeConfigs = struct {
     const Map = std.enums.EnumArray(notification.NotificationType, NotificationTypeConfig);
 

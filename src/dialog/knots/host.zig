@@ -4,8 +4,10 @@ const knots = @import("knots");
 const ui = @import("ui");
 const win32 = @import("../../platform/win32.zig");
 const gdi_overlay = @import("../../platform/gdi_overlay.zig");
-const main = @import("../../main.zig");
+const app_mod = @import("../../app.zig");
 const config = @import("../../config.zig");
+const types = @import("../../config/types.zig");
+const monitors = @import("../../layout/monitors.zig");
 const session = @import("session.zig");
 const bind = @import("bind.zig");
 const form = @import("form.zig");
@@ -25,7 +27,7 @@ const hotkeys = @import("tabs/hotkeys.zig");
 const hotkey_groups = @import("tabs/hotkey_groups.zig");
 const event_alerts = @import("tabs/event_alerts.zig");
 const characters = @import("tabs/characters.zig");
-const lang = @import("lang.zig");
+const lang = @import("../../lang/lang.zig");
 const search = @import("search.zig");
 const import_dialog = @import("import_dialog.zig");
 const update_notice = @import("update_notice.zig");
@@ -37,13 +39,15 @@ const client_list = @import("tabs/client_list.zig");
 const log = @import("../../log.zig");
 
 const GlobalConfig = config.GlobalConfig;
+const Language = types.Language;
 const slog = log.Scoped("dialog_knots");
 
 const WINDOW_TITLE = "EVE-Maj Preview Configuration";
-/// In logical pixels; knots has no zoom yet.
-const DESIGN_WIDTH = 820;
-const DESIGN_HEIGHT = 900;
+/// In logical pixels, like designWidth's; knots has no zoom yet.
+const DESIGN_HEIGHT = 920;
 const DEFAULT_POSITION: win32.POINT = .{ .x = 20, .y = 20 };
+/// On the window itself; clears the footer's status once it has shown long enough.
+const STATUS_TIMER_ID = 1;
 
 /// Posted to the timer window as wParam of WM_KNOTS_COMMAND, so none runs inside a tray handler or a frame.
 pub const Command = enum(usize) {
@@ -62,6 +66,8 @@ pub const Command = enum(usize) {
     prices_fetched,
     /// A character portrait's load result, as a *portraits.Loaded in lParam.
     portrait_loaded,
+    /// Another language was picked: the window takes its width and title.
+    fit_language,
 };
 
 const State = enum { closed, open };
@@ -80,10 +86,18 @@ var g_is_present_mode_chosen: bool = false;
 /// Where placeWindowHook puts the window knots creates, while App.init runs.
 var g_spawn_position: ?win32.POINT = null;
 var g_spawn_hook: ?win32.HHOOK = null;
+/// The running window, for retitling it; null while it's closed.
+var g_app: ?*knots.App = null;
+/// The language the window's width and title are for, which trails a newly picked one until fit_language runs.
+var g_window_language: Language = .en;
+/// A fit_language command is on its way, so another isn't posted each frame until it runs.
+var g_is_fit_posted: bool = false;
 
-pub fn init(allocator: std.mem.Allocator, io: std.Io) void {
-    g_allocator = allocator;
-    g_io = io;
+/// At startup; `app` outlives every window.
+pub fn init(app: *app_mod.App) void {
+    g_allocator = app.allocator;
+    g_io = app.io;
+    session.init(app);
 }
 
 /// At app exit.
@@ -124,7 +138,7 @@ pub fn closeForExit() bool {
 }
 
 pub fn postCommand(command: Command) void {
-    const timer_hwnd = main.g_timer_hwnd orelse {
+    const timer_hwnd = session.runningApp().timer_hwnd orelse {
         slog.err("Failed to run a knots configuration window command: the timer window is missing", .{});
         return;
     };
@@ -149,8 +163,17 @@ pub fn onCommand(wParam: win32.WPARAM, lParam: win32.LPARAM) void {
         .picked => applyPicked(lParam),
         .prices_fetched => applyPrices(lParam),
         .portrait_loaded => applyPortrait(lParam),
+        .fit_language => fitLanguage(),
     }
     requestFrame();
+}
+
+/// Before each frame: the window's text follows the picked language at once, and its width and title follow between frames.
+pub fn useLanguage(language: Language) void {
+    lang.use(language);
+    if (language == g_window_language or g_is_fit_posted) return;
+    g_is_fit_posted = true;
+    postCommand(.fit_language);
 }
 
 /// Applied at once, though the setting itself waits for Save like any other.
@@ -162,7 +185,7 @@ pub fn setAlwaysOnTop(is_enabled: bool) void {
 
 /// The picker owns its own modal loop on another thread; the result arrives as a `picked` command.
 pub fn browseFolder(target: pickers.Target, title: []const u8) void {
-    const timer_hwnd = main.g_timer_hwnd orelse {
+    const timer_hwnd = session.runningApp().timer_hwnd orelse {
         slog.err("Failed to open the folder picker: the timer window is missing", .{});
         return;
     };
@@ -171,7 +194,7 @@ pub fn browseFolder(target: pickers.Target, title: []const u8) void {
 
 /// A settings file for the Import dialog, read once the picker closes.
 pub fn browseImportFile() void {
-    const timer_hwnd = main.g_timer_hwnd orelse {
+    const timer_hwnd = session.runningApp().timer_hwnd orelse {
         slog.err("Failed to open the import file picker: the timer window is missing", .{});
         return;
     };
@@ -183,11 +206,11 @@ pub fn restoreBackup(backup: []const u8, display_name: []const u8) void {
     header.openRestorePrompt(backup, display_name);
 }
 
-/// `name` as typed; the profile is created between frames, then the import applied to it.
+/// `name` as typed; the profile is created and switched to between frames, then the import applied to it.
 pub fn importIntoNewProfile(name: []const u8, accent: u32) void {
     const file_name = config.profileFileName(g_allocator, name) catch |err| {
         slog.info("Rejected imported profile name '{s}': {}", .{ name, err });
-        status.show(.failure, "'{s}' isn't a valid profile name: use " ++ header.NAME_RULES, .{name});
+        status.show(.failure, "'{name}' isn't a valid profile name: use " ++ profiles.NAME_RULES, .{ .name = name });
         return;
     };
     defer g_allocator.free(file_name);
@@ -196,7 +219,7 @@ pub fn importIntoNewProfile(name: []const u8, accent: u32) void {
 
 /// A notification type's custom sound, set once the picker closes.
 pub fn browseSoundFile(type_index: usize) void {
-    const timer_hwnd = main.g_timer_hwnd orelse {
+    const timer_hwnd = session.runningApp().timer_hwnd orelse {
         slog.err("Failed to open the sound file picker: the timer window is missing", .{});
         return;
     };
@@ -205,16 +228,22 @@ pub fn browseSoundFile(type_index: usize) void {
 
 /// Starts fetching Jita ore prices; returns false if a fetch is already running or couldn't start.
 pub fn fetchPrices() bool {
-    const timer_hwnd = main.g_timer_hwnd orelse {
+    const timer_hwnd = session.runningApp().timer_hwnd orelse {
         slog.err("Failed to fetch ore prices: the timer window is missing", .{});
         return false;
     };
-    return prices.fetch(timer_hwnd, @backingInt(Command.prices_fetched));
+    return prices.fetch(g_io, timer_hwnd, @backingInt(Command.prices_fetched));
 }
 
 /// Draws a frame soon, for a change made outside one, e.g. a region selection finishing.
 pub fn redraw() void {
     requestFrame();
+}
+
+/// Drops unsaved changes to both documents; between frames only.
+pub fn discardChanges() !void {
+    try session.discard();
+    setAlwaysOnTop(session.runningApp().global_settings.alwaysOnTop);
 }
 
 /// Pumps every message on the main thread until the window closes, so the tick, hooks and tray keep running.
@@ -226,10 +255,12 @@ fn run() void {
             return;
         },
     }
-    const settings = &main.g_global_settings;
+    const settings = &session.runningApp().global_settings;
     const position = savedPosition(settings);
+    g_window_language = settings.language;
+    g_is_fit_posted = false;
 
-    session.begin(g_allocator) catch |err| {
+    session.begin() catch |err| {
         slog.err("Failed to start editing the configuration: {}", .{err});
         return;
     };
@@ -243,10 +274,10 @@ fn run() void {
     region.init(g_allocator);
     defer region.cancel();
     prices.init(g_allocator);
-    portraits.init(g_allocator, main.g_timer_hwnd, @backingInt(Command.portrait_loaded));
+    portraits.init(g_allocator, session.runningApp().timer_hwnd, @backingInt(Command.portrait_loaded));
     for (session.profile().ptr.characters.items) |character| portraits.preload(character.name);
-    lang.init(g_allocator);
-    defer lang.deinit();
+    // A language picked but not saved goes with the window.
+    defer lang.use(session.runningApp().global_settings.language);
     search.init(g_allocator);
     defer search.reset();
     import_dialog.init(g_allocator);
@@ -280,9 +311,9 @@ fn run() void {
     const is_placed = installPlacement(position);
     var app = knots.App.init(g_io, g_allocator, .{
         .window = .{
-            .width = DESIGN_WIDTH,
+            .width = designWidth(settings.language),
             .height = DESIGN_HEIGHT,
-            .title = WINDOW_TITLE,
+            .title = lang.text(WINDOW_TITLE),
         },
         .ui = .{
             .theme = style.theme,
@@ -300,6 +331,7 @@ fn run() void {
     };
     defer app.deinit();
     removePlacement();
+    g_app = &app;
 
     const window: win32.HWND = @ptrCast(app.main_viewport.window.getWindowHandle().windows.hwnd);
     g_hwnd = window;
@@ -355,6 +387,15 @@ fn placeWindowHook(nCode: c_int, wParam: win32.WPARAM, lParam: win32.LPARAM) cal
 fn frame(view: *knots.View, context: *ui.Frame) !void {
     if (!g_is_present_mode_chosen) choosePresentMode(view);
     try form.frame(view, context);
+    if (status.takeShownMs()) |show_ms| startStatusTimer(show_ms);
+}
+
+/// Restarted by each new message, so it times the latest one.
+fn startStatusTimer(show_ms: u32) void {
+    const window = g_hwnd orelse return;
+    if (win32.SetTimer(window, STATUS_TIMER_ID, show_ms, null) == 0) {
+        slog.warn("Failed to time the status message, it stays until the next one: error {d}", .{win32.GetLastError()});
+    }
 }
 
 /// A vsync-paced present blocks the main thread for up to a frame, which would stall the low-level input hooks behind it.
@@ -371,13 +412,19 @@ fn choosePresentMode(view: *knots.View) void {
     };
 }
 
-/// Subclasses knots' window, to ask before closing with unsaved changes and to remember where the window was left.
+/// Subclasses knots' window, to ask before closing with unsaved changes, remember where the window was left, and clear the status line.
 fn windowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
     // A hotkey field recording takes the keys and buttons it binds before knots sees them.
     if (hotkey.onWindowMessage(msg, wParam, lParam)) return 0;
     switch (msg) {
         win32.WM_CLOSE => if (!g_should_force_close and session.isDirty()) {
             form.confirmClose();
+            requestFrame();
+            return 0;
+        },
+        win32.WM_TIMER => if (wParam == STATUS_TIMER_ID) {
+            _ = win32.KillTimer(hwnd, STATUS_TIMER_ID);
+            status.clear();
             requestFrame();
             return 0;
         },
@@ -403,7 +450,8 @@ fn applyPrices(lParam: win32.LPARAM) void {
         return;
     }
     for (fetched.prices) |price| mining.setOrePrice(price.name, price.price);
-    status.show(if (fetched.prices.len > 0) .success else .failure, "Updated {d} of {d} price(s)", .{ fetched.prices.len, prices.NAMES.len });
+    if (fetched.prices.len > 0) mining.stampPricesFetched();
+    status.show(if (fetched.prices.len > 0) .success else .failure, "Updated {fetched} of {total} price(s)", .{ .fetched = fetched.prices.len, .total = prices.NAMES.len });
 }
 
 fn applyPortrait(lParam: win32.LPARAM) void {
@@ -441,11 +489,10 @@ fn save() bool {
 }
 
 fn discard() bool {
-    session.discard() catch |err| {
+    discardChanges() catch |err| {
         slog.err("Failed to discard the configuration changes: {}", .{err});
         return false;
     };
-    setAlwaysOnTop(main.g_global_settings.alwaysOnTop);
     return true;
 }
 
@@ -458,12 +505,52 @@ fn closeWithoutAsking() void {
 fn onClosed() void {
     slog.info("Knots configuration window closed", .{});
     g_hwnd = null;
+    g_app = null;
     g_state = .closed;
     g_should_force_close = false;
     if (g_should_quit_after_close) {
         g_should_quit_after_close = false;
         win32.PostQuitMessage(0);
     }
+}
+
+/// Wider for languages whose labels run longer than English's, so they have room beside the fixed-width controls.
+fn designWidth(language: Language) u32 {
+    return switch (language) {
+        .en => 850,
+        .es, .pt => 900,
+        .de, .fr, .pl, .ru => 950,
+    };
+}
+
+/// Between frames, since resizing and retitling send knots' window messages it can't take mid-frame.
+fn fitLanguage() void {
+    g_is_fit_posted = false;
+    const window = g_hwnd orelse return;
+    const language = session.global().get("language");
+    if (language == g_window_language) return;
+    resizeForLanguage(window, g_window_language, language);
+    g_window_language = language;
+    const app = g_app orelse return;
+    app.main_viewport.window.setTitle(lang.text(WINDOW_TITLE)) catch |err| {
+        slog.warn("Failed to retitle the configuration window: {}", .{err});
+    };
+}
+
+/// Keeps the window's left edge unless the new width would push it off its monitor.
+fn resizeForLanguage(window: win32.HWND, from: Language, to: Language) void {
+    var rect: win32.RECT = undefined;
+    if (!win32.toBool(win32.GetWindowRect(window, &rect))) {
+        slog.warn("Failed to read the configuration window's size: error {d}", .{win32.GetLastError()});
+        return;
+    }
+    const dpi = win32.GetDpiForWindow(window);
+    const scale = win32.dpiToScale(if (dpi == 0) win32.USER_DEFAULT_SCREEN_DPI else dpi);
+    const change = @as(i32, @intCast(designWidth(to))) - @as(i32, @intCast(designWidth(from)));
+    const width = win32.rectWidth(rect) + win32.scalePixels(change, scale);
+    const bounds = monitors.nearestMonitorBounds(window).bounds;
+    const x = @max(bounds.left, @min(rect.left, bounds.right - width));
+    _ = win32.SetWindowPos(window, win32.HWND_NOTOPMOST, x, rect.top, width, win32.rectHeight(rect), win32.SWP_NOZORDER | win32.SWP_NOACTIVATE);
 }
 
 fn requestFrame() void {
@@ -516,7 +603,7 @@ fn savePosition(window: win32.HWND) void {
         slog.warn("Failed to read the configuration window's position: error {d}", .{win32.GetLastError()});
         return;
     }
-    main.g_global_settings.saveDialogPosition(rect.left, rect.top) catch |err| {
+    session.runningApp().global_settings.saveDialogPosition(g_io, rect.left, rect.top) catch |err| {
         slog.warn("Failed to save the configuration window's position: {}", .{err});
     };
 }

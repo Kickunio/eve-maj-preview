@@ -9,7 +9,7 @@ const STARTUP_RUN_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const STARTUP_RUN_VALUE_NAME = "EVE-Maj Preview";
 const EXECUTABLE_NAME = "eve-maj-preview.exe";
 
-/// Adds or removes this exe under the user's Run key; failures are logged.
+/// Logs its own failures.
 pub fn apply(is_enabled: bool) void {
     if (!is_enabled) {
         var key: win32.HKEY = undefined;

@@ -43,7 +43,6 @@ pub const ThumbnailSpace = struct {
         .spacing = .{ 0, 200 },
     };
 
-    /// Where `group_name` is in groups, or null when this space doesn't hold it.
     pub fn groupIndex(self: *const ThumbnailSpace, group_name: []const u8) ?usize {
         return strings.indexOfString(self.groups.items, group_name);
     }
@@ -69,7 +68,7 @@ pub fn ensureSpecialSpaces(allocator: std.mem.Allocator, list: *std.ArrayList(Th
     }
 }
 
-/// Moves the Login Screen space first and Unassigned Characters second, keeping the rest in order.
+/// Login Screen, then Unassigned Characters, then the rest in their order.
 pub fn keepSpecialSpacesFirst(list: []ThumbnailSpace) void {
     var front: usize = 0;
     inline for (.{ "holdsLoginScreen", "holdsUnassigned" }) |mark| {

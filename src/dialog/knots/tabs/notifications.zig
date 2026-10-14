@@ -25,7 +25,7 @@ const Speed = struct { label: []const u8, rate: i8 };
 pub fn show(context: *ui.Frame) !void {
     const profile = session.profile();
     if (!profile.ptr.chatlog.enabled) {
-        try widgets.notice(context, .src(@src()), "Notifications requires Log Monitoring enabled to read logs and trigger alerts.");
+        try widgets.notice(context, .src(@src()), "Without Log Monitoring, only alerts for your own actions, like Profile Switch, are shown.");
     }
     try system(context);
     try speech(context);
@@ -38,9 +38,9 @@ fn system(context: *ui.Frame) !void {
     // Its placement and font are edited from its text on the Appearance tab's thumbnail preview.
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
     try bind.number(context, ref, "suppress_click_duration_ms", "Quiet After Click", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "Suppresses further notifications on a thumbnail for this long after you click it.");
+    try widgets.hintText(context, .src(@src()), "No alerts for a character this long after you click it.");
     try bind.number(context, ref, "notified_cycle_retention_seconds", "Keep in Notified Cycle For", .{ .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "How long a character stays in the \"recently notified\" cycle group after its last alert.");
+    try widgets.hintText(context, .src(@src()), "How long after an alert a character stays in Notified Characters cycling.");
     try options.close(context);
     try section.close(context);
 }
@@ -51,10 +51,13 @@ fn speech(context: *ui.Frame) !void {
     // Speech only means something while notifications fire, so the section dims with them.
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
     try bind.toggle(context, ref, "tts_speak_character_name", "Prefix Spoken Alerts with the Character Name");
+    try widgets.hintText(context, .src(@src()), "So you know which character an alert is about.");
     const display_name = try widgets.openGroup(context, .src(@src()), ref.get("tts_speak_character_name"));
     try bind.toggle(context, ref, "tts_use_display_name", "Speak Display Name Instead of Character Name");
+    try widgets.hintText(context, .src(@src()), "Uses the Display Name set on the Characters tab.");
     try display_name.close(context);
     try bind.slider(context, ref, "tts_volume", "Volume", .{ .display = .percent });
+    try widgets.hintText(context, .src(@src()), "Only affects spoken alerts.");
     try speed(context, ref);
     try widgets.hintText(context, .src(@src()), "Slow is about 20% slower than Normal, and Fast about 25% faster.");
     try options.close(context);
@@ -81,12 +84,18 @@ fn travel(context: *ui.Frame) !void {
     const notifications = try widgets.openGroup(context, .src(@src()), are_notifications_enabled);
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
     try bind.number(context, ref, "window_seconds", "Catch-Up Window", .{ .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "How long a character can lag behind the group's jump before this fires.");
+    try widgets.hintText(context, .src(@src()), "How long a character can fall behind before the alert.");
     try bind.choice(context, ref, "threshold_mode", "Group Size Threshold");
-    try widgets.hintText(context, .src(@src()), "Minimum group size required before a straggler triggers an alert.");
+    try widgets.hintText(context, .src(@src()), "How big the group must be before anyone counts as left behind.");
     switch (ref.get("threshold_mode")) {
-        .percent => try bind.number(context, ref, "threshold_percent", "Minimum Percentage", .{ .unit = "%" }),
-        .count => try bind.number(context, ref, "threshold_count", "Minimum Count", .{}),
+        .percent => {
+            try bind.number(context, ref, "threshold_percent", "Minimum Percentage", .{ .unit = "%" });
+            try widgets.hintText(context, .src(@src()), "How much of the group must jump together.");
+        },
+        .count => {
+            try bind.number(context, ref, "threshold_count", "Minimum Count", .{});
+            try widgets.hintText(context, .src(@src()), "How many characters must jump together.");
+        },
     }
     try options.close(context);
     try notifications.close(context);

@@ -45,7 +45,7 @@ pub const DisplayConfig = struct {
     listViewHideWhenNoEveFocus: bool = false,
     listViewHideDebounceMs: u32 = 500,
 
-    /// The History Panel: a resizable list of recent notifications.
+    /// The History Panel.
     showNotifInfoPanel: bool = false,
     notifInfoPanelX: i32 = 10,
     notifInfoPanelY: i32 = 250,

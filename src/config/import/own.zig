@@ -11,12 +11,40 @@ const Config = config_mod.Config;
 const Draft = draft_mod.Draft;
 const Section = draft_mod.Section;
 
+/// Each saved section's name and hint in the import dialog, in English; {n} in a list's hint is its item count.
+const SECTIONS = std.StaticStringMap(SectionWords).initComptime(.{
+    .{ "autoMinimize", SectionWords{ .title = "Auto-Minimize", .hint = "Minimize inactive clients" } },
+    .{ "bounty", SectionWords{ .title = "Bounty Tracker", .hint = "Bounty log parsing" } },
+    .{ "characters", SectionWords{ .title = "Characters", .hint = "Positions, sizes, colors, hotkeys ({n})" } },
+    .{ "chatlog", SectionWords{ .title = "Chatlog Monitoring", .hint = "Chat/game log directories and triggers" } },
+    .{ "closeAll", SectionWords{ .title = "Close All", .hint = "Close-all behavior" } },
+    .{ "combat", SectionWords{ .title = "Combat Tracker", .hint = "Combat log parsing" } },
+    .{ "display", SectionWords{ .title = "Display", .hint = "List view appearance" } },
+    .{ "hotkeyGroups", SectionWords{ .title = "Hotkey Groups", .hint = "Character cycling groups ({n})" } },
+    .{ "hotkeys", SectionWords{ .title = "Global Hotkeys", .hint = "App-wide hotkeys" } },
+    .{ "interaction", SectionWords{ .title = "Interaction", .hint = "Click/drag behavior" } },
+    .{ "mining", SectionWords{ .title = "Mining Tracker", .hint = "Mining log parsing" } },
+    .{ "resources", SectionWords{ .title = "Resource Usage", .hint = "Per-client CPU/RAM/VRAM overlay" } },
+    .{ "snapping", SectionWords{ .title = "Snapping", .hint = "Thumbnail snapping" } },
+    .{ "systemColors", SectionWords{ .title = "System Colors", .hint = "Per-system border colors ({n})" } },
+    .{ "thumbnail", SectionWords{ .title = "Thumbnail Appearance & Notifications", .hint = "Border/text styling, per-state visuals, alert notifications" } },
+    .{ "thumbnailSpaces", SectionWords{ .title = "Thumbnail Spaces", .hint = "Screen regions hotkey groups fill ({n})" } },
+    .{ "timer", SectionWords{ .title = "Scan Timer", .hint = "Window scan interval" } },
+    .{ "windowFilters", SectionWords{ .title = "Window Filters", .hint = "Custom EVE window matching rules ({n})" } },
+    .{ "autoMovePosition", SectionWords{ .title = "Auto-Move Windows", .hint = "Moving game windows to their saved positions" } },
+    .{ "exclusion", SectionWords{ .title = "Cycle Exclusion", .hint = "Shift-click exclusion and excluded characters" } },
+    .{ "travel", SectionWords{ .title = "Travel Alerts", .hint = "Alerts for characters left behind while travelling" } },
+    .{ "accentColor", SectionWords{ .title = "Accent Color", .hint = "The profile's color in this window" } },
+});
+
+const SectionWords = struct { title: []const u8, hint: []const u8 };
+
 pub fn isFile(root: Value) bool {
     const app = values.stringAt(root, "app") orelse return false;
     return std.mem.eql(u8, app, config_mod.PROFILE_FORMAT_IDENTIFIER);
 }
 
-/// Every saved section, so one added later is importable without a change here.
+/// Every saved section; one added later only needs its words in SECTIONS.
 pub fn sections(draft: *Draft, root: Value) ![]const Section {
     var migrated = root;
     try config_mod.migrateProfileJson(draft.arena, &migrated);
@@ -24,13 +52,13 @@ pub fn sections(draft: *Draft, root: Value) ![]const Section {
     inline for (comptime wire.savedFields(Config)) |f| {
         if (comptime isStamp(f.name)) continue;
         const raw = values.get(migrated, f.name);
-        const key = "dynamic.import.maj." ++ f.name;
+        const words = comptime sectionWords(f.name);
         if (comptime isList(f.type)) {
             const item_count = if (raw) |value| (if (value == .array) value.array.items.len else 0) else 0;
-            try out.append(draft.arena, .{ .id = f.name, .title = key ++ ".title", .hint = try draft.countText(key ++ ".hint", item_count), .available = item_count > 0 });
+            try out.append(draft.arena, .{ .id = f.name, .title = words.title, .hint = try draft.countText(words.hint, item_count), .available = item_count > 0 });
         } else {
             const is_in_file = if (raw) |value| value != .null else false;
-            try out.append(draft.arena, .{ .id = f.name, .title = key ++ ".title", .hint = .{ .key = key ++ ".hint" }, .available = is_in_file });
+            try out.append(draft.arena, .{ .id = f.name, .title = words.title, .hint = .{ .key = words.hint }, .available = is_in_file });
         }
     }
     return out.items;
@@ -54,6 +82,10 @@ pub fn build(draft: *Draft, text: []const u8, root: Value, chosen: []const []con
         if (!draft_mod.isChosen(chosen, path[0..section_end])) continue;
         try draft.skipped.append(draft.arena, path);
     }
+}
+
+fn sectionWords(comptime name: []const u8) SectionWords {
+    return SECTIONS.get(name) orelse @compileError("own.zig's SECTIONS has no words for profile section '" ++ name ++ "'");
 }
 
 /// Stamped on every save rather than chosen by the user.
@@ -89,16 +121,16 @@ fn dropPlaceholderCharacters(list: *Value) void {
 
 fn sectionNote(draft: *Draft, comptime name: []const u8, item_count: usize) !void {
     const list_notes = .{
-        .{ "characters", "dynamic.import.maj.charactersImportedNote" },
-        .{ "systemColors", "dynamic.import.maj.systemColorsImportedNote" },
-        .{ "hotkeyGroups", "dynamic.import.hotkeyGroupsImportedNote" },
-        .{ "windowFilters", "dynamic.import.maj.windowFiltersImportedNote" },
-        .{ "thumbnailSpaces", "dynamic.import.maj.thumbnailSpacesImportedNote" },
+        .{ "characters", "Imported {n} character(s)." },
+        .{ "systemColors", "Imported {n} system color(s)." },
+        .{ "hotkeyGroups", "Imported {n} hotkey group(s)." },
+        .{ "windowFilters", "Imported {n} window filter(s)." },
+        .{ "thumbnailSpaces", "Imported {n} thumbnail space(s)." },
     };
     inline for (list_notes) |entry| {
         if (comptime std.mem.eql(u8, entry[0], name)) return draft.noteCount(entry[1], "n", item_count);
     }
-    try draft.note("dynamic.import.maj.sectionImportedNote", &.{.{ .name = "title", .value = "dynamic.import.maj." ++ name ++ ".title", .should_translate = true }});
+    try draft.note("{title} imported.", &.{.{ .name = "title", .value = (comptime sectionWords(name)).title, .should_translate = true }});
 }
 
 /// Only what the file has: `loaded` holds every field, defaults included, but a field an older file lacks should keep its current value.

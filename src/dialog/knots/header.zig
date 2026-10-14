@@ -1,4 +1,4 @@
-//! The configuration window's header: the app mark, which profile the window edits, the profile buttons and their prompts; main thread only.
+//! The configuration window's header: the brand, the running profile's button and its menu, the prompts the menu opens, and the settings search, hidden for now; main thread only.
 const std = @import("std");
 const ui = @import("ui");
 const config = @import("../../config.zig");
@@ -8,44 +8,63 @@ const profiles = @import("profiles.zig");
 const status = @import("status.zig");
 const style = @import("style.zig");
 const widgets = @import("widgets.zig");
+const strings = @import("../../util/strings.zig");
 const color_convert = @import("color_convert.zig");
 const images = @import("images.zig");
 const import_dialog = @import("import_dialog.zig");
 const glyphs = @import("glyphs.zig");
+const search = @import("search.zig");
+const lang = @import("../../lang/lang.zig");
 const log = @import("../../log.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
 const Canvas = ui.component.Canvas;
-const Tooltip = ui.component.Tooltip;
 const TextInput = ui.component.TextInput;
-const ColorPicker = ui.component.ColorPicker;
-const SelectInput = ui.component.SelectInput;
 const Color = ui.Color;
 const slog = log.Scoped("dialog_knots");
 
-const COPY_SUFFIX = " - Copy";
-/// What a profile name may hold, for the prompts that ask for one.
-pub const NAME_RULES = std.fmt.comptimePrint("letters, digits, spaces, '-' and '_', up to {d} characters", .{profile_files.MAX_NAME_LENGTH});
-/// A new profile's accent colour, Config's own default.
-pub const DEFAULT_ACCENT = blk: {
-    const index = std.meta.fieldIndex(config.Config, "accentColor").?;
-    break :blk @typeInfo(config.Config).@"struct".field_attrs[index].defaultValue(u32).?;
+const COPY_NAME = "{name} - Copy";
+/// Room for a translation's longer wording around the name.
+const SUGGESTION_LENGTH = profile_files.MAX_NAME_LENGTH + 64;
+const PROFILE_BUTTON_KEY: ui.Key = .str("knots.header.profile");
+const MENU_KEY: ui.Key = .str("knots.header.menu");
+const SEARCH_KEY: ui.Key = .str("knots.search");
+
+/// The profile menu's entries after the profiles themselves.
+const MenuItem = enum {
+    new,
+    duplicate,
+    import,
+    reset,
+    delete,
+
+    fn glyph(self: MenuItem) glyphs.Glyph {
+        return switch (self) {
+            .new => .add,
+            .duplicate => .copy,
+            .import => .import,
+            .reset => .reset,
+            .delete => .delete,
+        };
+    }
 };
 
-const Icon = enum { add, copy, delete, reset, import };
+const NamePrompt = enum { new, restore };
 
-const NamePrompt = enum { create, copy, restore };
+/// What a new profile starts as; Duplicate is New starting from a copy.
+const StartFrom = enum { defaults, copy };
 
 const Confirm = enum { delete, reset };
 
 var g_allocator: std.mem.Allocator = undefined;
-/// The profile picked in the dropdown, waiting on Make It Live / Just Edit. Owned; freed when the prompt closes.
-var g_switch_target: ?[]u8 = null;
-var g_is_switch_open: bool = false;
+var g_is_menu_open: bool = false;
 var g_name_prompt: ?NamePrompt = null;
 var g_is_name_open: bool = false;
+var g_start_from: StartFrom = .defaults;
+/// The rainbow picker chose the accent, so it's the one ringed even when the colour matches a preset.
+var g_is_custom_accent: bool = false;
 /// The name being typed. Owned; freed in deinit.
 var g_name_text: std.ArrayList(u8) = .empty;
 var g_name_color: Color = undefined;
@@ -61,7 +80,7 @@ pub fn init(allocator: std.mem.Allocator) void {
 
 /// Once the window has closed.
 pub fn deinit() void {
-    clearSwitchTarget();
+    g_is_menu_open = false;
     g_name_text.deinit(g_allocator);
     g_name_text = .empty;
     clearRestore();
@@ -78,44 +97,20 @@ pub fn previewAccent() ?u32 {
 }
 
 pub fn show(context: *ui.Frame) !void {
-    if (profiles.takeCreated()) |created| openSwitchPrompt(created);
-
     const bar = Rect{ .key = .src(@src()), .style = &style.header };
     _ = try bar.open(context);
-
-    const brand = Rect{ .key = .src(@src()), .style = &.{ .direction = .row, .@"align" = .center, .gap = 8 } };
-    _ = try brand.open(context);
-    if (images.g_app_mark.image(.src(@src()), &style.app_mark)) |mark| try context.e(mark);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "EVE-Maj Preview", .style = &style.app_name });
-    try brand.close(context);
-
-    try context.e(Rect{ .key = .src(@src()), .style = &.{ .width = .grow() } });
-    try profileSelect(context);
-
-    const editing = session.profile().ptr.profile_name;
-    if (try iconButton(context, .add, false)) openNamePrompt(.create, "");
-    if (try iconButton(context, .copy, false)) {
-        const name = profiles.displayName(editing);
-        var buf: [profile_files.MAX_NAME_LENGTH + COPY_SUFFIX.len]u8 = undefined;
-        const suggested = std.fmt.bufPrint(&buf, "{s}{s}", .{ name, COPY_SUFFIX }) catch |err| blk: {
-            slog.warn("Failed to suggest a name for the copy of '{s}': {}", .{ name, err });
-            break :blk name;
-        };
-        openNamePrompt(.copy, suggested);
-    }
-    const is_default = std.mem.eql(u8, editing, config.DEFAULT_PROFILE);
-    if (try iconButton(context, .delete, is_default)) openConfirm(.delete);
-    if (try iconButton(context, .reset, false)) openConfirm(.reset);
-    if (try iconButton(context, .import, false)) import_dialog.open();
-
+    try brand(context);
+    try context.e(Rect{ .key = .src(@src()), .style = &style.spacer });
+    // The settings search is hidden for now; searchBox draws it here.
+    try profileButton(context);
     try bar.close(context);
 
-    try switchPrompt(context);
+    try profileMenu(context);
     try namePrompt(context);
     try confirmPrompt(context);
 }
 
-/// From the Import dialog: names the profile `backup` (a backup file name) is restored as, starting from `display_name`.
+/// From the Backups tab: names the profile `backup` (a backup file name) is restored as, starting from `display_name`.
 pub fn openRestorePrompt(backup: []const u8, display_name: []const u8) void {
     clearRestore();
     g_restore_backup = g_allocator.dupe(u8, backup) catch |err| {
@@ -127,95 +122,183 @@ pub fn openRestorePrompt(backup: []const u8, display_name: []const u8) void {
         clearRestore();
         return;
     };
-    openNamePrompt(.restore, display_name);
+    openNamePrompt(.restore, display_name, profiles.DEFAULT_ACCENT);
 }
 
-fn profileSelect(context: *ui.Frame) !void {
-    const names = profiles.list();
+fn brand(context: *ui.Frame) !void {
+    const lockup = Rect{ .key = .src(@src()), .style = &style.brand };
+    _ = try lockup.open(context);
+    if (images.g_app_mark.image(.src(@src()), &style.app_mark)) |mark| try context.e(mark);
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "EVE-Maj Preview", .style = &style.brand_name });
+    try lockup.close(context);
+}
+
+fn searchBox(context: *ui.Frame) !void {
+    if (search.isActive() and !search.needsIndex()) {
+        const match_count = search.matchCount();
+        const text = if (match_count == 0) lang.text("No matches") else try lang.format(context.arena(), if (match_count == 1) "{n} section" else "{n} sections", .{ .n = match_count });
+        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = text, .style = if (match_count == 0) &style.search_count_none else &style.search_count_some });
+    }
+    const box = Rect{ .key = .src(@src()), .style = &style.search_container };
+    _ = try box.open(context);
+    try widgets.searchBox(context, SEARCH_KEY, &search.g_query, "Search settings...");
+    try box.close(context);
+}
+
+fn profileButton(context: *ui.Frame) !void {
+    const ui_state = context.ui();
+    // Measured, so the menu can drop from it.
+    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, PROFILE_BUTTON_KEY.hash());
+    const button = Button{ .key = PROFILE_BUTTON_KEY, .style = if (g_is_menu_open) &style.profile_button_open else &style.profile_button };
+    const response = try button.openResponse(context);
+    const running = session.profile().ptr;
+    try swatch(context, PROFILE_BUTTON_KEY.indexed(1), running.accentColor);
+    try context.e(Text{ .selectable = false, .key = PROFILE_BUTTON_KEY.indexed(2), .content = profiles.displayName(running.profile_name), .style = &style.profile_name });
+    try glyph(context, PROFILE_BUTTON_KEY.indexed(3), .chevron, style.MUTED);
+    try button.close(context);
+    if (response.clicked) {
+        g_is_menu_open = true;
+        context.requestRedraw();
+    }
+}
+
+fn profileMenu(context: *ui.Frame) !void {
+    if (!g_is_menu_open) return;
+    const dialog = try widgets.openMenu(context, MENU_KEY, &g_is_menu_open, widgets.measuredBox(context.ui(), PROFILE_BUTTON_KEY));
+    const caption = Rect{ .key = MENU_KEY.indexed(10), .style = &style.menu_caption };
+    _ = try caption.open(context);
+    try context.e(Text{ .selectable = false, .key = MENU_KEY.indexed(11), .content = lang.text("PROFILES"), .style = &style.tab_category_text });
+    try caption.close(context);
+
+    const running = session.profile().ptr;
+    for (profiles.list(), profiles.accents(), 0..) |name, accent, index| {
+        const is_running = std.mem.eql(u8, name, running.profile_name);
+        // The running profile's own colour may have unsaved edits.
+        const shown_accent = if (is_running) running.accentColor else accent;
+        if (try profileItem(context, index, name, shown_accent, is_running) and !is_running) profiles.request(.switch_to, name, null);
+    }
+
+    try divider(context, MENU_KEY.indexed(12));
     const arena = context.arena();
-    const labels = try arena.alloc([]const u8, names.len);
-    const values = try arena.alloc(u32, names.len);
-    const editing = session.profile().ptr.profile_name;
-    var current: u32 = 0;
-    for (names, labels, values, 0..) |name, *label, *value, index| {
-        label.* = profiles.displayName(name);
-        value.* = @intCast(index);
-        if (std.mem.eql(u8, name, editing)) current = @intCast(index);
-    }
-    const key: ui.Key = .str("knots.header.profile");
-    // Follows the edited profile while closed, since a prompt or a profile switch can change it.
-    if (context.ui().state.get(.select_input, key.hash())) |state| {
-        if (!state.open) state.selected = current;
-    }
-    const response = try context.interact(SelectInput(u32){
-        .key = key,
-        .labels = labels,
-        .values = values,
-        .initial_selected = current,
-        .style = try widgets.fittedSelect(context, labels),
-        .parts = .{ .popup = &style.select_popup },
-    });
-    const selected = response.selected orelse return;
-    if (selected.value != current) openSwitchPrompt(g_allocator.dupe(u8, names[selected.value]) catch |err| {
-        slog.err("Failed to switch profile: {}", .{err});
-        return;
-    });
-}
-
-/// Takes ownership of `name`.
-fn openSwitchPrompt(name: []u8) void {
-    clearSwitchTarget();
-    g_switch_target = name;
-    g_is_switch_open = true;
-}
-
-fn switchPrompt(context: *ui.Frame) !void {
-    const target = g_switch_target orelse return;
-    if (!g_is_switch_open) {
-        clearSwitchTarget();
-        return;
-    }
-    const dialog = widgets.modal(.src(@src()), &g_is_switch_open, &style.modal);
-    _ = try dialog.open(context);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Switch Profile?", .style = &style.heading });
-    try context.e(Text{
-        .selectable = false,
-        .key = .src(@src()),
-        .content = try std.fmt.allocPrint(context.arena(), "Make '{s}' the running profile, or just edit it?", .{profiles.displayName(target)}),
-        .style = &style.modal_text,
-    });
-    const hint = if (session.isDirty())
-        "Making it live reloads thumbnails, hotkeys, and chatlog monitoring now. Either way, your unsaved changes are dropped."
-    else
-        "Making it live reloads thumbnails, hotkeys, and chatlog monitoring now. Editing alone leaves the running overlay untouched until you save or choose Make It Live.";
-    try widgets.hintText(context, .src(@src()), hint);
-    const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
-    _ = try actions.open(context);
-    if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_is_switch_open = false;
-    if (try modalButton(context, .src(@src()), "Just Edit", &style.plain_button)) {
-        profiles.request(.edit, target, null);
-        g_is_switch_open = false;
-    }
-    if (try modalButton(context, .src(@src()), "Make It Live", &style.primary_button)) {
-        profiles.request(.make_live, target, null);
-        g_is_switch_open = false;
-    }
-    try actions.close(context);
+    const name = profiles.displayName(running.profile_name);
+    if (try menuItem(context, .new, lang.text("New Profile"), false)) openNewPrompt(.defaults);
+    if (try menuItem(context, .duplicate, try lang.format(arena, "Duplicate '{name}'", .{ .name = name }), false)) openNewPrompt(.copy);
+    if (try menuItem(context, .import, lang.text("Import Settings"), false)) import_dialog.open();
+    try divider(context, MENU_KEY.indexed(13));
+    if (try menuItem(context, .reset, try lang.format(arena, "Reset '{name}' to Defaults", .{ .name = name }), false)) openConfirm(.reset);
+    const is_default = std.mem.eql(u8, running.profile_name, config.DEFAULT_PROFILE);
+    if (try menuItem(context, .delete, try lang.format(arena, "Delete '{name}'", .{ .name = name }), is_default)) openConfirm(.delete);
     try dialog.close(context);
 }
 
-fn openNamePrompt(prompt: NamePrompt, initial: []const u8) void {
-    g_name_text.clearRetainingCapacity();
-    g_name_text.appendSlice(g_allocator, initial[0..@min(initial.len, profile_files.MAX_NAME_LENGTH)]) catch |err| {
-        slog.err("Failed to open the profile name prompt: {}", .{err});
-        return;
-    };
-    g_name_color = color_convert.fromArgb(switch (prompt) {
-        .create, .restore => DEFAULT_ACCENT,
+/// Returns whether it was clicked, which closes the menu.
+fn profileItem(context: *ui.Frame, index: usize, name: []const u8, accent: u32, is_running: bool) !bool {
+    const key = ui.Key.str("knots.header.menu.profile").indexed(index);
+    const button = Button{ .key = key, .style = if (is_running) &style.menu_item_current else &style.menu_item };
+    const response = try button.openResponse(context);
+    if (is_running) {
+        try glyph(context, key.indexed(1), .check, context.ui().theme.primary);
+    } else {
+        try context.e(Rect{ .key = key.indexed(1), .style = &style.menu_glyph });
+    }
+    try swatch(context, key.indexed(2), accent);
+    try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = profiles.displayName(name), .style = if (is_running or response.hovered) &style.menu_label_lit else &style.menu_label });
+    try button.close(context);
+    return closesMenu(context, response.clicked);
+}
+
+/// Returns whether it was clicked, which closes the menu.
+fn menuItem(context: *ui.Frame, item: MenuItem, label: []const u8, is_disabled: bool) !bool {
+    const key = ui.Key.str("knots.header.menu.item").indexed(@backingInt(item));
+    const button = Button{ .key = key, .disabled = is_disabled, .style = if (is_disabled) &style.menu_item_disabled else &style.menu_item };
+    const response = try button.openResponse(context);
+    const is_danger = item == .delete;
+    const tint = if (is_disabled) style.BORDER_STRONG else if (is_danger) style.DESTRUCTIVE else if (response.hovered) style.TEXT else style.MUTED;
+    try glyph(context, key.indexed(1), item.glyph(), tint);
+    const label_style = if (is_disabled) &style.menu_label_disabled else if (is_danger) &style.menu_label_danger else if (response.hovered) &style.menu_label_lit else &style.menu_label;
+    try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = label, .style = label_style });
+    try button.close(context);
+    return closesMenu(context, response.clicked and !is_disabled);
+}
+
+fn closesMenu(context: *ui.Frame, is_clicked: bool) bool {
+    if (is_clicked) {
+        g_is_menu_open = false;
+        context.requestRedraw();
+    }
+    return is_clicked;
+}
+
+fn divider(context: *ui.Frame, key: ui.Key) !void {
+    const box = Rect{ .key = key, .style = &style.menu_divider };
+    _ = try box.open(context);
+    try context.e(Rect{ .key = key.indexed(1), .style = &style.separator });
+    try box.close(context);
+}
+
+fn swatch(context: *ui.Frame, key: ui.Key, argb: u32) !void {
+    const swatch_style = try context.arena().create(ui.Style);
+    swatch_style.* = style.profile_swatch.with(.{ .background = color_convert.solid(argb) });
+    try context.e(Rect{ .key = key, .style = swatch_style });
+}
+
+fn glyph(context: *ui.Frame, key: ui.Key, which: glyphs.Glyph, tint: Color) !void {
+    try context.e(Canvas{
+        .key = key,
+        .commands = try glyphs.commands(context.arena(), which, glyphs.ICON_SIZE, try glyphs.snapOffset(context, key), tint.value),
+        .style = &style.menu_glyph,
+    });
+}
+
+fn openNewPrompt(start_from: StartFrom) void {
+    g_start_from = start_from;
+    var buf: [SUGGESTION_LENGTH]u8 = undefined;
+    openNamePrompt(.new, suggestedName(&buf, start_from), switch (start_from) {
+        .defaults => profiles.DEFAULT_ACCENT,
         .copy => session.profile().ptr.accentColor,
     });
+}
+
+/// The name a new profile is offered: none from defaults, "Main - Copy" for a copy of Main. Borrows from `buf` or the running profile.
+fn suggestedName(buf: *[SUGGESTION_LENGTH]u8, start_from: StartFrom) []const u8 {
+    const name = profiles.displayName(session.profile().ptr.profile_name);
+    return switch (start_from) {
+        .defaults => "",
+        .copy => blk: {
+            var writer: std.Io.Writer = .fixed(buf);
+            lang.write(&writer, COPY_NAME, .{ .name = name }) catch |err| {
+                slog.warn("Failed to suggest a name for the copy of '{s}': {}", .{ name, err });
+                break :blk name;
+            };
+            break :blk writer.buffered();
+        },
+    };
+}
+
+/// Keeps a typed name, but swaps the suggestion for the new source's.
+fn changeStartFrom(start_from: StartFrom) void {
+    var old_buf: [SUGGESTION_LENGTH]u8 = undefined;
+    var new_buf: [SUGGESTION_LENGTH]u8 = undefined;
+    if (std.mem.eql(u8, g_name_text.items, suggestedName(&old_buf, g_start_from))) _ = setName(suggestedName(&new_buf, start_from));
+    g_start_from = start_from;
+}
+
+fn openNamePrompt(prompt: NamePrompt, initial: []const u8, accent: u32) void {
+    if (!setName(initial)) return;
+    g_name_color = color_convert.fromArgb(accent);
+    g_is_custom_accent = !widgets.isPresetAccent(accent);
     g_name_prompt = prompt;
     g_is_name_open = true;
+}
+
+/// Returns false once it has logged a failure.
+fn setName(name: []const u8) bool {
+    g_name_text.clearRetainingCapacity();
+    g_name_text.appendSlice(g_allocator, strings.utf8Prefix(name, profile_files.MAX_NAME_LENGTH)) catch |err| {
+        slog.err("Failed to fill in the profile name: {}", .{err});
+        return false;
+    };
+    return true;
 }
 
 fn namePrompt(context: *ui.Frame) !void {
@@ -224,28 +307,59 @@ fn namePrompt(context: *ui.Frame) !void {
         g_name_prompt = null;
         return;
     }
+    const arena = context.arena();
     const dialog = widgets.modal(.src(@src()), &g_is_name_open, &style.modal);
     _ = try dialog.open(context);
     try context.e(Text{
         .selectable = false,
         .key = .src(@src()),
         .content = switch (prompt) {
-            .create => "Create New Profile",
-            .copy => try std.fmt.allocPrint(context.arena(), "Copy '{s}'", .{profiles.displayName(session.profile().ptr.profile_name)}),
-            .restore => try std.fmt.allocPrint(context.arena(), "Restore Backup: {s}", .{g_restore_label orelse ""}),
+            .new => lang.text("New Profile"),
+            .restore => try lang.format(arena, "Restore Backup: {name}", .{ .name = g_restore_label orelse "" }),
         },
         .style = &style.heading,
     });
-    const row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .row, .@"align" = .center, .gap = 8 } };
-    _ = try row.open(context);
-    try context.e(TextInput{ .key = .src(@src()), .buf = &g_name_text, .placeholder = "Profile name", .style = &style.text_input });
-    _ = try context.interact(ColorPicker{ .key = .src(@src()), .value = &g_name_color, .style = &style.color_picker_swatch, .parts = .{ .swatch = &style.color_swatch_fill, .popup = &style.color_popup }, .show_hex = false, .show_alpha = false });
-    try row.close(context);
-    try widgets.hintText(context, .src(@src()), "Use " ++ NAME_RULES ++ ". The colour tints this window while the profile is edited.");
+
+    const name_row = try widgets.openModalRow(context, .src(@src()), "Name");
+    try context.e(TextInput{ .key = .src(@src()), .buf = &g_name_text, .placeholder = lang.text("Profile name"), .style = &style.text_input_aligned });
+    try name_row.close(context);
+    try widgets.hintText(context, .src(@src()), "Use " ++ profiles.NAME_RULES ++ ".");
+    const typed = std.mem.trim(u8, g_name_text.items, " ");
+    const problem = profiles.nameProblem(arena, typed);
+    if (problem) |message| try widgets.boxedText(context, .src(@src()), message, &style.hint_box, &style.field_error);
+
+    switch (prompt) {
+        .new => {
+            const start_row = try widgets.openModalRow(context, .src(@src()), "Start from");
+            const copy_label = try lang.format(arena, "Copy of '{name}'", .{ .name = profiles.displayName(session.profile().ptr.profile_name) });
+            if (try widgets.segmented(context, .src(@src()), &.{ "Defaults", copy_label }, @backingInt(g_start_from))) |index| {
+                changeStartFrom(@fromBackingInt(@intCast(index)));
+                context.requestRedraw();
+            }
+            try start_row.close(context);
+            try widgets.hintText(context, .src(@src()), "Defaults starts fresh; a copy takes every setting from the current profile.");
+        },
+        .restore => {},
+    }
+
+    const color_row = try widgets.openModalRow(context, .src(@src()), "Color");
+    try widgets.accentChoices(context, .src(@src()), &g_name_color, &g_is_custom_accent);
+    try color_row.close(context);
+    try widgets.hintText(context, .src(@src()), "Marks it in the profile menu and tints this window.");
+
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
     if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_is_name_open = false;
-    if (try modalButton(context, .src(@src()), "OK", &style.primary_button)) submitName(prompt);
+    const submit_label = switch (prompt) {
+        .new => "Create",
+        .restore => "Restore",
+    };
+    const can_submit = typed.len > 0 and problem == null;
+    const submit = Button{ .key = .src(@src()), .label = lang.text(submit_label), .disabled = !can_submit, .style = if (can_submit) &style.primary_button else &style.disabled_primary_button };
+    if ((try context.interact(submit)).clicked and can_submit) {
+        submitName(prompt);
+        context.requestRedraw();
+    }
     try actions.close(context);
     try dialog.close(context);
 }
@@ -254,14 +368,16 @@ fn submitName(prompt: NamePrompt) void {
     const typed = std.mem.trim(u8, g_name_text.items, " ");
     const file_name = config.profileFileName(g_allocator, typed) catch |err| {
         slog.info("Rejected profile name '{s}': {}", .{ typed, err });
-        status.show(.failure, "'{s}' isn't a valid profile name: use " ++ NAME_RULES, .{typed});
+        status.show(.failure, "'{name}' isn't a valid profile name: use " ++ profiles.NAME_RULES, .{ .name = typed });
         return;
     };
     defer g_allocator.free(file_name);
     const accent = color_convert.toArgb(g_name_color);
     switch (prompt) {
-        .create => profiles.request(.create, file_name, accent),
-        .copy => profiles.request(.copy, file_name, accent),
+        .new => profiles.request(switch (g_start_from) {
+            .defaults => .create,
+            .copy => .copy,
+        }, file_name, accent),
         .restore => if (g_restore_backup) |backup| profiles.requestRestore(file_name, backup, accent),
     }
     g_is_name_open = false;
@@ -288,16 +404,16 @@ fn confirmPrompt(context: *ui.Frame) !void {
     const name = session.profile().ptr.profile_name;
     const dialog = widgets.modal(.src(@src()), &g_is_confirm_open, &style.modal);
     _ = try dialog.open(context);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = switch (confirm) {
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text(switch (confirm) {
         .delete => "Delete Profile?",
         .reset => "Reset Profile?",
-    }, .style = &style.heading });
+    }), .style = &style.heading });
     try context.e(Text{
         .selectable = false,
         .key = .src(@src()),
         .content = switch (confirm) {
-            .delete => try std.fmt.allocPrint(context.arena(), "'{s}' is moved to a backup, which Import can restore.", .{profiles.displayName(name)}),
-            .reset => try std.fmt.allocPrint(context.arena(), "Every setting in '{s}' goes back to its default. This can't be undone.", .{profiles.displayName(name)}),
+            .delete => try lang.format(context.arena(), "'{name}' is moved to a backup, which the Backups tab can restore.", .{ .name = profiles.displayName(name) }),
+            .reset => try lang.format(context.arena(), "Every setting in '{name}' goes back to its default. This can't be undone.", .{ .name = profiles.displayName(name) }),
         },
         .style = &style.modal_text,
     });
@@ -319,65 +435,7 @@ fn confirmPrompt(context: *ui.Frame) !void {
 }
 
 fn modalButton(context: *ui.Frame, key: ui.Key, label: []const u8, button_style: *const ui.Style) !bool {
-    const is_clicked = (try context.interact(Button{ .key = key, .label = label, .style = button_style })).clicked;
+    const is_clicked = (try context.interact(Button{ .key = key, .label = lang.text(label), .style = button_style })).clicked;
     if (is_clicked) context.requestRedraw();
     return is_clicked;
-}
-
-fn clearSwitchTarget() void {
-    if (g_switch_target) |name| g_allocator.free(name);
-    g_switch_target = null;
-}
-
-/// Returns whether it was clicked; hovering it names what it does.
-fn iconButton(context: *ui.Frame, icon: Icon, is_disabled: bool) !bool {
-    const tip = Tooltip{ .key = ui.Key.str("knots.header.icon.tip").indexed(@backingInt(icon)), .content = tooltip(icon) };
-    _ = try tip.open(context);
-    const button = Button{
-        .key = ui.Key.str("knots.header.icon").indexed(@backingInt(icon)),
-        .disabled = is_disabled,
-        .style = if (is_disabled) &style.icon_button_disabled else switch (icon) {
-            .add => &style.icon_button_add,
-            .copy => &style.icon_button,
-            .delete => &style.icon_button_danger,
-            .reset => &style.icon_button_reset,
-            .import => &style.icon_button_import,
-        },
-    };
-    const response = try button.openResponse(context);
-    const tint: Color = if (is_disabled)
-        style.BORDER_STRONG
-    else if (response.hovered) switch (icon) {
-        .add => style.SUCCESS,
-        .copy => style.TEXT,
-        .delete => style.DESTRUCTIVE,
-        .reset => style.PURPLE,
-        .import => style.SKY,
-    } else style.MUTED;
-    const glyph_key = ui.Key.str("knots.header.icon.glyph").indexed(@backingInt(icon));
-    const glyph: glyphs.Glyph = switch (icon) {
-        .add => .add,
-        .copy => .copy,
-        .delete => .delete,
-        .reset => .reset,
-        .import => .import,
-    };
-    try context.e(Canvas{
-        .key = glyph_key,
-        .commands = try glyphs.commands(context.arena(), glyph, glyphs.ICON_SIZE, try glyphs.snapOffset(context, glyph_key), tint.value),
-        .style = &.{ .width = .fixed(glyphs.ICON_SIZE), .height = .fixed(glyphs.ICON_SIZE) },
-    });
-    try button.close(context);
-    try tip.close(context);
-    return response.clicked and !is_disabled;
-}
-
-fn tooltip(icon: Icon) []const u8 {
-    return switch (icon) {
-        .add => "New Profile",
-        .copy => "Copy Profile",
-        .delete => "Delete Profile",
-        .reset => "Reset Profile to Defaults",
-        .import => "Import Settings",
-    };
 }

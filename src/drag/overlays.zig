@@ -3,24 +3,22 @@ const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const gdi_overlay = @import("../platform/gdi_overlay.zig");
 const color = @import("../util/color.zig");
-const painter_mod = @import("../painter.zig");
+const config_mod = @import("../config.zig");
 const draw = @import("../thumbnail/draw.zig");
+const font_cache_mod = @import("../thumbnail/font_cache.zig");
+const ghost_groups = @import("ghost_groups.zig");
 const monitors = @import("../layout/monitors.zig");
-const spaces = @import("../layout/spaces.zig");
 const pixel_buffer = @import("../util/pixel_buffer.zig");
+const lang = @import("../lang/lang.zig");
 const log = @import("../log.zig");
 
-const Painter = painter_mod.Painter;
+const Config = config_mod.Config;
+const FontCache = font_cache_mod.FontCache;
+const GhostGroup = ghost_groups.GhostGroup;
 const slog = log.Scoped("drag_overlays");
 
 const WINDOW_CLASS_NAME = "EVE_GHOST_OVERLAY_CLASS";
 const OUTLINE_THICKNESS = 2;
-
-/// One saved-position outline for the drag-time ghost overlay; `names` is the comma-joined list of every character sharing that exact rect, owned by whoever holds the group slice.
-pub const GhostGroup = struct {
-    rect: win32.RECT,
-    names: []const u8,
-};
 
 /// A topmost, click-through overlay outlining every other saved position during a drag, created on first use and hidden between drags.
 pub const GhostOverlay = struct {
@@ -42,18 +40,16 @@ pub const GhostOverlay = struct {
 
     /// Also run at the start of show, so snapping never reads a stale slice.
     fn clearGroups(self: *GhostOverlay) void {
-        if (self.groups) |groups| {
-            for (groups) |g| self.allocator.free(g.names);
-            self.allocator.free(groups);
-            self.groups = null;
-        }
+        const groups = self.groups orelse return;
+        ghost_groups.freeGroups(self.allocator, groups);
+        self.groups = null;
     }
 
     /// Called once when a drag starts, since the ghosts don't change during it.
-    pub fn show(self: *GhostOverlay, painter: *Painter, exclude_character: []const u8) void {
+    pub fn show(self: *GhostOverlay, instance: win32.HINSTANCE, font_cache: *FontCache, config: *const Config, exclude_character: []const u8) void {
         self.clearGroups();
 
-        const groups = collectGhostGroups(painter, exclude_character) catch |err| {
+        const groups = ghost_groups.collect(self.allocator, config, exclude_character) catch |err| {
             slog.err("Failed to collect ghost positions: {}", .{err});
             return;
         };
@@ -82,7 +78,7 @@ pub const GhostOverlay = struct {
         if (self.hwnd) |hwnd| {
             _ = win32.SetWindowPos(hwnd, win32.HWND_TOPMOST, bounds.left, bounds.top, width, height, win32.SWP_NOACTIVATE);
         } else {
-            registerWindowClass(painter.instance) catch |err| {
+            registerWindowClass(instance) catch |err| {
                 slog.err("Failed to register the ghost overlay window class: {}", .{err});
                 return;
             };
@@ -97,7 +93,7 @@ pub const GhostOverlay = struct {
                 height,
                 null,
                 null,
-                painter.instance,
+                instance,
                 null,
             ) orelse {
                 slog.err("Failed to create ghost overlay window", .{});
@@ -122,7 +118,7 @@ pub const GhostOverlay = struct {
         const overlay = &self.bitmap.?;
         overlay.clear();
 
-        const font = painter.font_cache.characterNameFont(&painter.config.thumbnail, monitors.getWindowDpi(hwnd)) catch |err| {
+        const font = font_cache.characterNameFont(&config.thumbnail, monitors.getWindowDpi(hwnd)) catch |err| {
             slog.err("Failed to get font for ghost overlay: {}", .{err});
             return;
         };
@@ -131,8 +127,8 @@ pub const GhostOverlay = struct {
             if (old_font) |previous_font| _ = win32.SelectObject(overlay.mem_dc, previous_font);
         }
 
-        // Same hue as the focused/active thumbnail border, at reduced alpha so it still reads as a ghost rather than a real thumbnail.
-        const outline_color: u32 = color.withAlpha(painter.config.thumbnail.borderColor, 0xB0);
+        // Reduced alpha, so it reads as a ghost rather than a real thumbnail.
+        const outline_color: u32 = color.withAlpha(config.thumbnail.borderColor, 0xB0);
         const text_color: u32 = 0xE0FFFFFF;
 
         for (groups) |group| {
@@ -141,11 +137,11 @@ pub const GhostOverlay = struct {
             const rect_width: usize = @intCast(group.rect.right - group.rect.left);
             const rect_height: usize = @intCast(group.rect.bottom - group.rect.top);
 
-            pixel_buffer.drawRectOutline(overlay.pixels, overlay.width, overlay.height, local_x, local_y, rect_width, rect_height, OUTLINE_THICKNESS, outline_color);
+            pixel_buffer.drawRectOutline(overlay.canvas(), local_x, local_y, rect_width, rect_height, OUTLINE_THICKNESS, outline_color);
 
             const dims = draw.measureText(overlay.mem_dc, group.names);
             draw.renderText(overlay.mem_dc, group.names, local_x, local_y, text_color);
-            pixel_buffer.fixTextAlphaRect(overlay.pixels, overlay.width, overlay.height, local_x, local_y, dims.width, dims.height);
+            pixel_buffer.fixTextAlphaRect(overlay.canvas(), local_x, local_y, dims.width, dims.height);
         }
 
         gdi_overlay.presentLayered(hwnd, overlay, 255);
@@ -161,77 +157,20 @@ pub const GhostOverlay = struct {
     }
 };
 
-var g_class_registered = false;
-
-/// Saved positions for every other character in the profile, grouped by exact rect match (identical x/y/w/h counts as "stacked"). Caller owns the returned slice and each group's `names`.
-pub fn collectGhostGroups(painter: *const Painter, exclude_character: []const u8) ![]GhostGroup {
-    const allocator = painter.allocator;
-    const RawEntry = struct { name: []const u8, rect: win32.RECT };
-
-    var raw: std.ArrayList(RawEntry) = .empty;
-    defer raw.deinit(allocator);
-
-    for (painter.config.characters.items) |character_config| {
-        if (std.mem.eql(u8, character_config.name, exclude_character)) continue;
-        const position = character_config.position orelse continue;
-        // A space ignores the saved position, so it's no snap target.
-        if (spaces.spaceFor(painter.config, character_config.name) != null) continue;
-        const size = painter.config.handPlacedSize(character_config.name);
-        try raw.append(allocator, .{
-            .name = character_config.name,
-            .rect = .{ .left = position.x, .top = position.y, .right = position.x + size.width, .bottom = position.y + size.height },
-        });
-    }
-
-    var groups: std.ArrayList(GhostGroup) = .empty;
-    errdefer {
-        for (groups.items) |g| allocator.free(g.names);
-        groups.deinit(allocator);
-    }
-
-    const used = try allocator.alloc(bool, raw.items.len);
-    defer allocator.free(used);
-    @memset(used, false);
-
-    for (raw.items, 0..) |entry, i| {
-        if (used[i]) continue;
-        used[i] = true;
-
-        var names: std.ArrayList(u8) = .empty;
-        defer names.deinit(allocator);
-        try names.appendSlice(allocator, entry.name);
-
-        for (raw.items[i + 1 ..], i + 1..) |other, j| {
-            if (used[j] or !std.meta.eql(entry.rect, other.rect)) continue;
-            used[j] = true;
-            try names.appendSlice(allocator, ", ");
-            try names.appendSlice(allocator, other.name);
-        }
-
-        const joined = try names.toOwnedSlice(allocator);
-        errdefer allocator.free(joined);
-        try groups.append(allocator, .{ .rect = entry.rect, .names = joined });
-    }
-
-    return groups.toOwnedSlice(allocator);
-}
+var g_is_class_registered = false;
 
 /// Hint box centered on the monitor nearest `dragging_hwnd`; called once when a drag starts, static for its duration.
-pub fn showDragHint(painter: *Painter, dragging_hwnd: win32.HWND) void {
-    showHint(painter, dragging_hwnd, "Hold Ctrl to move all thumbnails together", "Turn off dragging from the tray icon or settings");
-}
-
-fn showHint(painter: *Painter, hwnd: win32.HWND, line1: []const u8, line2: []const u8) void {
-    const nearest = monitors.nearestMonitorBounds(hwnd);
-    const font = painter.font_cache.characterNameFont(&painter.config.thumbnail, monitors.dpiForMonitor(nearest.monitor)) catch |err| {
+pub fn showDragHint(hint_box: *gdi_overlay.HintBox, instance: win32.HINSTANCE, font_cache: *FontCache, config: *const Config, dragging_hwnd: win32.HWND) void {
+    const nearest = monitors.nearestMonitorBounds(dragging_hwnd);
+    const font = font_cache.characterNameFont(&config.thumbnail, monitors.dpiForMonitor(nearest.monitor)) catch |err| {
         slog.err("Failed to get font for drag hint: {}", .{err});
         return;
     };
-    painter.hint_box.show(painter.instance, font, color.withAlpha(painter.config.thumbnail.characterNameColor, 0xFF), line1, line2, nearest.bounds);
+    hint_box.show(instance, font, color.withAlpha(config.thumbnail.characterNameColor, 0xFF), lang.text("Hold Ctrl to move all thumbnails together"), lang.text("Turn off dragging from the tray icon or settings"), nearest.bounds);
 }
 
 fn registerWindowClass(instance: win32.HINSTANCE) !void {
-    if (g_class_registered) return;
+    if (g_is_class_registered) return;
     try gdi_overlay.registerWindowClass(instance, win32.DefWindowProcA, WINDOW_CLASS_NAME, null);
-    g_class_registered = true;
+    g_is_class_registered = true;
 }

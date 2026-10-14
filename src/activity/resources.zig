@@ -22,10 +22,10 @@ pub const ProcessResourceStats = struct {
 
 const CpuSample = struct {
     cpu_time_ms: u64,
-    wall_time_ms: i64,
+    wall_time: win32.Ticks,
 };
 
-/// Main-thread only - no locking, unlike tracker.zig's trackers which are fed cross-thread.
+/// Main thread only, so unlocked.
 pub const ResourceTracker = struct {
     allocator: std.mem.Allocator,
     cpu_samples: std.AutoHashMap(win32.DWORD, CpuSample),
@@ -77,11 +77,11 @@ pub const ResourceTracker = struct {
         return self.stats.get(process_id) orelse .{};
     }
 
-    /// Cheap enough to call on a throttled interval (caller decides cadence) rather than every timer tick.
-    pub fn sampleAll(self: *ResourceTracker, windows: []const scout.EveWindow, now_ms: i64) void {
+    /// Too costly for every timer tick; call it on a throttled interval.
+    pub fn sampleAll(self: *ResourceTracker, windows: []const scout.EveWindow, now: win32.Ticks) void {
         for (windows) |eve_window| {
             if (eve_window.process_id == 0) continue;
-            self.sampleCpuAndRam(eve_window.process_id, now_ms);
+            self.sampleCpuAndRam(eve_window.process_id, now);
         }
         if (self.is_vram_available) {
             self.pollVram(windows) catch |err| {
@@ -91,7 +91,7 @@ pub const ResourceTracker = struct {
         self.pruneStale(windows);
     }
 
-    fn sampleCpuAndRam(self: *ResourceTracker, process_id: win32.DWORD, now_ms: i64) void {
+    fn sampleCpuAndRam(self: *ResourceTracker, process_id: win32.DWORD, now: win32.Ticks) void {
         // Not logged: this runs every sample, and fails only for a client that has just closed.
         const handle = win32.OpenProcess(win32.PROCESS_QUERY_LIMITED_INFORMATION, win32.FALSE, process_id) orelse return;
         defer _ = win32.CloseHandle(handle);
@@ -109,14 +109,14 @@ pub const ResourceTracker = struct {
         if (win32.toBool(win32.GetProcessTimes(handle, &creation_time, &exit_time, &kernel_time, &user_time))) {
             const cpu_time_ms = (kernel_time.toU64() + user_time.toU64()) / FILETIME_TICKS_PER_MS;
             if (self.cpu_samples.get(process_id)) |previous| {
-                const wall_delta_ms = now_ms - previous.wall_time_ms;
+                const wall_delta_ms = now.elapsedSince(previous.wall_time);
                 if (wall_delta_ms > 0 and cpu_time_ms >= previous.cpu_time_ms) {
                     const cpu_delta_ms = cpu_time_ms - previous.cpu_time_ms;
                     const raw_percent = (@as(f64, @floatFromInt(cpu_delta_ms)) / @as(f64, @floatFromInt(wall_delta_ms))) / self.logical_processor_count * 100.0;
                     entry.value_ptr.cpu_percent = @floatCast(std.math.clamp(raw_percent, 0.0, 100.0));
                 }
             }
-            self.cpu_samples.put(process_id, .{ .cpu_time_ms = cpu_time_ms, .wall_time_ms = now_ms }) catch |err| {
+            self.cpu_samples.put(process_id, .{ .cpu_time_ms = cpu_time_ms, .wall_time = now }) catch |err| {
                 slog.warn("Failed to record CPU sample for pid {}: {}", .{ process_id, err });
             };
         }
@@ -185,11 +185,17 @@ pub const ResourceTracker = struct {
 /// Null when there's no "pid_<N>", or N overflows a DWORD.
 fn parsePidFromInstanceName(name: []const u8) ?win32.DWORD {
     const pid_index = std.mem.find(u8, name, PID_TOKEN) orelse return null;
-    const digits_start = pid_index + PID_TOKEN.len;
-    var end = digits_start;
-    while (end < name.len and std.ascii.isDigit(name[end])) : (end += 1) {}
-    if (end == digits_start) return null;
-    return std.fmt.parseInt(win32.DWORD, name[digits_start..end], 10) catch null;
+    var process_id: win32.DWORD = 0;
+    var digit_count: usize = 0;
+    for (name[pid_index + PID_TOKEN.len ..]) |char| {
+        if (!std.ascii.isDigit(char)) break;
+        const shifted = @mulWithOverflow(process_id, 10);
+        const added = @addWithOverflow(shifted[0], @as(win32.DWORD, char - '0'));
+        if (shifted[1] != 0 or added[1] != 0) return null;
+        process_id = added[0];
+        digit_count += 1;
+    }
+    return if (digit_count == 0) null else process_id;
 }
 
 const testing = std.testing;

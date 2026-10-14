@@ -100,19 +100,19 @@ pub fn sections(draft: *Draft, root: Value, profile_name: []const u8) ![]const S
     const has_chatlog = source.first(&.{ .{ source.global, "EnableChatLogMonitoring" }, .{ source.global, "EnableGameLogMonitoring" }, .{ source.global, "ChatLogDirectory" }, .{ source.global, "GameLogDirectory" }, .{ source.logs, "gameLogsMonitoringEnabled" } }) != null;
 
     return draft.arena.dupe(Section, &.{
-        .{ .id = "thumbnailAppearance", .title = "dynamic.import.evex.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.evex.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.evex.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
-        .{ .id = "characterColorsHotkeys", .title = "dynamic.import.evex.characterColorsHotkeys.title", .hint = try colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.evex.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
-        .{ .id = "autoMinimize", .title = "dynamic.import.evex.autoMinimize.title", .hint = .{ .key = "dynamic.import.evex.autoMinimize.hint" }, .available = has_auto_minimize },
-        .{ .id = "snapping", .title = "dynamic.import.evex.snapping.title", .hint = .{ .key = "dynamic.import.evex.snapping.hint" }, .available = has_snapping },
-        .{ .id = "globalHotkeys", .title = "dynamic.import.apm.globalHotkeys.title", .hint = .{ .key = "dynamic.import.evex.globalHotkeys.hint" }, .available = has_global_hotkeys },
-        .{ .id = "chatlog", .title = "dynamic.import.apm.chatlog.title", .hint = .{ .key = "dynamic.import.apm.chatlog.hint" }, .available = has_chatlog },
+        .{ .id = "thumbnailAppearance", .title = "Thumbnail Appearance", .hint = .{ .key = "Border colors/thickness, text overlay, opacity" }, .available = has_appearance },
+        .{ .id = "characterPositions", .title = "Character Positions & Sizes", .hint = try draft.countText("{n} character(s) with saved positions", position_count), .available = position_count > 0 },
+        .{ .id = "characterColorsHotkeys", .title = "Character Colors & Hotkeys", .hint = try colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "Hotkey Groups", .hint = try draft.countText("{n} group(s)", group_count), .available = group_count > 0 },
+        .{ .id = "autoMinimize", .title = "Auto-Minimize", .hint = .{ .key = "Minimize inactive clients + excluded characters" }, .available = has_auto_minimize },
+        .{ .id = "snapping", .title = "Snapping & Suspend Hotkey", .hint = .{ .key = "Thumbnail snapping + global suspend-hotkeys key" }, .available = has_snapping },
+        .{ .id = "globalHotkeys", .title = "Global Hotkeys & Behavior", .hint = .{ .key = "Toggle-visibility hotkey, hold-to-repeat cycling, lock positions" }, .available = has_global_hotkeys },
+        .{ .id = "chatlog", .title = "Chatlog Monitoring", .hint = .{ .key = "Chatlog/gamelog folders" }, .available = has_chatlog },
     });
 }
 
 pub fn colorsHint(draft: *Draft, color_count: usize, hotkey_count: usize) !draft_mod.Text {
-    return draft.text("dynamic.import.characterColorsHotkeysHint", &.{ .{ .name = "colors", .value = try draft.format(color_count) }, .{ .name = "hotkeys", .value = try draft.format(hotkey_count) } });
+    return draft.text("{colors} custom color(s), {hotkeys} character hotkey(s)", &.{ .{ .name = "colors", .value = try draft.format(color_count) }, .{ .name = "hotkeys", .value = try draft.format(hotkey_count) } });
 }
 
 pub fn hasText(text: ?[]const u8) bool {
@@ -205,7 +205,7 @@ fn appearance(draft: *Draft, source: Source) !void {
 
     try draft.setBool("thumbnail.showSystemName", values.flag(values.get(source.global, "ShowSystemName")));
     try draft.setBool("thumbnail.activeThumbnailHidden", values.flag(source.first(&.{ .{ source.global, "HideActiveThumbnail" }, .{ source.behavior, "HideThumbForActiveWin" } })));
-    try draft.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
+    try draft.note("Thumbnail appearance settings imported.", &.{});
 }
 
 fn characterPositions(draft: *Draft, source: Source) !void {
@@ -227,8 +227,8 @@ fn characterPositions(draft: *Draft, source: Source) !void {
         if (values.number(values.get(position, "height"))) |height| try draft.put(character, "thumbnailSize.height", values.numberValue(height));
         imported_count += 1;
     }
-    try draft.noteCount("dynamic.import.importedPositionsWithSizeNote", "n", imported_count);
-    if (skipped_count > 0) try draft.noteCount("dynamic.import.skippedPlaceholderNote", "n", skipped_count);
+    try draft.noteCount("Imported saved position/size for {n} character(s).", "n", imported_count);
+    if (skipped_count > 0) try draft.noteCount("Skipped {n} example or non-character item(s) - not real characters.", "n", skipped_count);
 }
 
 fn colorsAndHotkeys(draft: *Draft, source: Source) !void {
@@ -250,8 +250,8 @@ fn colorsAndHotkeys(draft: *Draft, source: Source) !void {
             }
             imported_count += 1;
         }
-        if (imported_count > 0) try draft.noteCount("dynamic.import.evex.importedBorderColorsForCharsNote", "n", imported_count);
-        if (values.arrayAt(colors, "TextColor").len > 0) try draft.note("dynamic.import.evex.textColorNotSupportedNote", &.{});
+        if (imported_count > 0) try draft.noteCount("Imported custom border colors for {n} character(s).", "n", imported_count);
+        if (values.arrayAt(colors, "TextColor").len > 0) try draft.note("Per-character text color is not supported in EVE-Maj Preview and was not imported.", &.{});
     }
 
     const entries = source.characterHotkeys();
@@ -269,11 +269,11 @@ fn colorsAndHotkeys(draft: *Draft, source: Source) !void {
                 try draft.put(character, "hotkey", try values.keyValue(draft.arena, combined));
                 converted_count += 1;
             } else {
-                try draft.note("dynamic.import.evex.hotkeySkippedNote", &.{ .{ .name = "name", .value = name }, .{ .name = "raw", .value = raw } });
+                try draft.note("Skipped hotkey for \"{name}\": \"{raw}\" can't be represented as a keyboard hotkey (mouse buttons/custom combinations aren't supported).", &.{ .{ .name = "name", .value = name }, .{ .name = "raw", .value = raw } });
             }
         }
     }
-    if (total_count > 0) try draft.note("dynamic.import.convertedHotkeysNote", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
+    if (total_count > 0) try draft.note("Converted {converted} of {total} character hotkey(s).", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
 }
 
 fn hotkeyGroups(draft: *Draft, source: Source) !void {
@@ -289,10 +289,10 @@ fn hotkeyGroups(draft: *Draft, source: Source) !void {
             if (member == .string) try members.append(member);
         }
         try draft.put(group, "characters", .{ .array = members });
-        try groupKey(draft, group, "forwardKey", name, values.stringAt(group_settings, "ForwardsHotkey"), "dynamic.import.hotkeyGroupForwardKeyFailedNote");
-        try groupKey(draft, group, "backwardKey", name, values.stringAt(group_settings, "BackwardsHotkey"), "dynamic.import.hotkeyGroupBackwardKeyFailedNote");
+        try groupKey(draft, group, "forwardKey", name, values.stringAt(group_settings, "ForwardsHotkey"), "Hotkey group \"{name}\": forward key \"{key}\" can't be converted.");
+        try groupKey(draft, group, "backwardKey", name, values.stringAt(group_settings, "BackwardsHotkey"), "Hotkey group \"{name}\": backward key \"{key}\" can't be converted.");
     }
-    try draft.notes.insert(draft.arena, first_note, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", groups.object.count()));
+    try draft.notes.insert(draft.arena, first_note, try draft.countText("Imported {n} hotkey group(s).", groups.object.count()));
 }
 
 fn groupKey(draft: *Draft, group: *std.json.ObjectMap, field: []const u8, name: []const u8, raw: ?[]const u8, failed_note: []const u8) !void {
@@ -316,7 +316,7 @@ fn autoMinimize(draft: *Draft, source: Source) !void {
         const name = values.characterName(raw.string) orelse continue;
         try draft.put(try draft.character(name), "excludeFromMinimize", .{ .bool = true });
     }
-    try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
+    try draft.note("Auto-minimize settings imported.", &.{});
 }
 
 fn snapping(draft: *Draft, source: Source) !void {
@@ -327,18 +327,18 @@ fn snapping(draft: *Draft, source: Source) !void {
         if (values.ahkHotkey(raw)) |combined| {
             try draft.setKeys("hotkeys.hotkeySuspend", .one(combined));
         } else {
-            try draft.note("dynamic.import.evex.suspendHotkeyFailedNote", &.{.{ .name = "key", .value = raw.? }});
+            try draft.note("Suspend-hotkeys key \"{key}\" can't be converted and was skipped.", &.{.{ .name = "key", .value = raw.? }});
         }
     }
-    try draft.note("dynamic.import.snappingImportedNote", &.{});
+    try draft.note("Snapping settings imported.", &.{});
 }
 
 fn globalHotkeys(draft: *Draft, source: Source) !void {
-    try actionHotkey(draft, source.first(&.{ .{ source.global, "HideShowThumbnailsHotkey" }, .{ source.hotkeys, "HideThumbnailsHotkey" } }), "hotkeys.hotkeyToggleVisibility", "dynamic.import.apm.actionLabel.toggleVisibility");
-    try actionHotkey(draft, values.get(source.hotkeys, "Close_All_EVE_Win_Hotkey"), "hotkeys.hotkeyCloseAll", "dynamic.import.apm.actionLabel.closeAll");
+    try actionHotkey(draft, source.first(&.{ .{ source.global, "HideShowThumbnailsHotkey" }, .{ source.hotkeys, "HideThumbnailsHotkey" } }), "hotkeys.hotkeyToggleVisibility", "Toggle Thumbnail Visibility");
+    try actionHotkey(draft, values.get(source.hotkeys, "Close_All_EVE_Win_Hotkey"), "hotkeys.hotkeyCloseAll", "Close All Clients");
     try draft.setBool("hotkeys.allowHotkeyAutoRepeat", values.flag(values.get(source.global, "CycleWhileHeld")));
     if (values.flag(values.get(source.global, "LockPositions"))) |locked| try draft.setBool("interaction.enableDragging", !locked);
-    try draft.note("dynamic.import.apm.globalHotkeysImportedNote", &.{});
+    try draft.note("Global action hotkeys imported.", &.{});
 }
 
 fn actionHotkey(draft: *Draft, raw: ?Value, path: []const u8, label: []const u8) !void {
@@ -347,7 +347,7 @@ fn actionHotkey(draft: *Draft, raw: ?Value, path: []const u8, label: []const u8)
     if (values.ahkHotkey(value.string)) |combined| {
         try draft.setKeys(path, .one(combined));
     } else {
-        try draft.note("dynamic.import.apm.globalHotkeyUnsupportedNote", &.{.{ .name = "label", .value = label, .should_translate = true }});
+        try draft.note("{label} hotkey can't be represented as a keyboard hotkey (mouse button or unsupported) and was skipped.", &.{.{ .name = "label", .value = label, .should_translate = true }});
     }
 }
 
@@ -361,7 +361,7 @@ fn chatlog(draft: *Draft, source: Source) !void {
     }
     try setDirectory(draft, "chatlog.chatlogDir", values.stringAt(source.global, "ChatLogDirectory") orelse values.stringAt(source.logs, "chatLogsDirectory"));
     try setDirectory(draft, "chatlog.gamelogDir", values.stringAt(source.global, "GameLogDirectory") orelse values.stringAt(source.logs, "gameLogsDirectory"));
-    try draft.note("dynamic.import.apm.chatlogImportedNote", &.{});
+    try draft.note("Chatlog monitoring settings imported.", &.{});
 }
 
 fn setDirectory(draft: *Draft, path: []const u8, raw: ?[]const u8) !void {

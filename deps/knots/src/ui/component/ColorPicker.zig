@@ -24,6 +24,8 @@ show_hex: bool = true,
 show_alpha: bool = true,
 /// EVE-Maj patch: on, the swatch is struck through, showing `value` is only a fallback.
 is_unset: bool = false,
+/// EVE-Maj patch: on, the swatch shows a hue sweep instead of `value`, marking a picker for any colour.
+show_rainbow: bool = false,
 /// EVE-Maj patch: set, the popup ends with a Reset button, disabled while `is_unset`; clicking it sets this true and closes the popup.
 reset: ?*bool = null,
 
@@ -181,16 +183,20 @@ pub fn close(self: *const ColorPicker, frame: *Frame) !void {
 
     var swatch_cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
     const arena = frame.arena();
-    // EVE-Maj patch: an opaque colour covers the board, so it's only drawn under a translucent one.
-    if (self.value.value[3] < 1) try appendCheckerboard(&swatch_cmds, arena, m.swatch_w, m.swatch_h, 6, m.swatch_radius.value[0]);
-    try swatch_cmds.append(arena, .{ .fill_rect = .{
-        .x = 0,
-        .y = 0,
-        .w = m.swatch_w,
-        .h = m.swatch_h,
-        .color = self.value.value,
-        .corner_radius = m.swatch_radius,
-    } });
+    if (self.show_rainbow) {
+        try appendHueSweep(&swatch_cmds, arena, m.swatch_w, m.swatch_h, m.swatch_radius.value[0]);
+    } else {
+        // EVE-Maj patch: an opaque colour covers the board, so it's only drawn under a translucent one.
+        if (self.value.value[3] < 1) try appendCheckerboard(&swatch_cmds, arena, m.swatch_w, m.swatch_h, 6, m.swatch_radius.value[0]);
+        try swatch_cmds.append(arena, .{ .fill_rect = .{
+            .x = 0,
+            .y = 0,
+            .w = m.swatch_w,
+            .h = m.swatch_h,
+            .color = self.value.value,
+            .corner_radius = m.swatch_radius,
+        } });
+    }
     // EVE-Maj patch: with no hex, the trigger's own border frames the swatch, so it has no outline of its own.
     if (self.show_hex) try swatch_cmds.append(arena, .{ .stroke_rect = .{
         .x = 0.5,
@@ -457,6 +463,25 @@ fn renderSvControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicke
         .interactive = true,
     }, .{ .canvas = .{ .cmds = cmds.items } });
     ui.close();
+}
+
+/// EVE-Maj patch: the hue strip's six bands across a `w` by `h` swatch, its outer corners rounded by up to `radius`.
+fn appendHueSweep(cmds: *std.ArrayList(Decoration.DrawCmd), arena: std.mem.Allocator, w: f32, h: f32, radius: f32) !void {
+    const segment_w = w / 6.0;
+    const r = @min(radius, segment_w / 2);
+    for (0..6) |i| {
+        const x = @as(f32, @floatFromInt(i)) * segment_w;
+        const c0 = hsvToLinearColor(@as(f32, @floatFromInt(i)) / 6.0, 1, 1, 1).value;
+        const c1 = hsvToLinearColor(@as(f32, @floatFromInt(i + 1)) / 6.0, 1, 1, 1).value;
+        try cmds.append(arena, .{ .fill_rect_gradient = .{
+            .x = x,
+            .y = 0,
+            .w = if (i == 5) w - x else segment_w,
+            .h = h,
+            .colors = .{ c0, c1, c1, c0 },
+            .corner_radius = if (i == 0) Radius.corners(r, 0, 0, r) else if (i == 5) Radius.corners(0, r, r, 0) else .zero,
+        } });
+    }
 }
 
 fn renderHueControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, m: Metrics) !void {

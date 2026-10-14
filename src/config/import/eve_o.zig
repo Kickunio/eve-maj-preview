@@ -12,6 +12,7 @@ const Draft = draft_mod.Draft;
 const KeyList = key_list.KeyList;
 const Section = draft_mod.Section;
 
+const SKIPPED_PLACEHOLDER_NOTE = "Skipped {n} placeholder item(s) from EVE-O Preview's default config - not real characters.";
 /// EVE-O Preview's fixed number of cycle groups.
 const CYCLE_GROUP_COUNT = 5;
 /// Right Win, which `vk` has no name for.
@@ -84,12 +85,12 @@ pub fn sections(draft: *Draft, root: Value) ![]const Section {
         values.has(root, "OverlayLabelColor") or values.has(root, "ThumbnailSize");
 
     return draft.arena.dupe(Section, &.{
-        .{ .id = "thumbnailAppearance", .title = "dynamic.import.eveo.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.eveo.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.eveo.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
-        .{ .id = "characterColors", .title = "dynamic.import.eveo.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.eveo.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
-        .{ .id = "autoMinimize", .title = "dynamic.import.eveo.autoMinimize.title", .hint = .{ .key = "dynamic.import.eveo.autoMinimize.hint" }, .available = values.has(root, "MinimizeInactiveClients") },
-        .{ .id = "snapping", .title = "dynamic.import.eveo.snapping.title", .hint = .{ .key = "dynamic.import.eveo.snapping.hint" }, .available = values.has(root, "EnableThumbnailSnap") },
+        .{ .id = "thumbnailAppearance", .title = "Thumbnail Appearance", .hint = .{ .key = "Border color/thickness, text overlay, opacity, hover zoom" }, .available = has_appearance },
+        .{ .id = "characterPositions", .title = "Character Positions & Sizes", .hint = try draft.countText("{n} character(s) with saved positions", position_count), .available = position_count > 0 },
+        .{ .id = "characterColors", .title = "Character Colors & Hotkeys", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "Hotkey Groups", .hint = try draft.countText("{n} group(s)", group_count), .available = group_count > 0 },
+        .{ .id = "autoMinimize", .title = "Auto-Minimize", .hint = .{ .key = "Minimize inactive clients" }, .available = values.has(root, "MinimizeInactiveClients") },
+        .{ .id = "snapping", .title = "Snapping", .hint = .{ .key = "Thumbnail snapping" }, .available = values.has(root, "EnableThumbnailSnap") },
     });
 }
 
@@ -101,11 +102,11 @@ pub fn build(draft: *Draft, root: Value, chosen: []const []const u8, cycle_group
     if (draft_mod.isChosen(chosen, "hotkeyGroups")) try hotkeyGroups(draft, root, cycle_group_name);
     if (draft_mod.isChosen(chosen, "autoMinimize")) {
         if (values.get(root, "MinimizeInactiveClients")) |v| try draft.setBool("autoMinimize.enabled", values.truthy(v));
-        try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
+        try draft.note("Auto-minimize settings imported.", &.{});
     }
     if (draft_mod.isChosen(chosen, "snapping")) {
         if (values.get(root, "EnableThumbnailSnap")) |v| try draft.setBool("snapping.enabled", values.truthy(v));
-        try draft.note("dynamic.import.snappingImportedNote", &.{});
+        try draft.note("Snapping settings imported.", &.{});
     }
 }
 
@@ -222,7 +223,7 @@ fn countCharacters(arena: std.mem.Allocator, map: ?Value, seen: *std.array_hash_
 }
 
 fn appearance(draft: *Draft, root: Value) !void {
-    try draft.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
+    try draft.note("Thumbnail appearance settings imported.", &.{});
     if (values.jsonNumber(values.get(root, "ThumbnailsOpacity"))) |fraction| {
         try draft.setNumber("thumbnail.thumbnailOpacity", std.math.clamp(@round(fraction * 255), 0, 255));
     }
@@ -231,7 +232,7 @@ fn appearance(draft: *Draft, root: Value) !void {
         if (color(raw)) |parsed| {
             try draft.setColor("thumbnail.borderColor", parsed);
         } else {
-            try draft.note("dynamic.import.eveo.activeColorUnrecognizedNote", &.{.{ .name = "color", .value = raw }});
+            try draft.note("Active client highlight color \"{color}\" wasn't recognized and was skipped.", &.{.{ .name = "color", .value = raw }});
         }
     }
     try draft.setNumber("thumbnail.borderWidth", values.jsonNumber(values.get(root, "ActiveClientHighlightThickness")));
@@ -244,7 +245,7 @@ fn appearance(draft: *Draft, root: Value) !void {
         if (color(raw)) |parsed| {
             try draft.setColor("thumbnail.characterNameColor", parsed);
         } else {
-            try draft.note("dynamic.import.eveo.labelColorUnrecognizedNote", &.{.{ .name = "color", .value = raw }});
+            try draft.note("Overlay label color \"{color}\" wasn't recognized and was skipped.", &.{.{ .name = "color", .value = raw }});
         }
     }
     try draft.setOverlayFont(null, values.jsonNumber(values.get(root, "OverlayLabelSize")));
@@ -306,8 +307,8 @@ fn characterPositions(draft: *Draft, root: Value) !void {
             try imported_names.put(draft.arena, name, {});
         }
     }
-    try draft.noteCount("dynamic.import.importedPositionsWithSizeNote", "n", imported_names.count());
-    if (skipped_names.count() > 0) try draft.noteCount("dynamic.import.eveo.skippedPlaceholderNote", "n", skipped_names.count());
+    try draft.noteCount("Imported saved position/size for {n} character(s).", "n", imported_names.count());
+    if (skipped_names.count() > 0) try draft.noteCount(SKIPPED_PLACEHOLDER_NOTE, "n", skipped_names.count());
 }
 
 fn colorsAndHotkeys(draft: *Draft, root: Value) !void {
@@ -343,9 +344,9 @@ fn colorsAndHotkeys(draft: *Draft, root: Value) !void {
         }
     }
 
-    try draft.noteCount("dynamic.import.importedBorderColorsCountNote", "n", colored_count);
-    if (total_count > 0) try draft.note("dynamic.import.convertedHotkeysNote", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
-    if (skipped_names.count() > 0) try draft.noteCount("dynamic.import.eveo.skippedPlaceholderNote", "n", skipped_names.count());
+    try draft.noteCount("Imported {n} custom border color(s).", "n", colored_count);
+    if (total_count > 0) try draft.note("Converted {converted} of {total} character hotkey(s).", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
+    if (skipped_names.count() > 0) try draft.noteCount(SKIPPED_PLACEHOLDER_NOTE, "n", skipped_names.count());
 }
 
 fn hotkeyGroups(draft: *Draft, root: Value, cycle_group_name: []const u8) !void {
@@ -357,8 +358,8 @@ fn hotkeyGroups(draft: *Draft, root: Value, cycle_group_name: []const u8) !void 
         const forward_bound = try boundKeys(draft.arena, values.arrayAt(root, try draft.arena.print("CycleGroup{d}ForwardHotkeys", .{group_number})));
         const backward_bound = try boundKeys(draft.arena, values.arrayAt(root, try draft.arena.print("CycleGroup{d}BackwardHotkeys", .{group_number})));
         const name = try std.mem.replaceOwned(u8, draft.arena, cycle_group_name, "{n}", try draft.format(group_number));
-        const forward = try groupKeys(draft, forward_bound, name, "dynamic.import.hotkeyGroupForwardKeyFailedNote");
-        const backward = try groupKeys(draft, backward_bound, name, "dynamic.import.hotkeyGroupBackwardKeyFailedNote");
+        const forward = try groupKeys(draft, forward_bound, name, "Hotkey group \"{name}\": forward key \"{key}\" can't be converted.");
+        const backward = try groupKeys(draft, backward_bound, name, "Hotkey group \"{name}\": backward key \"{key}\" can't be converted.");
 
         var list: std.json.Array = .init(draft.arena);
         for (members) |member| try list.append(.{ .string = member });
@@ -368,5 +369,5 @@ fn hotkeyGroups(draft: *Draft, root: Value, cycle_group_name: []const u8) !void 
         try draft.put(group, "backwardKey", try values.keysValue(draft.arena, backward));
         imported_count += 1;
     }
-    try draft.notes.insert(draft.arena, first_note, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", imported_count));
+    try draft.notes.insert(draft.arena, first_note, try draft.countText("Imported {n} hotkey group(s).", imported_count));
 }

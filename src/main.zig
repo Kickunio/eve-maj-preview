@@ -1,4 +1,4 @@
-//! Entry point: startup and shutdown, the hidden timer window whose tick drives everything, and profile reloads.
+//! Entry point: process setup, the single-instance check, building the App in dependency order, and the hidden timer window whose messages drive it.
 const std = @import("std");
 const build_options = @import("build_options");
 const win32 = @import("platform/win32.zig");
@@ -6,67 +6,30 @@ const gdi_overlay = @import("platform/gdi_overlay.zig");
 const fonts = @import("platform/fonts.zig");
 const focus_grant = @import("platform/focus_grant.zig");
 const crash = @import("crash.zig");
+const arguments = @import("arguments.zig");
+const app_mod = @import("app.zig");
 const config = @import("config.zig");
 const scout = @import("clients/scout.zig");
-const activation = @import("clients/activation.zig");
-const painter = @import("painter.zig");
-const hotkeys = @import("hotkeys/manager.zig");
-const exclusions = @import("hotkeys/exclusions.zig");
+const activation = @import("control/activation.zig");
+const focus = @import("control/focus.zig");
+const chatlog = @import("chatlog.zig");
 const mouse_hook = @import("hotkeys/mouse_hook.zig");
 const keyboard_hook = @import("hotkeys/keyboard_hook.zig");
-const paste_upload = @import("hotkeys/paste_upload.zig");
-const chatlog = @import("chatlog.zig");
-const character_ids = @import("chatlog/character_ids.zig");
-const runtime = @import("activity/runtime.zig");
 const tts = @import("notifications/tts.zig");
 const sound = @import("notifications/sound.zig");
-const travel_left_behind = @import("travel/left_behind.zig");
 const tray = @import("tray.zig");
 const protocol = @import("protocol.zig");
 const update = @import("update.zig");
 const knots_host = @import("dialog/knots/host.zig");
-const schedule = @import("util/schedule.zig");
+const run_on_startup = @import("dialog/run_on_startup.zig");
+const lang = @import("lang/lang.zig");
 const log = @import("log.zig");
 
-const CharacterIds = character_ids.CharacterIds;
+const App = app_mod.App;
 const slog = log.Scoped("main");
-
-const TIMER_ID: usize = 1;
-/// Timed rather than counted in ticks, so a slower scan interval doesn't stretch it; each scan is a full EnumWindows.
-const FORCED_SCAN_INTERVAL_MS: u64 = 1000;
-/// With no window tracked and the configuration window closed there's nothing to draw, so the tick only keeps up with the scan.
-const IDLE_TICK_INTERVAL_MS: win32.UINT = FORCED_SCAN_INTERVAL_MS;
-const TRAVEL_CHECK_INTERVAL_MS: u64 = 2000;
-const PROFILE_NAME_BUFFER_SIZE = 256;
 
 /// Routes panics into eve-maj.log; Zig only looks for `panic` in the root source file.
 pub const panic = std.debug.FullPanic(crash.handlePanic);
-
-/// How far a live profile edit moves thumbnails: `spaces` reflows only while a thumbnail space is active, `all` repositions every thumbnail.
-pub const LiveLayout = enum { none, spaces, all };
-
-var g_allocator: std.mem.Allocator = undefined;
-var g_io: std.Io = undefined;
-var g_chatlog_monitor: ?*chatlog.ChatlogMonitor = null;
-var g_trackers: runtime.Trackers = undefined;
-
-// Public for the configuration window, which edits them in this process.
-pub var g_store: config.ProfileStore = undefined;
-pub var g_global_settings: config.GlobalConfig = undefined;
-pub var g_character_ids: CharacterIds = undefined;
-
-var g_tray_icon: ?tray.TrayIcon = null;
-var g_update_checker: ?update.UpdateChecker = null;
-
-/// Public so other modules can post to it without having it passed through every call.
-pub var g_timer_hwnd: ?win32.HWND = null;
-
-var g_pending_profile_buf: [PROFILE_NAME_BUFFER_SIZE]u8 = undefined;
-var g_pending_profile: ?[]const u8 = null;
-
-var g_last_forced_scan: win32.Ticks = .{};
-var g_tick_interval_ms: win32.UINT = 0;
-var g_last_travel_check: win32.Ticks = .{};
 
 pub fn main(init: std.process.Init) void {
     // Must precede any window/monitor API call, or Windows bitmap-stretches our windows on scaled monitors.
@@ -85,281 +48,145 @@ pub fn main(init: std.process.Init) void {
     };
 }
 
-/// Switches on the next message-loop turn, not inside the tray menu or hotkey handler that asked and would be torn down under it; copies `profile_name`.
-pub fn requestProfileSwitch(profile_name: []const u8) void {
-    if (profile_name.len > g_pending_profile_buf.len) {
-        slog.err("Failed to switch to profile '{s}': name too long", .{profile_name});
-        return;
-    }
-    const timer_hwnd = g_timer_hwnd orelse {
-        slog.err("Failed to switch profile: the timer window isn't ready", .{});
-        return;
-    };
-    @memcpy(g_pending_profile_buf[0..profile_name.len], profile_name);
-    g_pending_profile = g_pending_profile_buf[0..profile_name.len];
-    _ = win32.PostMessageA(timer_hwnd, win32.WM_SWITCH_PROFILE, 0, 0);
-}
-
-pub fn switchProfile(profile_name: []const u8) void {
-    reloadWithProfile(profile_name, null) catch |err| {
-        slog.err("Failed to switch to profile '{s}': {}", .{ profile_name, err });
-    };
-}
-
-/// After the config dialog saved `profile_name` from a draft; `global_draft`, if given, becomes the running global settings too.
-pub fn switchToSavedProfile(profile_name: []const u8, global_draft: ?*config.GlobalConfig) !void {
-    try reloadWithProfile(profile_name, global_draft);
-}
-
-/// After a Save of the running profile or global settings, restarts what only reads them at setup; `global_draft`, if given, is adopted and left holding the replaced values.
-pub fn applySavedSettings(global_draft: ?*config.GlobalConfig) !void {
-    const timer_hwnd = g_timer_hwnd orelse return error.MissingTimerWindow;
-    try restartSubsystems(timer_hwnd, null, global_draft);
-}
-
-/// The config dialog changed the running profile's unsaved `live` copy; `layout` says whether thumbnails may need to move as well as repaint.
-pub fn onLiveProfileEdited(layout: LiveLayout) void {
-    const painter_ptr = painter.g_painter_ptr orelse return;
-    // A view mode builds different windows, so it needs a new painter rather than a restyle.
-    if (painter_ptr.view_mode != g_store.live.display.viewMode) {
-        var system_names = teardownPainter();
-        defer system_names.deinit();
-        const windows: []const scout.EveWindow = if (scout.g_scout_ptr) |scout_ptr| scout_ptr.getWindows() else &.{};
-        buildPainter(windows, &system_names) catch |err| {
-            slog.err("Failed to rebuild thumbnails for view mode {s}: {}", .{ @tagName(g_store.live.display.viewMode), err });
-            // It pointed at the painter just destroyed; hotkeys return with the next reload or Save.
-            destroyHotkeyManager();
-            return;
-        };
-        slog.info("Rebuilt thumbnails for view mode {s}", .{@tagName(g_store.live.display.viewMode)});
-        return;
-    }
-    painter_ptr.syncPanels();
-    painter_ptr.refreshAllThumbnailConfigCaches();
-    // Moved before they're redrawn, so a thumbnail shown again appears in its new place rather than flashing up in its old one.
-    switch (layout) {
-        .none => {},
-        .spaces => painter_ptr.reflowIfSpacesActive(),
-        .all => painter_ptr.repositionAllThumbnails(),
-    }
-    painter_ptr.refreshAllThumbnailVisuals();
-}
-
-/// Quits the message loop, after the knots configuration window has closed if it's open.
-pub fn requestExit() void {
-    if (knots_host.closeForExit()) return;
-    win32.PostQuitMessage(0);
-}
-
 fn mainImpl(init: std.process.Init) !void {
-    g_io = init.io;
-    tts.setIo(g_io);
-    sound.setIo(g_io);
-    update.setIo(g_io);
-    paste_upload.setIo(g_io);
-    config.setIo(g_io);
+    const allocator = init.gpa;
+    tts.setIo(init.io);
+    sound.setIo(init.io);
     config.setEnvironMap(init.environ_map);
-    g_allocator = init.gpa;
-    knots_host.init(g_allocator, g_io);
+
+    var app: App = .init(allocator, init.io);
+    // Registered first, so callbacks lose the app only once everything below is torn down.
+    app_mod.g_app = &app;
+    defer app_mod.g_app = null;
+    knots_host.init(&app);
     defer knots_host.deinit();
-    g_trackers = .init(g_allocator, g_io);
 
     setCwdToExecutableDir();
-    config.migrateLegacyLayout();
+    config.migrateLegacyLayout(init.io);
 
-    // Handle protocol invocation before the mutex check, so commands work even when another instance is already running.
-    const protocol_url = try protocol.checkCommandLine(init.minimal.args, g_allocator);
-    defer if (protocol_url) |url| g_allocator.free(url);
+    // toSlice's result references several internal allocations, so it requires an arena rather than a plain allocator.
+    var args_arena = std.heap.ArenaAllocator.init(allocator);
+    defer args_arena.deinit();
+    const parsed = arguments.parse(try init.minimal.args.toSlice(args_arena.allocator()));
 
-    if (protocol_url) |url| {
+    // Before the mutex check, so commands work even when another instance is already running.
+    if (parsed.protocol_url) |url| {
         slog.info("Protocol handler invoked: {s}", .{url});
-        return protocol.forwardToRunningInstance(url, g_allocator);
+        return protocol.forwardToRunningInstance(url, allocator);
     }
 
-    // Read before the mutex, since GetLastError must be checked right after creating it.
-    const open_config = try hasArgument(init.minimal.args, "--config");
-
-    const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Global\\EVE-Maj-Preview-SingleInstance");
-    const instance_mutex = win32.CreateMutexW(null, win32.TRUE, mutex_name) orelse {
-        slog.err("Failed to create instance mutex", .{});
-        return error.CreateMutexFailed;
-    };
+    const instance_mutex = try claimSingleInstance() orelse return;
     defer _ = win32.CloseHandle(instance_mutex);
 
-    const last_error = win32.GetLastError();
-    if (last_error == win32.ERROR_ALREADY_EXISTS) {
-        if (protocol.findExistingInstance()) |hwnd| {
-            protocol.sendCommandToInstance(hwnd, .{ .open_config = {} });
-            return;
+    if (parsed.invalid) |invalid| {
+        switch (invalid) {
+            .missing_profile_name => slog.err("Failed to parse arguments: --profile needs a profile name", .{}),
+            .unknown => |arg| slog.err("Failed to parse arguments: unknown argument '{s}'", .{arg}),
         }
-        slog.info("Another instance of EVE-Maj Preview is already running", .{});
-        return error.AlreadyRunning;
+        return error.InvalidArguments;
     }
 
     slog.info("EVE-Maj Preview v{s}", .{build_options.version});
 
     fonts.loadBundled();
 
-    g_global_settings = try config.GlobalConfig.load(g_allocator);
-    defer g_global_settings.deinit();
+    app.global_settings = try config.GlobalConfig.load(allocator, init.io);
+    defer app.global_settings.deinit();
     // Before the chatlog monitor, whose shutdown defer then runs first.
-    g_character_ids = .load(g_allocator);
-    defer g_character_ids.deinit();
-    log.setLevel(g_global_settings.logLevel);
-    g_global_settings.logSettings();
+    app.character_ids = .load(allocator, init.io);
+    defer app.character_ids.deinit();
+    log.setLevel(app.global_settings.logLevel);
+    app.global_settings.logSettings();
+    // Every launch, since the Run value can be lost or point at a moved exe while the setting stays on.
+    if (app.global_settings.runOnStartup) run_on_startup.apply(true);
+    lang.init(allocator, app.global_settings.language);
+    defer lang.deinit();
 
-    var profile_name: []const u8 = if (g_global_settings.lastUsedProfile.len > 0)
-        g_global_settings.lastUsedProfile
-    else
-        config.DEFAULT_PROFILE;
-
-    // toSlice's result references several internal allocations, so it requires an arena rather than a plain allocator.
-    var args_arena = std.heap.ArenaAllocator.init(g_allocator);
-    defer args_arena.deinit();
-    const args = try init.minimal.args.toSlice(args_arena.allocator());
-
-    var arg_index: usize = 1;
-    while (arg_index < args.len) : (arg_index += 1) {
-        const arg = args[arg_index];
-        if (std.mem.eql(u8, arg, "--profile") or std.mem.eql(u8, arg, "-p")) {
-            if (arg_index + 1 < args.len) {
-                profile_name = args[arg_index + 1];
-                arg_index += 1;
-            } else {
-                slog.err("Failed to parse arguments: --profile needs a profile name", .{});
-                return error.InvalidArguments;
-            }
-        } else if (std.mem.eql(u8, arg, "--config")) {
-            // Handled before the instance check above.
-        } else if (std.mem.eql(u8, arg, "--protocol")) {
-            // Its URL was handled above.
-            if (arg_index + 1 < args.len) {
-                arg_index += 1;
-            }
-        } else {
-            slog.err("Failed to parse arguments: unknown argument '{s}'", .{arg});
-            return error.InvalidArguments;
-        }
-    }
-
-    g_store = try config.ProfileStore.init(try config.loadProfile(g_allocator, profile_name));
-    defer g_store.deinit();
+    const last_used = app.global_settings.lastUsedProfile;
+    const profile_name = parsed.profile orelse if (last_used.len > 0) last_used else config.DEFAULT_PROFILE;
+    app.store = try config.ProfileStore.init(try config.loadProfile(allocator, init.io, profile_name), init.io);
+    defer app.store.deinit();
 
     // Not profile_name: loadProfile() may have fallen back to default, and this heals global settings to match.
-    try g_global_settings.updateLastUsed(g_store.live.profile_name);
+    try app.global_settings.updateLastUsed(init.io, app.store.live.profile_name);
 
-    g_store.live.logSettings();
+    app.store.live.logSettings();
 
-    if (g_global_settings.autoRegisterProtocol) protocol.ensureRegistered(g_allocator);
+    app.instance = win32.GetModuleHandleA(null) orelse return error.GetModuleHandleFailed;
+    app.notifications.start(allocator, &app.store, app.instance);
+    defer app.notifications.deinit(allocator);
+
+    if (app.global_settings.autoRegisterProtocol) protocol.ensureRegistered(allocator);
 
     defer tts.shutdown();
     defer sound.shutdown();
 
-    if (g_global_settings.logLevel == .debug) log.openDebugConsole();
+    if (app.global_settings.logLevel == .debug) log.openDebugConsole();
 
-    const scout_ptr = try g_allocator.create(scout.Scout);
-    scout_ptr.* = scout.Scout.init(g_allocator, &g_store.saved);
-    scout_ptr.setGlobalInstance();
-    defer {
-        scout_ptr.deinit();
-        g_allocator.destroy(scout_ptr);
-    }
+    app.scout = scout.Scout.init(allocator, &app.store.saved);
+    app.scout.listenForEvents();
+    defer app.scout.deinit();
 
-    // Before the painter, whose thumbnails read it as they're created.
-    var exclusion_list = exclusions.Exclusions.init(g_allocator);
-    exclusion_list.setGlobalInstance();
-    defer exclusion_list.deinit();
+    // Before the thumbnail set, whose thumbnails read them as they're created.
+    defer app.exclusions.deinit();
+    defer app.auto_minimizer.deinit();
 
-    const painter_ptr = try createPainter();
-    defer destroyPainter();
+    const thumbnail_set = try app.createThumbnailSet();
+    defer app.destroyThumbnailSet();
 
-    if (g_store.live.chatlog.enabled) {
-        g_chatlog_monitor = try createChatlogMonitor();
+    if (app.store.live.chatlog.enabled) {
+        app.chatlog_monitor = try app.createChatlogMonitor();
     } else {
         slog.info("Chatlog monitoring disabled", .{});
     }
 
-    g_trackers.setup(&g_store.saved, g_chatlog_monitor);
-    defer g_trackers.deinit();
+    app.trackers.setup(&app.store.saved, app.chatlog_monitor);
+    defer app.trackers.deinit();
 
     // Registered after the trackers' defer so it runs first (LIFO): the worker thread must stop before the trackers are freed, since it may be mid-iteration reading them.
-    defer destroyChatlogMonitor();
+    defer app.destroyChatlogMonitor();
 
-    if (g_chatlog_monitor) |monitor| {
-        // Started only now that the trackers are wired in, so it never observes them as null when they should be set.
-        startChatlogWorker(monitor);
-        slog.debug("Chatlog monitoring enabled", .{});
+    // Only now that the trackers are wired in, so the worker never observes them as null when they should be set.
+    if (app.chatlog_monitor) |monitor| startChatlogMonitoring(monitor, app.store.live.characters.items);
 
-        for (g_store.live.characters.items) |character_config| {
-            monitor.resolveCharacterId(character_config.name) catch |err| {
-                slog.warn("Failed to queue ID backfill for '{s}': {}", .{ character_config.name, err });
-            };
-        }
-    }
-
-    const instance = win32.GetModuleHandleA(null) orelse return error.GetModuleHandleFailed;
-
-    // Never shown (0x0, no ShowWindow), so the class's cursor is never actually displayed.
-    try gdi_overlay.registerWindowClass(instance, timerWindowProc, protocol.MAIN_WINDOW_CLASS, null);
-
-    const timer_hwnd = win32.CreateWindowExA(
-        0,
-        protocol.MAIN_WINDOW_CLASS,
-        "EVE Timer Window",
-        0,
-        0,
-        0,
-        0,
-        0,
-        null,
-        null,
-        instance,
-        null,
-    ) orelse return error.CreateWindowFailed;
+    const timer_hwnd = try createTimerWindow();
     defer _ = win32.DestroyWindow(timer_hwnd);
+    app.timer_hwnd = timer_hwnd;
 
-    g_timer_hwnd = timer_hwnd;
+    app.focus.start();
+    defer app.focus.deinit(timer_hwnd);
 
-    g_tray_icon = try tray.TrayIcon.init(g_allocator, timer_hwnd);
-    defer if (g_tray_icon) |*icon| icon.deinit();
+    app.tray_icon = try tray.TrayIcon.init(allocator, timer_hwnd);
+    defer if (app.tray_icon) |*icon| icon.deinit();
 
-    g_update_checker = update.UpdateChecker.init(g_allocator);
-    defer if (g_update_checker) |*checker| checker.deinit();
+    app.update_checker = update.UpdateChecker.init(allocator, init.io);
+    defer if (app.update_checker) |*checker| checker.deinit();
+    if (app.global_settings.disableUpdateChecks) slog.info("Update checks are disabled", .{}) else startUpdateCheck(allocator, init.io);
 
-    if (!g_global_settings.disableUpdateChecks) {
-        if (std.Thread.spawn(.{}, update.UpdateChecker.checkForUpdatesBackground, .{g_allocator})) |update_thread| {
-            update_thread.detach();
-        } else |err| {
-            slog.warn("Failed to start update check thread: {}", .{err});
-        }
-    } else {
-        slog.info("Update checks are disabled", .{});
-    }
-
-    try scout_ptr.scanForEveWindows();
+    try app.scout.scanForEveWindows();
 
     // Thumbnails first, since they need no I/O; the chatlog monitor's slower log discovery follows.
-    const eve_windows = scout_ptr.getWindows();
-    painter_ptr.populate(eve_windows, .{ .should_move_to_saved = g_store.live.autoMovePosition.moveOnStartup });
+    const eve_windows = app.scout.getWindows();
+    thumbnail_set.populate(eve_windows, .{ .should_move_to_saved = app.store.live.autoMovePosition.moveOnStartup });
 
-    if (g_chatlog_monitor) |monitor| addChatlogCharacters(monitor, eve_windows);
+    if (app.chatlog_monitor) |monitor| app_mod.addChatlogCharacters(monitor, eve_windows);
 
-    try createHotkeyManager(timer_hwnd);
+    try app.createHotkeyManager(timer_hwnd);
     focus_grant.install(timer_hwnd);
     defer {
-        destroyHotkeyManager();
+        app.destroyHotkeyManager();
         mouse_hook.deinit();
         keyboard_hook.deinit();
         focus_grant.uninstall();
     }
 
-    if (!setTickInterval(timer_hwnd, tickIntervalFor(eve_windows.len))) {
+    if (!app.setTickInterval(timer_hwnd, app.tickIntervalFor(eve_windows.len))) {
         slog.err("Failed to create timer", .{});
         return error.SetTimerFailed;
     }
-    defer _ = win32.KillTimer(timer_hwnd, TIMER_ID);
+    defer _ = win32.KillTimer(timer_hwnd, app_mod.TICK_TIMER_ID);
 
-    if (open_config) knots_host.open();
+    if (parsed.should_open_config) knots_host.open();
 
     var msg: win32.MSG = undefined;
     while (win32.GetMessageA(&msg, null, 0, 0) != 0) {
@@ -368,14 +195,48 @@ fn mainImpl(init: std.process.Init) !void {
     }
 }
 
-fn hasArgument(process_args: std.process.Args, flag: []const u8) !bool {
-    // toSlice's result references several internal allocations, so it requires an arena rather than a plain allocator.
-    var arena = std.heap.ArenaAllocator.init(g_allocator);
-    defer arena.deinit();
-    for (try process_args.toSlice(arena.allocator())) |arg| {
-        if (std.mem.eql(u8, arg, flag)) return true;
+/// The instance mutex, for the caller to close at exit; null when another instance is running, which has been asked to open its configuration window instead.
+fn claimSingleInstance() !?win32.HANDLE {
+    const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Global\\EVE-Maj-Preview-SingleInstance");
+    const instance_mutex = win32.CreateMutexW(null, win32.TRUE, mutex_name) orelse {
+        slog.err("Failed to create instance mutex", .{});
+        return error.CreateMutexFailed;
+    };
+    // Read straight after CreateMutexW, which sets it.
+    if (win32.GetLastError() != win32.ERROR_ALREADY_EXISTS) return instance_mutex;
+    _ = win32.CloseHandle(instance_mutex);
+
+    const hwnd = protocol.findExistingInstance() orelse {
+        slog.info("Another instance of EVE-Maj Preview is already running", .{});
+        return error.AlreadyRunning;
+    };
+    protocol.sendCommandToInstance(hwnd, .{ .open_config = {} });
+    return null;
+}
+
+/// The hidden window whose WM_TIMER drives the app; never shown, so its class's cursor never shows either.
+fn createTimerWindow() !win32.HWND {
+    const instance = win32.GetModuleHandleA(null) orelse return error.GetModuleHandleFailed;
+    try gdi_overlay.registerWindowClass(instance, timerWindowProc, protocol.MAIN_WINDOW_CLASS, null);
+    return win32.CreateWindowExA(0, protocol.MAIN_WINDOW_CLASS, "EVE Timer Window", 0, 0, 0, 0, 0, null, null, instance, null) orelse error.CreateWindowFailed;
+}
+
+fn startChatlogMonitoring(monitor: *chatlog.ChatlogMonitor, characters: []const config.CharacterConfig) void {
+    app_mod.startChatlogWorker(monitor);
+    slog.debug("Chatlog monitoring enabled", .{});
+    for (characters) |character_config| {
+        monitor.resolveCharacterId(character_config.name) catch |err| {
+            slog.warn("Failed to queue ID backfill for '{s}': {}", .{ character_config.name, err });
+        };
     }
-    return false;
+}
+
+fn startUpdateCheck(allocator: std.mem.Allocator, io: std.Io) void {
+    const update_thread = std.Thread.spawn(.{}, update.UpdateChecker.checkForUpdatesBackground, .{ allocator, io }) catch |err| {
+        slog.warn("Failed to start update check thread: {}", .{err});
+        return;
+    };
+    update_thread.detach();
 }
 
 /// Run-key startup entries launch with an arbitrary working directory, not the exe's folder.
@@ -398,51 +259,41 @@ fn setCwdToExecutableDir() void {
 }
 
 fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
+    const app = app_mod.g_app orelse return win32.DefWindowProcA(hwnd, msg, wParam, lParam);
     switch (msg) {
         win32.WM_TRAYICON => {
-            if (g_tray_icon) |*icon| {
-                icon.handleTrayMessage(lParam, &g_store.live);
-            }
+            if (app.tray_icon) |*icon| icon.handleTrayMessage(lParam, app);
             return 0;
         },
         win32.WM_COMMAND => {
-            if (g_tray_icon) |*icon| icon.handleMenuCommand(@truncate(wParam), &g_store);
+            if (app.tray_icon) |*icon| icon.handleMenuCommand(@truncate(wParam), app);
             return 0;
         },
         win32.WM_TIMER => {
-            if (wParam == TIMER_ID) {
-                onTimerTick();
-            } else if (wParam == painter.HIDE_DEBOUNCE_TIMER_ID) {
-                if (painter.g_painter_ptr) |painter_ptr| painter_ptr.autoHideAfterFocusLoss();
+            if (wParam == app_mod.TICK_TIMER_ID) {
+                app.tick();
+            } else if (wParam == focus.HIDE_DEBOUNCE_TIMER_ID) {
+                focus.onHideTimer(app);
             }
             return 0;
         },
         win32.WM_HOTKEY => {
             const id: c_int = @intCast(wParam);
             if (!focus_grant.handleWmHotkey(id)) {
-                if (hotkeys.g_hotkey_manager_ptr) |manager| {
-                    manager.handleHotkeyPress(id, lParam);
-                }
+                if (app.hotkey_manager) |manager| manager.handleHotkeyPress(id, lParam);
             }
             return 0;
         },
         win32.WM_HOTKEYS_STATE_CHANGED => {
-            if (painter.g_painter_ptr) |painter_ptr| {
-                if (hotkeys.g_hotkey_manager_ptr) |manager| {
-                    painter_ptr.notifyAll(.{ .notification_type = .HotkeySuspend, .state = if (manager.areHotkeysSuspended()) .suspended else .resumed });
+            if (app.thumbnail_set) |thumbnail_set| {
+                if (app.hotkey_manager) |manager| {
+                    thumbnail_set.notifyAll(.{ .notification_type = .HotkeySuspend, .state = if (manager.areHotkeysSuspended()) .suspended else .resumed });
                 }
             }
             return 0;
         },
         win32.WM_SWITCH_PROFILE => {
-            const pending = g_pending_profile orelse return 0;
-            g_pending_profile = null;
-            // Copied out, so a switch requested while this one runs can't overwrite the name in use.
-            var name_buf: [PROFILE_NAME_BUFFER_SIZE]u8 = undefined;
-            const name = name_buf[0..pending.len];
-            @memcpy(name, pending);
-            slog.info("Switching to profile: {s}", .{name});
-            switchProfile(name);
+            app.runPendingProfileSwitch();
             return 0;
         },
         win32.WM_COPYDATA => {
@@ -452,17 +303,15 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
             switch (copy_data.dwData) {
                 win32.PROTOCOL_SWITCH_CHARACTER => if (payload) |character_name| {
                     slog.info("Protocol handler: switch to character: {s}", .{character_name});
-                    if (scout.g_scout_ptr) |scout_ptr| {
-                        if (scout_ptr.getHwndByName(character_name)) |target_hwnd| {
-                            activation.activate(target_hwnd);
-                        } else {
-                            slog.warn("Failed to switch to character '{s}': not running", .{character_name});
-                        }
+                    if (app.scout.getHwndByName(character_name)) |target_hwnd| {
+                        activation.activate(app, target_hwnd);
+                    } else {
+                        slog.warn("Failed to switch to character '{s}': not running", .{character_name});
                     }
                 },
                 win32.PROTOCOL_SWITCH_PROFILE => if (payload) |profile_name| {
                     slog.info("Protocol handler: switch to profile: {s}", .{profile_name});
-                    switchProfile(profile_name);
+                    app.switchProfile(profile_name);
                 },
                 win32.PROTOCOL_OPEN_CONFIG => knots_host.open(),
                 else => {},
@@ -479,291 +328,9 @@ fn timerWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPar
                 return 0;
             };
             slog.info("Protocol handler: {s}", .{@tagName(action)});
-            if (hotkeys.g_hotkey_manager_ptr) |manager| manager.runGlobalAction(action);
+            if (app.hotkey_manager) |manager| manager.runGlobalAction(action);
             return 0;
         },
         else => return win32.DefWindowProcA(hwnd, msg, wParam, lParam),
     }
-}
-
-/// Runs one WM_TIMER tick: scans for EVE windows, then feeds the painter, chatlog monitor and activity trackers.
-fn onTimerTick() void {
-    const tick_start = win32.Ticks.now();
-    const force_scan = schedule.nextTickWouldBeLate(@intCast(tick_start.elapsedSince(g_last_forced_scan)), FORCED_SCAN_INTERVAL_MS, g_tick_interval_ms);
-    if (force_scan) g_last_forced_scan = tick_start;
-
-    const scout_ptr = scout.g_scout_ptr orelse return;
-    var scout_result = scout_ptr.update(force_scan);
-    defer scout_result.deinit(g_allocator);
-
-    if (painter.g_painter_ptr) |painter_ptr| {
-        painter_ptr.update(scout_result.windows, scout_result.closed_windows.items, scout_result.name_changes.items) catch |err| {
-            slog.err("Failed to update Painter: {}", .{err});
-        };
-
-        painter_ptr.updateNotifications();
-        painter_ptr.checkHoverZoom();
-    }
-
-    if (g_chatlog_monitor) |monitor| {
-        monitor.update(&scout_result) catch |err| {
-            slog.err("Failed to update Chatlog Monitor: {}", .{err});
-        };
-    }
-
-    // Unwrapped to i64 since activity/tracker.zig's windows still do plain i64 arithmetic.
-    g_trackers.tick(&g_store.live, scout_result.windows, @intCast(tick_start.ms), g_tick_interval_ms);
-
-    if (painter.g_painter_ptr) |painter_ptr| {
-        if (schedule.isDue(@intCast(tick_start.elapsedSince(g_last_travel_check)), TRAVEL_CHECK_INTERVAL_MS, g_tick_interval_ms)) {
-            g_last_travel_check = tick_start;
-            travel_left_behind.check(painter_ptr, tick_start);
-        }
-    }
-
-    const wanted_interval = tickIntervalFor(scout_result.windows.len);
-    if (wanted_interval != g_tick_interval_ms) {
-        if (g_timer_hwnd) |timer_hwnd| {
-            if (setTickInterval(timer_hwnd, wanted_interval)) slog.debug("Tick interval now {} ms", .{wanted_interval});
-        }
-    }
-}
-
-/// The configured scan interval, or IDLE_TICK_INTERVAL_MS while there's nothing to draw.
-fn tickIntervalFor(window_count: usize) win32.UINT {
-    if (window_count == 0 and !knots_host.isOpen()) return IDLE_TICK_INTERVAL_MS;
-    return g_store.saved.timer.scanIntervalMs;
-}
-
-/// SetTimer replaces the running tick timer in place; false if it couldn't be set.
-fn setTickInterval(timer_hwnd: win32.HWND, interval_ms: win32.UINT) bool {
-    if (win32.SetTimer(timer_hwnd, TIMER_ID, interval_ms, null) == 0) return false;
-    g_tick_interval_ms = interval_ms;
-    return true;
-}
-
-/// Publishes the painter through painter.g_painter_ptr, which is also how main.zig reaches it.
-fn createPainter() !*painter.Painter {
-    const new_painter = try g_allocator.create(painter.Painter);
-    errdefer g_allocator.destroy(new_painter);
-    new_painter.* = try painter.Painter.init(g_allocator, &g_store);
-    painter.g_painter_ptr = new_painter;
-    return new_painter;
-}
-
-fn destroyPainter() void {
-    const old_painter = painter.g_painter_ptr orelse return;
-    painter.g_painter_ptr = null;
-    old_painter.deinit();
-    g_allocator.destroy(old_painter);
-}
-
-/// Keeps each client's last-known system name for buildPainter to seed the new painter with; the caller frees it.
-fn teardownPainter() painter.SystemNameSnapshot {
-    var system_names = painter.SystemNameSnapshot.init(g_allocator);
-    if (painter.g_painter_ptr) |old_painter| system_names.capture(old_painter);
-    destroyPainter();
-    return system_names;
-}
-
-/// Also repoints the hotkey manager, the one other holder of the painter's pointer.
-fn buildPainter(windows: []const scout.EveWindow, system_names: *const painter.SystemNameSnapshot) !void {
-    const new_painter = try createPainter();
-    if (hotkeys.g_hotkey_manager_ptr) |manager| manager.painter = new_painter;
-    new_painter.populate(windows, .{
-        // Clients are already where the user put them; only startup and new arrivals auto-move.
-        .should_move_to_saved = false,
-        // Only seeded if monitoring stays on to refresh it, or a stale name would freeze on screen forever.
-        .system_names = if (g_store.saved.chatlog.enabled) system_names else null,
-    });
-}
-
-/// Publishes the manager through hotkeys.g_hotkey_manager_ptr, which is also how main.zig reaches it, then registers its hotkeys; a registration failure is logged, not fatal.
-fn createHotkeyManager(timer_hwnd: win32.HWND) !void {
-    const scout_ptr = scout.g_scout_ptr orelse {
-        slog.err("Failed to create the hotkey manager: Scout isn't ready", .{});
-        return error.MissingScout;
-    };
-    const painter_ptr = painter.g_painter_ptr orelse {
-        slog.err("Failed to create the hotkey manager: Painter isn't ready", .{});
-        return error.MissingPainter;
-    };
-    const exclusion_list = exclusions.g_exclusions_ptr orelse {
-        slog.err("Failed to create the hotkey manager: the exclusion list isn't ready", .{});
-        return error.MissingExclusions;
-    };
-    const manager = try g_allocator.create(hotkeys.HotkeyManager);
-    errdefer g_allocator.destroy(manager);
-    manager.* = try hotkeys.HotkeyManager.init(g_allocator, &g_store, &g_global_settings, scout_ptr, painter_ptr, exclusion_list);
-    hotkeys.g_hotkey_manager_ptr = manager;
-
-    manager.registerHotkeys(timer_hwnd) catch |err| {
-        slog.warn("Failed to register hotkeys, continuing without hotkey support: {}", .{err});
-    };
-}
-
-fn destroyHotkeyManager() void {
-    const manager = hotkeys.g_hotkey_manager_ptr orelse return;
-    hotkeys.g_hotkey_manager_ptr = null;
-    manager.deinit();
-    g_allocator.destroy(manager);
-}
-
-/// Created with its worker thread stopped, so the trackers can be wired in before it runs.
-fn createChatlogMonitor() !*chatlog.ChatlogMonitor {
-    return chatlog.ChatlogMonitor.init(g_allocator, g_io, &g_store.saved.chatlog, &g_global_settings, &g_character_ids);
-}
-
-fn destroyChatlogMonitor() void {
-    const monitor = g_chatlog_monitor orelse return;
-    g_chatlog_monitor = null;
-    monitor.deinit();
-    g_allocator.destroy(monitor);
-}
-
-fn startChatlogWorker(monitor: *chatlog.ChatlogMonitor) void {
-    monitor.startWorkerThread() catch |err| {
-        slog.warn("Failed to start chatlog worker thread: {}", .{err});
-    };
-}
-
-fn addChatlogCharacters(monitor: *chatlog.ChatlogMonitor, windows: []const scout.EveWindow) void {
-    for (windows) |eve_window| {
-        if (!eve_window.is_eve_client) continue;
-        monitor.addCharacter(eve_window.character_name) catch |err| {
-            slog.err("Failed to add '{s}' to the chatlog monitor: {}", .{ eve_window.character_name, err });
-        };
-    }
-}
-
-/// Picks up windows the new profile's filters match and drops those they no longer do; a failed scan keeps the already-tracked windows.
-fn rescanWindows() []const scout.EveWindow {
-    const scout_ptr = scout.g_scout_ptr orelse return &.{};
-    scout_ptr.scanForEveWindows() catch |err| {
-        slog.err("Failed to scan for EVE windows: {}", .{err});
-    };
-    scout_ptr.pruneNonMatchingWindows();
-    return scout_ptr.getWindows();
-}
-
-fn reloadWithProfile(new_profile_name: []const u8, global_draft: ?*config.GlobalConfig) !void {
-    slog.info("=== Starting profile reload: {s} ===", .{new_profile_name});
-
-    const timer_hwnd = g_timer_hwnd orelse return error.MissingTimerWindow;
-
-    const loaded = config.loadProfile(g_allocator, new_profile_name) catch |err| blk: {
-        slog.err("Failed to load profile '{s}', reverting to the default: {}", .{ new_profile_name, err });
-        break :blk config.loadProfile(g_allocator, config.DEFAULT_PROFILE) catch {
-            // Original profile-load error, not the fallback's.
-            return err;
-        };
-    };
-    // Built before anything is torn down, so a failure here leaves the running profile intact.
-    const new_store = config.ProfileStore.init(loaded) catch |err| {
-        slog.err("Failed to set up profile '{s}': {}", .{ new_profile_name, err });
-        return err;
-    };
-
-    const profile_changed = !std.mem.eql(u8, g_store.live.profile_name, new_store.live.profile_name);
-    try restartSubsystems(timer_hwnd, new_store, global_draft);
-
-    if (profile_changed) {
-        const name = g_store.live.profile_name;
-        const display_name = if (std.mem.endsWith(u8, name, ".json")) name[0 .. name.len - ".json".len] else name;
-        if (painter.g_painter_ptr) |painter_ptr| painter_ptr.notifyAll(.{ .notification_type = .ProfileSwitch, .target = display_name });
-    }
-
-    slog.info("=== Profile reload complete: {s} ===", .{new_profile_name});
-}
-
-/// Tears down and rebuilds everything set up from the profile; `replacement`, owned from here on, becomes the running store.
-fn restartSubsystems(timer_hwnd: win32.HWND, replacement: ?config.ProfileStore, global_draft: ?*config.GlobalConfig) !void {
-    var pending = replacement;
-    errdefer if (pending) |*store| store.deinit();
-    const next: *const config.Config = if (pending) |*store| &store.saved else &g_store.saved;
-
-    const kept_monitor: ?*chatlog.ChatlogMonitor = if (g_chatlog_monitor) |monitor| (if (monitor.runsWith(&next.chatlog)) monitor else null) else null;
-    // A Save keeps the painter: the dialog already previewed what was saved, so rebuilding would only flash every window.
-    const rebuild_painter = pending != null or painter.g_painter_ptr == null;
-
-    if (kept_monitor) |monitor| {
-        // Pause (not destroy) so the worker thread can't race the tracker swap below.
-        monitor.stopWorkerThread();
-        slog.debug("Paused chatlog monitor for reload (scan state preserved)", .{});
-    } else if (g_chatlog_monitor != null) {
-        destroyChatlogMonitor();
-        slog.debug("Cleaned up chatlog monitor", .{});
-    }
-
-    // After the chatlog worker is stopped above, since it reads the ore prices.
-    if (global_draft) |draft| g_global_settings.adopt(draft);
-
-    destroyHotkeyManager();
-    slog.debug("Cleaned up hotkey manager", .{});
-
-    var system_names = if (rebuild_painter) teardownPainter() else painter.SystemNameSnapshot.init(g_allocator);
-    defer system_names.deinit();
-
-    if (pending) |store| {
-        g_store.deinit();
-        g_store = store;
-        pending = null;
-        slog.info("Loaded new config: {s}", .{g_store.saved.profile_name});
-        g_store.saved.logSettings();
-    }
-
-    g_global_settings.updateLastUsed(g_store.saved.profile_name) catch |err| {
-        slog.warn("Failed to update global settings: {}", .{err});
-    };
-
-    // Windows the new filters drop are reported closed, and leave the painter and chatlog on the next tick.
-    const eve_windows = rescanWindows();
-    if (rebuild_painter) {
-        buildPainter(eve_windows, &system_names) catch |err| {
-            slog.err("Failed to create painter: {}", .{err});
-            return err;
-        };
-        slog.debug("Recreated {} thumbnail(s)", .{eve_windows.len});
-    } else if (painter.g_painter_ptr) |painter_ptr| {
-        // Windows the new filters admit.
-        painter_ptr.populate(eve_windows, .{ .should_move_to_saved = false });
-    }
-
-    if (kept_monitor) |monitor| {
-        monitor.applySettings(&g_store.saved.chatlog);
-        slog.debug("Applied reload settings to paused chatlog monitor", .{});
-    } else if (g_store.saved.chatlog.enabled) {
-        g_chatlog_monitor = createChatlogMonitor() catch |err| blk: {
-            slog.err("Failed to initialize chatlog monitor: {}", .{err});
-            break :blk null;
-        };
-    } else {
-        slog.info("Chatlog monitoring disabled in new profile", .{});
-    }
-
-    // Wired while the worker is stopped (paused above, or not started yet), so it never reads a tracker mid-swap.
-    g_trackers.setup(&g_store.saved, g_chatlog_monitor);
-
-    if (g_chatlog_monitor) |monitor| {
-        startChatlogWorker(monitor);
-        if (kept_monitor != null) {
-            slog.info("Resumed chatlog monitoring without rescanning logs", .{});
-        } else {
-            addChatlogCharacters(monitor, eve_windows);
-            slog.info("Reinitialized chatlog monitoring", .{});
-        }
-    }
-
-    createHotkeyManager(timer_hwnd) catch |err| {
-        slog.err("Failed to create hotkey manager: {}", .{err});
-        return err;
-    };
-    slog.debug("Reinitialized hotkey manager", .{});
-
-    const new_interval = tickIntervalFor(eve_windows.len);
-    if (!setTickInterval(timer_hwnd, new_interval)) {
-        slog.warn("Failed to update the timer interval to {} ms, keeping {} ms", .{ new_interval, g_tick_interval_ms });
-        return;
-    }
-    slog.debug("Updated timer interval to {} ms", .{new_interval});
 }

@@ -25,7 +25,7 @@ const RectList = struct {
     count: usize = 0,
 };
 
-/// Bounds of the monitor nearest `hwnd`, falling back to primary-monitor metrics (GetSystemMetrics only reports the primary monitor) if the lookup fails; also returns the resolved monitor handle, if any, for a DPI lookup.
+/// Falls back to the primary monitor's bounds, with a null monitor, if the lookup fails.
 pub fn nearestMonitorBounds(hwnd: win32.HWND) MonitorBounds {
     return monitorBounds(win32.MonitorFromWindow(hwnd, win32.MONITOR_DEFAULTTONEAREST));
 }

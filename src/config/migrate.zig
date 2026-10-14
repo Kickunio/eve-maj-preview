@@ -8,7 +8,7 @@ const Value = std.json.Value;
 /// Profiles from before thumbnailSpaces kept one fit region and a not-logged-in space as display settings.
 pub const SPACES_VERSION = 3;
 
-/// Brings an older profile up to the current schema; a profile already in it is left alone.
+/// A profile already on the current schema is left alone.
 pub fn profile(arena: std.mem.Allocator, root: *Value) !void {
     try spacesFromDisplay(arena, root);
     try placementModeFromSpaces(arena, root);

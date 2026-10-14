@@ -15,6 +15,7 @@ const suggest = @import("../suggest.zig");
 const status = @import("../status.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
+const lang = @import("../../../lang/lang.zig");
 const log = @import("../../../log.zig");
 
 const ScreenMap = screen_map.ScreenMap;
@@ -33,14 +34,14 @@ const POSITION_MARKER_SIZE = 6;
 const OPAQUE = 0xFF000000;
 
 const FLAGS = [_]Flag{
-    .{ .field = "excludeFromMinimize", .label = "Exclude from Auto-Minimize" },
-    .{ .field = "excludeFromCloseAll", .label = "Exclude from Close All" },
-    .{ .field = "excludeFromAutoMove", .label = "Exclude from Auto-Move" },
-    .{ .field = "hideThumbnail", .label = "Hide Thumbnail" },
-    .{ .field = "notificationsMuted", .label = "Mute Notifications" },
+    .{ .field = "excludeFromMinimize", .label = "Exclude from Auto-Minimize", .hint = "This client is never minimized automatically." },
+    .{ .field = "excludeFromCloseAll", .label = "Exclude from Close All", .hint = "The Close All hotkey leaves this client open." },
+    .{ .field = "excludeFromAutoMove", .label = "Exclude from Auto-Move", .hint = "Its window is never moved to its saved position." },
+    .{ .field = "hideThumbnail", .label = "Hide Thumbnail", .hint = "Also hides its row in the client list." },
+    .{ .field = "notificationsMuted", .label = "Mute Notifications", .hint = "No alerts for this character at all." },
 };
 
-const Flag = struct { field: []const u8, label: []const u8 };
+const Flag = struct { field: []const u8, label: []const u8, hint: []const u8 };
 
 var g_allocator: std.mem.Allocator = undefined;
 var g_selected_index: usize = 0;
@@ -113,19 +114,22 @@ fn characterRow(context: *ui.Frame, character: *const config.CharacterConfig, in
         .content = name,
         .style = if (is_selected) &style.roster_name_selected else &style.roster_name,
     });
+    var badge: []const u8 = "";
     if (character.hotkey.len > 0) {
         var text: std.Io.Writer.Allocating = .init(arena);
         try text.writer.writeByte('[');
         try hotkey.writeKeys(&text.writer, character.hotkey);
         try text.writer.writeByte(']');
-        try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.roster.hotkey").indexed(index), .content = text.written(), .style = &style.roster_badge });
+        badge = text.written();
+        try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.roster.hotkey").indexed(index), .content = badge, .style = &style.roster_badge });
     }
+    try widgets.fitRosterRow(context, name, style.ROSTER_PORTRAIT_SIZE, badge);
     try row.close(context);
 }
 
 fn rosterName(context: *ui.Frame, index: usize) ![]const u8 {
     const name = try bind.liveText(context, session.profile().item("characters", index), "name");
-    return if (name.len > 0) name else try std.fmt.allocPrint(context.arena(), "Character {d}", .{index + 1});
+    return if (name.len > 0) name else try lang.format(context.arena(), "Character {n}", .{ .n = index + 1 });
 }
 
 /// While searching, only matching rows show, and none can be dragged, since a drop among hidden rows would land somewhere unseen.
@@ -186,7 +190,8 @@ fn detail(context: *ui.Frame, profile: ProfileRef) !void {
     defer widgets.restoreRows(previous_rows);
 
     const header = try widgets.openDetailHeader(context, .src(@src()));
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Character Name", .style = &style.detail_label });
+    const name_label = lang.text("Character Name");
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = name_label, .style = try widgets.detailLabelStyle(context, name_label) });
     try bind.textBox(context, character, "name", "Character Name");
     const removed = try widgets.confirmButton(context, ui.Key.str("knots.character.remove").indexed(index), "Remove", "Confirm", &style.plain_button, &style.confirm_button);
     try header.close(context);
@@ -194,26 +199,30 @@ fn detail(context: *ui.Frame, profile: ProfileRef) !void {
     if (try suggest.openClients(context, name_box, bind.typedText(name_box))) |picked| character.set("name", picked);
 
     try bind.text(context, character, "displayName", "Display Name", "Same as character name");
-    try widgets.hintText(context, .str("knots.character.display.hint"), "Cosmetic only: shown on the thumbnail label and spoken by TTS if enabled. The Character Name above is still what's matched against your EVE login.");
+    try widgets.hintText(context, .str("knots.character.display.hint"), "Shown on the thumbnail and spoken aloud. Clients are still matched by Character Name.");
 
     const hotkey_row = try widgets.openBinding(context, .str("knots.character.hotkey"), "Hotkey");
     try hotkey.field(context, character, "hotkey");
     try hotkey_row.close(context);
+    try widgets.hintText(context, .str("knots.character.hotkey.hint"), "Brings this character's client to the front.");
     try widgets.separator(context, .str("knots.character.separator.identity"));
 
     try thumbnailSize(context, character);
-    try widgets.hintText(context, .str("knots.character.size.hint"), "Leave both blank to use the global thumbnail size from the Appearance tab.");
+    try widgets.hintText(context, .str("knots.character.size.hint"), "Leave blank to use the Appearance tab's size. Ignored inside a thumbnail space.");
     try widgets.separator(context, .str("knots.character.separator.size"));
 
     try opacity(context, character);
-    try widgets.hintText(context, .str("knots.character.opacity.hint"), "Stays linked to the Appearance tab's Opacity setting unless you move this slider away from it.");
+    try widgets.hintText(context, .str("knots.character.opacity.hint"), "Matches the Appearance tab until you move this slider.");
     try widgets.separator(context, .str("knots.character.separator.thumbnail"));
 
     try colors(context, character);
     try widgets.separator(context, .str("knots.character.separator.colors"));
 
     const behavior = try widgets.openFieldGroup(context, .str("knots.character.behavior"), "Behavior");
-    inline for (FLAGS) |flag| try bind.toggle(context, character, flag.field, flag.label);
+    inline for (FLAGS) |flag| {
+        try bind.toggle(context, character, flag.field, flag.label);
+        try widgets.hintText(context, .str("knots.character.flag.hint:" ++ flag.field), flag.hint);
+    }
     try behavior.close(context);
     try widgets.separator(context, .str("knots.character.separator.behavior"));
 
@@ -275,12 +284,14 @@ fn colors(context: *ui.Frame, character: CharacterRef) !void {
             .set => |argb| argb,
         };
     }
+    try widgets.hintText(context, .str("knots.character.active.hint"), "Reset uses the Appearance tab's color.");
     if (try widgets.optionalColor(context, ui.Key.str("knots.character.inactive").indexed(character.index), "Inactive Border Color", borders.inactiveBorderColor, inherited.inactiveBorderColor)) |change| {
         next.inactiveBorderColor = switch (change) {
             .cleared => null,
             .set => |argb| argb,
         };
     }
+    try widgets.hintText(context, .str("knots.character.inactive.hint"), "Reset uses the Appearance tab's color.");
     if (!std.meta.eql(next, borders)) character.set("borderColors", if (next.activeBorderColor == null and next.inactiveBorderColor == null) null else next);
     if (try widgets.optionalColor(context, ui.Key.str("knots.character.name_color").indexed(character.index), "Character Name Color", character.get("nameColor"), inherited.characterNameColor | OPAQUE)) |change| {
         character.set("nameColor", switch (change) {
@@ -288,6 +299,7 @@ fn colors(context: *ui.Frame, character: CharacterRef) !void {
             .set => |argb| argb,
         });
     }
+    try widgets.hintText(context, .str("knots.character.name_color.hint"), "Overrides unique name colors. Reset uses the normal color.");
     try group.close(context);
 }
 
@@ -295,26 +307,26 @@ fn colors(context: *ui.Frame, character: CharacterRef) !void {
 fn windowPosition(context: *ui.Frame, character: CharacterRef) !void {
     const row = try widgets.openBinding(context, .str("knots.character.window_position"), "Window Position");
     try context.e(Rect{ .key = .src(@src()), .style = &style.spacer });
-    const shown = if (character.get("windowPosition")) |position| try std.fmt.allocPrint(context.arena(), "{d}, {d}", .{ position.x, position.y }) else "Not set";
+    const shown = if (character.get("windowPosition")) |position| try std.fmt.allocPrint(context.arena(), "{d}, {d}", .{ position.x, position.y }) else lang.text("Not set");
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = shown, .style = &style.muted_text });
     const name = character.get("name");
     if (try widgets.confirmButton(context, ui.Key.str("knots.character.position.clear").indexed(character.index), "\u{00D7}", "OK", &style.icon_button_danger_text, &style.icon_button_confirm)) {
         positions.clear(name) catch |err| {
             slog.err("Failed to clear the window position of '{s}': {}", .{ name, err });
-            status.show(.failure, "Failed to save: {}", .{err});
+            status.show(.failure, "Failed to save: {err}", .{ .err = err });
         };
     }
-    if ((try context.interact(Button{ .key = ui.Key.str("knots.character.position.set").indexed(character.index), .label = "Save Position", .style = &style.plain_button })).clicked) {
+    if ((try context.interact(Button{ .key = ui.Key.str("knots.character.position.set").indexed(character.index), .label = lang.text("Save Position"), .style = &style.plain_button })).clicked) {
         if (positions.set(name)) {
             status.show(.success, "Window position saved", .{});
         } else |err| {
             slog.err("Failed to save the window position of '{s}': {}", .{ name, err });
-            status.show(.failure, "Failed to save: {}", .{err});
+            status.show(.failure, "Failed to save: {err}", .{ .err = err });
         }
     }
     try row.close(context);
     try positionMap(context, character);
-    try widgets.hintText(context, .str("knots.character.window_position.hint"), "Save Position requires this character's EVE client to be running right now.");
+    try widgets.hintText(context, .str("knots.character.window_position.hint"), "This character's client must be open to save its position.");
 }
 
 /// Every monitor with the saved window on it, or a marker at its top-left when it was saved without a size.
@@ -335,7 +347,7 @@ fn positionMap(context: *ui.Frame, character: CharacterRef) !void {
 fn populateFromClients(context: *ui.Frame, profile: ProfileRef) void {
     const names = positions.openClients(context.arena()) catch |err| {
         slog.err("Failed to populate characters from open clients: {}", .{err});
-        status.show(.failure, "Failed to scan clients: {}", .{err});
+        status.show(.failure, "Failed to scan clients: {err}", .{ .err = err });
         return;
     };
     if (names.len == 0) {
@@ -353,7 +365,7 @@ fn populateFromClients(context: *ui.Frame, profile: ProfileRef) void {
         added_count += 1;
     }
     if (added_count > 0) {
-        status.show(.success, "Added {d} character(s) from open EVE clients", .{added_count});
+        status.show(.success, "Added {n} character(s) from open EVE clients", .{ .n = added_count });
     } else {
         status.show(.info, "All open EVE clients are already in the list", .{});
     }

@@ -14,7 +14,7 @@ pub const BorderStyle = enum {
     CornerBrackets,
 };
 
-/// Visual style for the thumbnail overlay shown on characters excluded from hotkey cycling
+/// The overlay on characters excluded from hotkey cycling.
 pub const ExclusionOverlayStyle = enum {
     X,
     DiagonalSlash,
@@ -25,7 +25,7 @@ pub const ExclusionOverlayStyle = enum {
     None,
 };
 
-/// Animation style for window operations (restore, minimize)
+/// For restoring and minimizing clients.
 pub const AnimationStyle = enum {
     NoAnimation,
     OriginalAnimation,
@@ -57,21 +57,18 @@ pub const TextPosition = enum {
     BottomRight,
 };
 
-/// Primary display mode: how EVE clients are presented
 pub const ViewMode = enum {
     Thumbnails,
     ClientList,
     Nothing,
 };
 
-/// Ordering mode for rows in the compact client list view
 pub const ListViewOrder = enum {
     Tracked,
     Alphabetical,
     ConfiguredCharacters,
 };
 
-/// How the client list marks each row's state.
 pub const ListIndicatorStyle = enum {
     Dot,
     Square,
@@ -101,3 +98,6 @@ pub const RegionFitDirection = enum {
     ColumnFirst_BTT_LTR,
     ColumnFirst_BTT_RTL,
 };
+
+/// The app's language, in the configuration window and on-screen hints; each has its own file in src/lang/.
+pub const Language = enum { en, de, es, fr, pl, pt, ru };

@@ -35,8 +35,10 @@ const LABEL_PADDING_Y: usize = 4;
 const LABEL_CURSOR_OFFSET: i32 = 16;
 /// Enough for any monitor's width or height.
 const MAX_FIELD_DIGITS = 5;
-const BUTTON_LABEL_SIZE = 32;
-const HINT_SIZE = 192;
+pub const BUTTON_LABEL_SIZE = 32;
+pub const HINT_SIZE = 192;
+/// A size field's short name before its number, e.g. "W".
+pub const FIELD_PREFIX_SIZE = 16;
 
 // Save/Cancel mirror the config dialog's buttons: sizes are dialog px scaled by monitor DPI, colors are its palette.
 const BUTTON_WIDTH: i32 = 80;
@@ -78,16 +80,30 @@ const Controls = struct {
     buttons: [2]win32.RECT,
 };
 
-/// The overlay's on-screen text.
 pub const Labels = struct {
     save: [BUTTON_LABEL_SIZE]u8 = fixedText(BUTTON_LABEL_SIZE, "Save"),
     cancel: [BUTTON_LABEL_SIZE]u8 = fixedText(BUTTON_LABEL_SIZE, "Cancel"),
     hint_new: [HINT_SIZE]u8 = fixedText(HINT_SIZE, "Drag to draw the region, then drag its edges to adjust"),
     hint_edit: [HINT_SIZE]u8 = fixedText(HINT_SIZE, "Drag the edges to resize, or the inside to move"),
     hint_confirm: [HINT_SIZE]u8 = fixedText(HINT_SIZE, "Enter or Save to confirm, Esc or right-click to cancel"),
+    width_prefix: [FIELD_PREFIX_SIZE]u8 = fixedText(FIELD_PREFIX_SIZE, "W"),
+    height_prefix: [FIELD_PREFIX_SIZE]u8 = fixedText(FIELD_PREFIX_SIZE, "H"),
 };
 
 pub const Status = enum { success, cancelled, too_small };
+
+/// What a selection shows and starts from.
+pub const StartOptions = struct {
+    /// The region's outline and Save's colour.
+    accent_color: u32,
+    /// The size label's text.
+    label_color: u32,
+    /// The region to adjust; null drags out a new one.
+    edit_region: ?win32.RECT,
+    /// Copied; shown dashed, and snapped to.
+    other_regions: []const win32.RECT,
+    labels: Labels,
+};
 
 var g_is_window_class_registered = false;
 var g_border_color: u32 = DEFAULT_BORDER_COLOR;
@@ -157,16 +173,16 @@ pub fn labelText(buf: []const u8) []const u8 {
     return std.mem.sliceTo(buf, 0);
 }
 
-/// Starts or restarts the overlay, copying `other_regions`; `on_finished` then `on_result` run as it closes, neither if this fails.
-pub fn start(instance: win32.HINSTANCE, accent_color: u32, label_color: u32, edit_region: ?win32.RECT, other_regions: []const win32.RECT, labels: Labels, on_finished: *const fn () void, on_result: *const fn (Status, win32.RECT) void) !void {
+/// Starts or restarts the overlay; `on_finished` then `on_result` run as it closes, neither if this fails.
+pub fn start(instance: win32.HINSTANCE, options: StartOptions, on_finished: *const fn () void, on_result: *const fn (Status, win32.RECT) void) !void {
     try registerWindowClass(instance);
     g_on_finished = on_finished;
     g_on_result = on_result;
-    g_border_color = color.withAlpha(accent_color, 0xFF);
-    g_label_color = label_color;
-    g_labels = labels;
-    g_other_region_count = @min(other_regions.len, MAX_OTHER_REGIONS);
-    @memcpy(g_other_regions[0..g_other_region_count], other_regions[0..g_other_region_count]);
+    g_border_color = color.withAlpha(options.accent_color, 0xFF);
+    g_label_color = options.label_color;
+    g_labels = options.labels;
+    g_other_region_count = @min(options.other_regions.len, MAX_OTHER_REGIONS);
+    @memcpy(g_other_regions[0..g_other_region_count], options.other_regions[0..g_other_region_count]);
 
     g_virtual_screen = win32.virtualScreenRect();
     const left = g_virtual_screen.left;
@@ -182,7 +198,7 @@ pub fn start(instance: win32.HINSTANCE, accent_color: u32, label_color: u32, edi
 
     // A region that's mostly off the current screens clamps to nothing usable, so fall back to a fresh drag.
     g_is_edit_mode = false;
-    if (edit_region) |region| {
+    if (options.edit_region) |region| {
         g_bounds = monitorBoundsAt(win32.rectCenter(win32.clampRect(region, g_virtual_screen)));
         const clamped = win32.clampRect(region, g_bounds);
         if (isBigEnough(clamped)) enterEditMode(clamped);
@@ -218,17 +234,25 @@ pub fn start(instance: win32.HINSTANCE, accent_color: u32, label_color: u32, edi
 
 fn registerWindowClass(instance: win32.HINSTANCE) !void {
     if (g_is_window_class_registered) return;
-    g_cross_cursor = win32.LoadCursorA(null, win32.IDC_CROSS);
-    g_arrow_cursor = win32.LoadCursorA(null, win32.IDC_ARROW);
-    g_size_we_cursor = win32.LoadCursorA(null, win32.IDC_SIZEWE);
-    g_size_ns_cursor = win32.LoadCursorA(null, win32.IDC_SIZENS);
-    g_size_nwse_cursor = win32.LoadCursorA(null, win32.IDC_SIZENWSE);
-    g_size_nesw_cursor = win32.LoadCursorA(null, win32.IDC_SIZENESW);
-    g_size_all_cursor = win32.LoadCursorA(null, win32.IDC_SIZEALL);
-    g_hand_cursor = win32.LoadCursorA(null, win32.IDC_HAND);
-    g_ibeam_cursor = win32.LoadCursorA(null, win32.IDC_IBEAM);
+    g_cross_cursor = loadSystemCursor(win32.IDC_CROSS, "crosshair");
+    g_arrow_cursor = loadSystemCursor(win32.IDC_ARROW, "arrow");
+    g_size_we_cursor = loadSystemCursor(win32.IDC_SIZEWE, "left-right resize");
+    g_size_ns_cursor = loadSystemCursor(win32.IDC_SIZENS, "up-down resize");
+    g_size_nwse_cursor = loadSystemCursor(win32.IDC_SIZENWSE, "diagonal resize");
+    g_size_nesw_cursor = loadSystemCursor(win32.IDC_SIZENESW, "diagonal resize");
+    g_size_all_cursor = loadSystemCursor(win32.IDC_SIZEALL, "move");
+    g_hand_cursor = loadSystemCursor(win32.IDC_HAND, "hand");
+    g_ibeam_cursor = loadSystemCursor(win32.IDC_IBEAM, "text");
     try gdi_overlay.registerWindowClass(instance, wndProc, WINDOW_CLASS_NAME, null);
     g_is_window_class_registered = true;
+}
+
+/// Null, logged, if it can't be loaded; WM_SETCURSOR then leaves the class's arrow rather than hiding the pointer.
+fn loadSystemCursor(id: win32.LPCSTR, name: []const u8) ?win32.HCURSOR {
+    return win32.LoadCursorA(null, id) orelse {
+        slog.warn("Failed to load the '{s}' cursor for the region overlay", .{name});
+        return null;
+    };
 }
 
 /// Attaches to the foreground thread so Windows' foreground lock can't refuse SetForegroundWindow, which would leave Escape going nowhere.
@@ -289,10 +313,10 @@ fn drawRegion(bitmap: *const gdi_overlay.OverlayBitmap, rect: win32.RECT, fill: 
     const local_y = visible.top - g_virtual_screen.top;
     const width: usize = @intCast(signed_width);
     const height: usize = @intCast(signed_height);
-    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, @intCast(local_x), @intCast(local_y), width, height, fill);
+    pixel_buffer.fillRect(bitmap.canvas(), @intCast(local_x), @intCast(local_y), width, height, fill);
     switch (outline) {
-        .solid => pixel_buffer.drawRectOutline(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, width, height, BORDER_THICKNESS, border),
-        .dashed => pixel_buffer.drawDashedRectOutline(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, width, height, BORDER_THICKNESS, OTHER_REGION_DASH, border),
+        .solid => pixel_buffer.drawRectOutline(bitmap.canvas(), local_x, local_y, width, height, BORDER_THICKNESS, border),
+        .dashed => pixel_buffer.drawDashedRectOutline(bitmap.canvas(), local_x, local_y, width, height, BORDER_THICKNESS, OTHER_REGION_DASH, border),
     }
 }
 
@@ -342,7 +366,7 @@ fn drawSizeLabel(bitmap: *const gdi_overlay.OverlayBitmap, selection: win32.RECT
 
     const local_x: usize = @intCast(x - g_virtual_screen.left);
     const local_y: usize = @intCast(y - g_virtual_screen.top);
-    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, local_x, local_y, @intCast(label_width), @intCast(label_height), gdi_overlay.HINT_BACKGROUND_COLOR);
+    pixel_buffer.fillRect(bitmap.canvas(), local_x, local_y, @intCast(label_width), @intCast(label_height), gdi_overlay.HINT_BACKGROUND_COLOR);
     gdi_overlay.drawText(text_buf.len, bitmap.mem_dc, @intCast(local_x + LABEL_PADDING_X), @intCast(local_y + LABEL_PADDING_Y), text, g_label_color);
 }
 
@@ -428,7 +452,7 @@ fn drawHandle(bitmap: *const gdi_overlay.OverlayBitmap, center_x: i32, center_y:
     const x = std.math.clamp(center_x - @divTrunc(HANDLE_SIZE, 2), g_bounds.left, g_bounds.right - HANDLE_SIZE);
     const y = std.math.clamp(center_y - @divTrunc(HANDLE_SIZE, 2), g_bounds.top, g_bounds.bottom - HANDLE_SIZE);
     const size: usize = @intCast(HANDLE_SIZE);
-    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, @intCast(x - g_virtual_screen.left), @intCast(y - g_virtual_screen.top), size, size, HANDLE_COLOR);
+    pixel_buffer.fillRect(bitmap.canvas(), @intCast(x - g_virtual_screen.left), @intCast(y - g_virtual_screen.top), size, size, HANDLE_COLOR);
 }
 
 fn drawEditHandles(bitmap: *const gdi_overlay.OverlayBitmap, rect: win32.RECT) void {
@@ -621,13 +645,14 @@ fn drawButtons(bitmap: *const gdi_overlay.OverlayBitmap) void {
 fn drawField(bitmap: *const gdi_overlay.OverlayBitmap, rect: win32.RECT, field: Field, length: i32) void {
     const font = g_text_font orelse return;
     const is_focused = g_field_focus == field;
-    const prefix = switch (field) {
-        .width => "W",
-        .height => "H",
-    };
+    const prefix = labelText(switch (field) {
+        .width => &g_labels.width_prefix,
+        .height => &g_labels.height_prefix,
+    });
     const caret = if (is_focused) "_" else "";
 
-    var text_buf: [24]u8 = undefined;
+    // Fits the longest prefix, a space, any i32 and the caret.
+    var text_buf: [FIELD_PREFIX_SIZE + 13]u8 = undefined;
     const text = if (is_focused and !g_is_field_untouched)
         std.mem.print(&text_buf, "{s} {s}{s}", .{ prefix, g_field_digits[0..g_field_digit_count], caret }) catch unreachable
     else
@@ -658,7 +683,7 @@ fn redraw() void {
     const bitmap = if (g_bitmap) |*overlay| overlay else return;
     ensureTextFonts(bitmap.mem_dc);
 
-    pixel_buffer.fillRect(bitmap.pixels, bitmap.width, bitmap.height, 0, 0, bitmap.width, bitmap.height, DIM_COLOR);
+    pixel_buffer.fillRect(bitmap.canvas(), 0, 0, bitmap.width, bitmap.height, DIM_COLOR);
     for (g_other_regions[0..g_other_region_count]) |other| drawRegion(bitmap, other, OTHER_REGION_FILL, OTHER_REGION_BORDER, .dashed);
 
     if (g_is_edit_mode) {
@@ -686,7 +711,6 @@ fn maybeRedrawThrottled() void {
     redraw();
 }
 
-/// Null if the cursor position can't be read.
 fn cursorPos() ?win32.POINT {
     var pt: win32.POINT = undefined;
     if (!win32.toBool(win32.GetCursorPos(&pt))) return null;
@@ -734,11 +758,11 @@ fn wndProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win3
                     g_hand_cursor
                 else
                     cursorForHandle(hitTestEditRect(pt));
-                _ = win32.SetCursor(cursor);
+                _ = win32.SetCursor(cursor orelse return win32.DefWindowProcA(hwnd, msg, wParam, lParam));
                 return 1;
             }
             // Explicit crosshair so it's obvious the whole screen is draggable, not just click-through like the ghost/hint overlays.
-            _ = win32.SetCursor(g_cross_cursor);
+            _ = win32.SetCursor(g_cross_cursor orelse return win32.DefWindowProcA(hwnd, msg, wParam, lParam));
             return 1;
         },
         win32.WM_LBUTTONDOWN => {

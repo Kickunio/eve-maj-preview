@@ -7,7 +7,6 @@ const slog = log.Scoped("config");
 /// How every settings file is read: keys this version doesn't know are ignored.
 pub const PARSE_OPTIONS: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
 
-/// One pass of dropUnreadable, tracking the dotted path of the setting being checked.
 const Check = struct {
     arena: std.mem.Allocator,
     skipped: ?*std.ArrayList([]const u8),

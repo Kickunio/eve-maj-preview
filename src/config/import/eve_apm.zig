@@ -28,6 +28,7 @@ const EVENT_TYPES = [_]struct { []const u8, []const u8 }{
     .{ "convo_request", "ConversationInvite" },
 };
 
+const SKIPPED_NON_EVE_NOTE = "Skipped {n} non-EVE window item(s) (tracked via EVE-APM's non-EVE window overlay - not real characters).";
 const SUPPORTED_BORDER_STYLE_COUNT = 4;
 
 /// The mouse buttons thumbnails use themselves, which `vk` has no names for.
@@ -105,15 +106,15 @@ pub fn sections(draft: *Draft, ini: *const Ini) ![]const Section {
     const has_notifications = eve_x.hasText(ini.get("combatMessages", "enabledEventTypes"));
 
     return draft.arena.dupe(Section, &.{
-        .{ .id = "thumbnailAppearance", .title = "dynamic.import.apm.thumbnailAppearance.title", .hint = .{ .key = "dynamic.import.apm.thumbnailAppearance.hint" }, .available = has_appearance },
-        .{ .id = "characterPositions", .title = "dynamic.import.apm.characterPositions.title", .hint = try draft.countText("dynamic.import.characterPositionsHint", position_count), .available = position_count > 0 },
-        .{ .id = "characterColors", .title = "dynamic.import.apm.characterColors.title", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
-        .{ .id = "hotkeyGroups", .title = "dynamic.import.apm.hotkeyGroups.title", .hint = try draft.countText("dynamic.import.hotkeyGroupsCountHint", group_count), .available = group_count > 0 },
-        .{ .id = "globalHotkeys", .title = "dynamic.import.apm.globalHotkeys.title", .hint = .{ .key = "dynamic.import.apm.globalHotkeys.hint" }, .available = has_global_hotkeys },
-        .{ .id = "autoMinimize", .title = "dynamic.import.apm.autoMinimize.title", .hint = .{ .key = "dynamic.import.apm.autoMinimize.hint" }, .available = has_auto_minimize },
-        .{ .id = "snapping", .title = "dynamic.import.apm.snapping.title", .hint = .{ .key = "dynamic.import.apm.snapping.hint" }, .available = has_snapping },
-        .{ .id = "chatlog", .title = "dynamic.import.apm.chatlog.title", .hint = .{ .key = "dynamic.import.apm.chatlog.hint" }, .available = has_chatlog },
-        .{ .id = "notifications", .title = "dynamic.import.apm.notifications.title", .hint = .{ .key = "dynamic.import.apm.notifications.hint" }, .available = has_notifications },
+        .{ .id = "thumbnailAppearance", .title = "Thumbnail Appearance", .hint = .{ .key = "Border/text colors, opacity, font" }, .available = has_appearance },
+        .{ .id = "characterPositions", .title = "Character Positions", .hint = try draft.countText("{n} character(s) with saved positions", position_count), .available = position_count > 0 },
+        .{ .id = "characterColors", .title = "Character Colors & Hotkeys", .hint = try eve_x.colorsHint(draft, color_count, hotkey_count), .available = color_count + hotkey_count > 0 },
+        .{ .id = "hotkeyGroups", .title = "Hotkey Groups", .hint = try draft.countText("{n} group(s)", group_count), .available = group_count > 0 },
+        .{ .id = "globalHotkeys", .title = "Global Hotkeys & Behavior", .hint = .{ .key = "Close/minimize-all, toggle visibility, suspend, EVE-focus requirement" }, .available = has_global_hotkeys },
+        .{ .id = "autoMinimize", .title = "Auto-Minimize", .hint = .{ .key = "Minimize inactive clients + excluded characters" }, .available = has_auto_minimize },
+        .{ .id = "snapping", .title = "Snapping", .hint = .{ .key = "Thumbnail snapping" }, .available = has_snapping },
+        .{ .id = "chatlog", .title = "Chatlog Monitoring", .hint = .{ .key = "Chatlog/gamelog folders" }, .available = has_chatlog },
+        .{ .id = "notifications", .title = "Fleet/Event Notifications", .hint = .{ .key = "Fleet invite, decloak, mining, etc." }, .available = has_notifications },
     });
 }
 
@@ -289,22 +290,22 @@ fn borderStyle(draft: *Draft, path: []const u8, raw: ?[]const u8, label: []const
     const style_index = values.parseIntLoose(raw orelse return) orelse return;
     const name = if (style_index >= 0 and style_index < BORDER_STYLES.len) BORDER_STYLES[@intCast(style_index)] else try draft.arena.print("#{d}", .{style_index});
     if (style_index >= 0 and style_index < SUPPORTED_BORDER_STYLE_COUNT) return draft.setString(path, name);
-    try draft.note("dynamic.import.apm.borderStyleUnsupportedNote", &.{ .{ .name = "label", .value = label, .should_translate = true }, .{ .name = "name", .value = name } });
+    try draft.note("{label} border style \"{name}\" has no equivalent in EVE-Maj Preview and was not imported.", &.{ .{ .name = "label", .value = label, .should_translate = true }, .{ .name = "name", .value = name } });
 }
 
 fn appearance(draft: *Draft, ini: *const Ini) !void {
-    try draft.note("dynamic.import.thumbnailAppearanceImportedNote", &.{});
+    try draft.note("Thumbnail appearance settings imported.", &.{});
     try draft.setColor("thumbnail.borderColor", values.rgbColor(ini.get("ui", "highlightColor")));
     try draft.setNumber("thumbnail.borderWidth", number(ini.get("ui", "highlightBorderWidth")));
     try draft.setBool("thumbnail.showBorderWhenFocused", qtBool(ini.get("ui", "highlightActiveWindow")));
     try draft.setBool("thumbnail.hideWhenNoEveFocus", qtBool(ini.get("ui", "hideThumbnailsWhenEVENotFocused")));
     try draft.setBool("thumbnail.activeThumbnailHidden", qtBool(ini.get("ui", "hideActiveClientThumbnail")));
-    try borderStyle(draft, "thumbnail.borderStyle", ini.get("ui", "activeBorderStyle"), "dynamic.import.apm.activeLabel");
+    try borderStyle(draft, "thumbnail.borderStyle", ini.get("ui", "activeBorderStyle"), "Active");
 
     try draft.setColor("thumbnail.inactiveBorderColor", values.rgbColor(ini.get("ui", "inactiveBorderColor")));
     try draft.setNumber("thumbnail.inactiveBorderWidth", number(ini.get("ui", "inactiveBorderWidth")));
     try draft.setBool("thumbnail.showBorderWhenInactive", qtBool(ini.get("ui", "showInactiveBorders")));
-    try borderStyle(draft, "thumbnail.inactiveBorderStyle", ini.get("ui", "inactiveBorderStyle"), "dynamic.import.apm.inactiveLabel");
+    try borderStyle(draft, "thumbnail.inactiveBorderStyle", ini.get("ui", "inactiveBorderStyle"), "Inactive");
 
     const is_name_shown = qtBool(ini.get("overlay", "showCharacterName"));
     const is_system_shown = qtBool(ini.get("overlay", "showSystemName"));
@@ -364,8 +365,8 @@ fn characterPositions(draft: *Draft, ini: *const Ini) !void {
         try eve_x.putPosition(draft, try draft.character(name), @floatFromInt(point.x), @floatFromInt(point.y));
         imported_count += 1;
     }
-    try draft.noteCount("dynamic.import.apm.importedPositionsNote", "n", imported_count);
-    if (skipped_count > 0) try draft.noteCount("dynamic.import.apm.skippedNonEveWindowNote", "n", skipped_count);
+    try draft.noteCount("Imported saved position for {n} character(s).", "n", imported_count);
+    if (skipped_count > 0) try draft.noteCount(SKIPPED_NON_EVE_NOTE, "n", skipped_count);
 }
 
 fn colorsAndHotkeys(draft: *Draft, ini: *const Ini) !void {
@@ -403,10 +404,10 @@ fn colorsAndHotkeys(draft: *Draft, ini: *const Ini) !void {
         }
     }
 
-    try draft.noteCount("dynamic.import.importedBorderColorsCountNote", "n", colored_count);
+    try draft.noteCount("Imported {n} custom border color(s).", "n", colored_count);
     const total_count = if (hotkeys) |found| found.count() else 0;
-    if (total_count > 0) try draft.note("dynamic.import.apm.convertedHotkeysDecodedNote", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
-    if (skipped_count > 0) try draft.noteCount("dynamic.import.apm.skippedNonEveWindowNote", "n", skipped_count);
+    if (total_count > 0) try draft.note("Converted {converted} of {total} character hotkey(s) (decoded from EVE-APM Preview's internal hotkey format).", &.{ .{ .name = "converted", .value = try draft.format(converted_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
+    if (skipped_count > 0) try draft.noteCount(SKIPPED_NON_EVE_NOTE, "n", skipped_count);
 }
 
 fn hotkeyGroups(draft: *Draft, ini: *const Ini) !void {
@@ -429,11 +430,11 @@ fn hotkeyGroups(draft: *Draft, ini: *const Ini) !void {
         try draft.put(fields, "backwardKey", if (backward) |k| try values.keyValue(draft.arena, k) else .null);
         imported_count += 1;
 
-        if (forward != null or backward != null) try draft.note("dynamic.import.apm.hotkeyGroupDecodedNote", &.{.{ .name = "name", .value = name }});
-        if (forward == null and isBound(group.forward)) try draft.note("dynamic.import.apm.hotkeyGroupForwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
-        if (backward == null and isBound(group.backward)) try draft.note("dynamic.import.apm.hotkeyGroupBackwardUnsupportedNote", &.{.{ .name = "name", .value = name }});
+        if (forward != null or backward != null) try draft.note("Hotkey group \"{name}\": forward/backward key(s) were decoded from EVE-APM Preview's internal hotkey format - please confirm they're correct.", &.{.{ .name = "name", .value = name }});
+        if (forward == null and isBound(group.forward)) try draft.note("Hotkey group \"{name}\": forward key can't be represented as a keyboard hotkey (mouse button or unsupported) and was skipped.", &.{.{ .name = "name", .value = name }});
+        if (backward == null and isBound(group.backward)) try draft.note("Hotkey group \"{name}\": backward key can't be represented as a keyboard hotkey (mouse button or unsupported) and was skipped.", &.{.{ .name = "name", .value = name }});
     }
-    try draft.notes.insert(draft.arena, first_note_index, try draft.countText("dynamic.import.hotkeyGroupsImportedNote", imported_count));
+    try draft.notes.insert(draft.arena, first_note_index, try draft.countText("Imported {n} hotkey group(s).", imported_count));
 }
 
 /// EVE-APM can bind several keys to one action.
@@ -451,17 +452,17 @@ fn actionHotkey(draft: *Draft, ini: *const Ini, section_name: []const u8, key: [
         }
     }
     try draft.setKeys(path, keys);
-    if (has_unsupported) try draft.note("dynamic.import.apm.globalHotkeyUnsupportedNote", &.{.{ .name = "label", .value = label, .should_translate = true }});
+    if (has_unsupported) try draft.note("{label} hotkey can't be represented as a keyboard hotkey (mouse button or unsupported) and was skipped.", &.{.{ .name = "label", .value = label, .should_translate = true }});
 }
 
 fn globalHotkeys(draft: *Draft, ini: *const Ini) !void {
-    try actionHotkey(draft, ini, "closeAllHotkeys", "closeAllClients", "hotkeys.hotkeyCloseAll", "dynamic.import.apm.actionLabel.closeAll");
-    try actionHotkey(draft, ini, "minimizeAllHotkeys", "minimizeAllClients", "hotkeys.hotkeyMinimizeAll", "dynamic.import.apm.actionLabel.minimizeAll");
-    try actionHotkey(draft, ini, "toggleThumbnailsVisibilityHotkeys", "toggleThumbnailsVisibility", "hotkeys.hotkeyToggleVisibility", "dynamic.import.apm.actionLabel.toggleVisibility");
-    try actionHotkey(draft, ini, "hotkeys", "suspendHotkey", "hotkeys.hotkeySuspend", "dynamic.import.apm.actionLabel.suspend");
+    try actionHotkey(draft, ini, "closeAllHotkeys", "closeAllClients", "hotkeys.hotkeyCloseAll", "Close All Clients");
+    try actionHotkey(draft, ini, "minimizeAllHotkeys", "minimizeAllClients", "hotkeys.hotkeyMinimizeAll", "Minimize All Clients");
+    try actionHotkey(draft, ini, "toggleThumbnailsVisibilityHotkeys", "toggleThumbnailsVisibility", "hotkeys.hotkeyToggleVisibility", "Toggle Thumbnail Visibility");
+    try actionHotkey(draft, ini, "hotkeys", "suspendHotkey", "hotkeys.hotkeySuspend", "Toggle Suspend Hotkeys");
     try draft.setBool("hotkeys.requireEveFocus", qtBool(ini.get("hotkey", "onlyWhenEVEFocused")));
     try draft.setBool("hotkeys.resetGroupIndexOnNonGroupFocus", qtBool(ini.get("hotkey", "resetGroupIndexOnNonGroupFocus")));
-    try draft.note("dynamic.import.apm.globalHotkeysImportedNote", &.{});
+    try draft.note("Global action hotkeys imported.", &.{});
 }
 
 fn characterList(draft: *Draft, raw: ?[]const u8, field: []const u8) !void {
@@ -478,14 +479,14 @@ fn autoMinimize(draft: *Draft, ini: *const Ini) !void {
     try draft.setNumber("autoMinimize.delayMs", intValue(ini.get("window", "minimizeDelay")));
     try characterList(draft, ini.get("window", "neverMinimizeCharacters"), "excludeFromMinimize");
     try characterList(draft, ini.get("window", "neverCloseCharacters"), "excludeFromCloseAll");
-    try draft.note("dynamic.import.autoMinimizeImportedNote", &.{});
+    try draft.note("Auto-minimize settings imported.", &.{});
 }
 
 fn snapping(draft: *Draft, ini: *const Ini) !void {
     try draft.setBool("snapping.enabled", qtBool(ini.get("position", "enableSnapping")));
     try draft.setNumber("snapping.threshold", intValue(ini.get("position", "snapDistance")));
     if (qtBool(ini.get("position", "lockPositions"))) |is_locked| try draft.setBool("interaction.enableDragging", !is_locked);
-    try draft.note("dynamic.import.snappingImportedNote", &.{});
+    try draft.note("Snapping settings imported.", &.{});
 }
 
 fn chatlog(draft: *Draft, ini: *const Ini) !void {
@@ -498,7 +499,7 @@ fn chatlog(draft: *Draft, ini: *const Ini) !void {
     if (unquote(ini.get("gamelog", "directory"))) |directory| {
         if (directory.len > 0) try draft.setString("chatlog.gamelogDir", directory);
     }
-    try draft.note("dynamic.import.apm.chatlogImportedNote", &.{});
+    try draft.note("Chatlog monitoring settings imported.", &.{});
 }
 
 fn notifications(draft: *Draft, ini: *const Ini) !void {
@@ -515,7 +516,7 @@ fn notifications(draft: *Draft, ini: *const Ini) !void {
         if (event.len == 0) continue;
         total_count += 1;
         const target = eventType(event) orelse {
-            try draft.note("dynamic.import.apm.eventTypeUnsupportedNote", &.{.{ .name = "evt", .value = event }});
+            try draft.note("Event type \"{evt}\" has no equivalent notification in EVE-Maj Preview and was not imported.", &.{.{ .name = "evt", .value = event }});
             continue;
         };
         const base = try draft.arena.print("thumbnail.notifications.type_configs.{s}.", .{target});
@@ -527,7 +528,7 @@ fn notifications(draft: *Draft, ini: *const Ini) !void {
         try draft.setBool(try concat(draft, base, "suppress_when_focused"), qtBool(ini.get("combatMessages", suppress_key)) orelse suppresses_all);
         mapped_count += 1;
     }
-    if (total_count > 0) try draft.note("dynamic.import.apm.notificationTypesImportedNote", &.{ .{ .name = "mapped", .value = try draft.format(mapped_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
+    if (total_count > 0) try draft.note("Imported {mapped} of {total} event notification type(s).", &.{ .{ .name = "mapped", .value = try draft.format(mapped_count) }, .{ .name = "total", .value = try draft.format(total_count) } });
 }
 
 fn concat(draft: *Draft, prefix: []const u8, suffix: []const u8) ![]const u8 {

@@ -113,6 +113,18 @@ const Look = struct {
     }
 };
 
+/// One rate's rows: the overlay switch it shares with the thumbnails, then the list's own show, prefix and colour, each named by its DisplayConfig field.
+const StatRows = struct {
+    overlay_label: []const u8,
+    show_field: []const u8,
+    show_label: []const u8,
+    show_hint: []const u8,
+    prefix_field: []const u8,
+    prefix_label: []const u8,
+    prefix_hint: []const u8,
+    color_field: []const u8,
+};
+
 var g_selected: Part = .names;
 var g_is_popover_open: bool = false;
 
@@ -145,9 +157,13 @@ pub fn show(context: *ui.Frame, display: DisplayRef) !void {
 fn layout(context: *ui.Frame, display: DisplayRef) !void {
     const section = try widgets.openSection(context, "Layout", "How the list orders and arranges its clients.", &style.section);
     try bind.choice(context, display, "listViewOrder", "Order");
+    try widgets.hintText(context, .src(@src()), "Configured follows the Characters tab; Tracked is the order clients were found.");
     try bind.number(context, display, "listViewColumns", "Columns", .{});
+    try widgets.hintText(context, .src(@src()), "Splits the list into this many columns.");
     try bind.number(context, display, "listViewColumnWidth", "Column Width", .{ .unit = "px" });
+    try widgets.hintText(context, .src(@src()), "Long names are cut short to fit.");
     try bind.segmented(context, display, "listViewIndicatorStyle", "Indicator", &.{ "Dot", "Square", "None" });
+    try widgets.hintText(context, .src(@src()), "The mark beside each client that shows its state.");
     try section.close(context);
 }
 
@@ -158,18 +174,21 @@ fn appearance(context: *ui.Frame, display: DisplayRef) !void {
     try bind.unitNumberBox(context, display, "listViewFontSize", "px", .{});
     try bind.choiceBox(context, display, "listViewFontWeight");
     try font.close(context);
+    try widgets.hintText(context, .src(@src()), "Used for names; other text is drawn a little smaller.");
     try section.close(context);
 }
 
 fn visibility(context: *ui.Frame, display: DisplayRef) !void {
     const section = try widgets.openSection(context, "Position and Visibility", "Where the list opens, how see-through it is, and when it's hidden automatically.", &style.section);
     try bind.toggle(context, display, "rememberListViewPosition", "Remember Position");
+    try widgets.hintText(context, .src(@src()), "Opens the list where you last left it.");
     try bind.slider(context, display, "listViewOpacity", "Opacity", .{ .display = .percent_of_255 });
+    try widgets.hintText(context, .src(@src()), "Lower lets you see through the list.");
     try bind.toggle(context, display, "listViewHideWhenNoEveFocus", "Hide When No EVE Focus");
-    try widgets.hintText(context, .src(@src()), "Hides the list while no EVE client window has focus.");
+    try widgets.hintText(context, .src(@src()), "The list comes back when you return to EVE.");
     const delay = try widgets.openGroup(context, .src(@src()), display.get("listViewHideWhenNoEveFocus"));
     try bind.number(context, display, "listViewHideDebounceMs", "Hide Delay", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "Delay before hiding, so switching briefly doesn't flicker.");
+    try widgets.hintText(context, .src(@src()), "Waits this long, so quick switches don't flicker.");
     try delay.close(context);
     try section.close(context);
 }
@@ -422,30 +441,76 @@ fn settings(context: *ui.Frame, display: DisplayRef, part: Part) !bool {
     switch (part) {
         .active => {
             try bind.toggle(context, display, "listViewUseUniqueActiveColors", "Unique Character Active Colors");
+            try widgets.hintText(context, .src(@src()), "Each character's mark gets its own color.");
             const group = try widgets.openGroup(context, .src(@src()), !display.get("listViewUseUniqueActiveColors"));
             try bind.rgb(context, display, "listViewActiveColor", "Active Color");
+            try widgets.hintText(context, .src(@src()), "Marks the client you're in.");
             try group.close(context);
         },
-        .names => try bind.toggle(context, display, "listViewUseUniqueCharacterNameColors", "Unique Character Name Colors"),
+        .names => {
+            try bind.toggle(context, display, "listViewUseUniqueCharacterNameColors", "Unique Character Name Colors");
+            try widgets.hintText(context, .src(@src()), "Each character's name gets its own color.");
+        },
         .systems => {
             try bind.toggle(context, display, "listViewShowSystemName", "Show System Name");
+            try widgets.hintText(context, .src(@src()), "Needs Log Monitoring to know where each character is.");
             const shown = try widgets.openGroup(context, .src(@src()), display.get("listViewShowSystemName"));
             try bind.toggle(context, display, "listViewUseUniqueSystemColors", "Unique System Colors");
+            try widgets.hintText(context, .src(@src()), "Each system gets its own color; System Colors overrides it.");
             const group = try widgets.openGroup(context, .src(@src()), !display.get("listViewUseUniqueSystemColors"));
             try bind.rgb(context, display, "listViewSystemNameColor", "Text Color");
+            try widgets.hintText(context, .src(@src()), "Used while unique colors are off.");
             try group.close(context);
             try shown.close(context);
         },
         .notifications => {
             try bind.toggle(context, display, "listViewShowNotifications", "Show Notifications");
+            try widgets.hintText(context, .src(@src()), "Shows alert text, like Fleet Invite, in the list.");
             const shown = try widgets.openGroup(context, .src(@src()), display.get("listViewShowNotifications"));
             try bind.rgb(context, display, "listViewNotificationColor", "Text Color");
+            try widgets.hintText(context, .src(@src()), "The color of this text.");
             try shown.close(context);
         },
-        .incoming_dps => try statSettings(context, display, profile.child("combat"), "Enable Combat Overlays", "listViewShowIncomingDps", "Show Incoming Damage", "listViewShowIncomingPrefix", "Show IN: Prefix", "listViewIncomingDpsColor"),
-        .outgoing_dps => try statSettings(context, display, profile.child("combat"), "Enable Combat Overlays", "listViewShowOutgoingDps", "Show Outgoing Damage", "listViewShowOutgoingPrefix", "Show OUT: Prefix", "listViewOutgoingDpsColor"),
-        .mining_rate => try statSettings(context, display, profile.child("mining"), "Enable Mining Overlay", "listViewShowMiningRate", "Show Mining Rate", "listViewShowMiningPrefix", "Show M: Prefix", "listViewMiningRateColor"),
-        .bounty_rate => try statSettings(context, display, profile.child("bounty"), "Enable Bounty Overlay", "listViewShowBountyRate", "Show Bounty Rate", "listViewShowBountyPrefix", "Show ISK: Prefix", "listViewBountyRateColor"),
+        .incoming_dps => try statSettings(context, display, profile.child("combat"), .{
+            .overlay_label = "Enable Combat Overlays",
+            .show_field = "listViewShowIncomingDps",
+            .show_label = "Show Incoming Damage",
+            .show_hint = "Damage the character is taking per second.",
+            .prefix_field = "listViewShowIncomingPrefix",
+            .prefix_label = "Show IN: Prefix",
+            .prefix_hint = "Puts IN: before the number so it's easy to tell apart.",
+            .color_field = "listViewIncomingDpsColor",
+        }),
+        .outgoing_dps => try statSettings(context, display, profile.child("combat"), .{
+            .overlay_label = "Enable Combat Overlays",
+            .show_field = "listViewShowOutgoingDps",
+            .show_label = "Show Outgoing Damage",
+            .show_hint = "Damage the character is dealing per second.",
+            .prefix_field = "listViewShowOutgoingPrefix",
+            .prefix_label = "Show OUT: Prefix",
+            .prefix_hint = "Puts OUT: before the number so it's easy to tell apart.",
+            .color_field = "listViewOutgoingDpsColor",
+        }),
+        .mining_rate => try statSettings(context, display, profile.child("mining"), .{
+            .overlay_label = "Enable Mining Overlay",
+            .show_field = "listViewShowMiningRate",
+            .show_label = "Show Mining Rate",
+            .show_hint = "How much the character mines per minute.",
+            .prefix_field = "listViewShowMiningPrefix",
+            .prefix_label = "Show M: Prefix",
+            .prefix_hint = "Puts M: before the rate so it's easy to tell apart.",
+            .color_field = "listViewMiningRateColor",
+        }),
+        .bounty_rate => try statSettings(context, display, profile.child("bounty"), .{
+            .overlay_label = "Enable Bounty Overlay",
+            .show_field = "listViewShowBountyRate",
+            .show_label = "Show Bounty Rate",
+            .show_hint = "ISK the character earns from bounties.",
+            .prefix_field = "listViewShowBountyPrefix",
+            .prefix_label = "Show ISK: Prefix",
+            .prefix_hint = "Puts ISK: before the rate so it's easy to tell apart.",
+            .color_field = "listViewBountyRateColor",
+        }),
     }
     return is_close_clicked;
 }
@@ -454,21 +519,26 @@ fn settings(context: *ui.Frame, display: DisplayRef, part: Part) !bool {
 fn requirementNotices(context: *ui.Frame, part: Part) !void {
     const profile = session.profile().ptr;
     const needs_chatlog = switch (part) {
-        .active, .names => false,
-        .systems, .notifications, .incoming_dps, .outgoing_dps, .mining_rate, .bounty_rate => true,
+        .active, .names, .notifications => false,
+        .systems, .incoming_dps, .outgoing_dps, .mining_rate, .bounty_rate => true,
     };
     if (needs_chatlog and !profile.chatlog.enabled) try widgets.notice(context, .src(@src()), "Requires Log Monitoring to be enabled.");
+    if (part == .notifications and !profile.chatlog.enabled) try widgets.notice(context, .src(@src()), "Without Log Monitoring, only alerts for your own actions, like Profile Switch, are shown.");
     if (part == .notifications and !profile.thumbnail.notifications.enabled) try widgets.notice(context, .src(@src()), "Requires Notification System switched on in the Notifications tab.");
 }
 
 /// `overlay` is the session.Ref of the rate's overlay settings, e.g. combat's; its `enabled` is shared with the thumbnails' text, and the list shows the rate only while it's on.
-fn statSettings(context: *ui.Frame, display: DisplayRef, overlay: anytype, overlay_label: []const u8, comptime show_field: []const u8, show_label: []const u8, comptime prefix_field: []const u8, prefix_label: []const u8, comptime color_field: []const u8) !void {
-    try bind.toggle(context, overlay, "enabled", overlay_label);
-    const enabled = try widgets.openGroup(context, .str("knots.client_list.overlay:" ++ show_field), overlay.get("enabled"));
-    try bind.toggle(context, display, show_field, show_label);
-    const shown = try widgets.openGroup(context, .str("knots.client_list.shown:" ++ show_field), display.get(show_field));
-    try bind.toggle(context, display, prefix_field, prefix_label);
-    try bind.rgb(context, display, color_field, "Text Color");
+fn statSettings(context: *ui.Frame, display: DisplayRef, overlay: anytype, comptime rows: StatRows) !void {
+    try bind.toggle(context, overlay, "enabled", rows.overlay_label);
+    try widgets.hintText(context, .str("knots.client_list.overlay.hint:" ++ rows.show_field), "Also turns it on for thumbnails.");
+    const enabled = try widgets.openGroup(context, .str("knots.client_list.overlay:" ++ rows.show_field), overlay.get("enabled"));
+    try bind.toggle(context, display, rows.show_field, rows.show_label);
+    try widgets.hintText(context, .str("knots.client_list.shown.hint:" ++ rows.show_field), rows.show_hint);
+    const shown = try widgets.openGroup(context, .str("knots.client_list.shown:" ++ rows.show_field), display.get(rows.show_field));
+    try bind.toggle(context, display, rows.prefix_field, rows.prefix_label);
+    try widgets.hintText(context, .str("knots.client_list.prefix.hint:" ++ rows.show_field), rows.prefix_hint);
+    try bind.rgb(context, display, rows.color_field, "Text Color");
+    try widgets.hintText(context, .str("knots.client_list.color.hint:" ++ rows.show_field), "The color of this text.");
     try shown.close(context);
     try enabled.close(context);
 }

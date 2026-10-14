@@ -46,7 +46,7 @@ const PatchedLine = struct {
     changed: bool,
 };
 
-/// Scans %LOCALAPPDATA%\CCP\EVE\*\settings*\ for core_public__.yaml files - EVE's shared graphics settings, one per client install / settings profile (multiboxers keep several, e.g. settings_Default, settings_<CharName>).
+/// One core_public__.yaml per install and settings profile; multiboxers keep several.
 pub fn scanProfiles(allocator: std.mem.Allocator, io: std.Io, environ_map: *const std.process.Environ.Map) ![]Profile {
     var profiles: std.ArrayList(Profile) = .empty;
     errdefer {
@@ -142,7 +142,10 @@ fn applyToOneFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !A
     };
     defer allocator.free(original);
 
-    if (!backupExists(allocator, io, path) and !makeBackup(allocator, io, path)) {
+    const has_backup = backupExists(allocator, io, path) catch |err| {
+        return .{ .path = path_copy, .succeeded = false, .changed = false, .error_message = @errorName(err) };
+    };
+    if (!has_backup and !makeBackup(allocator, io, path)) {
         return .{ .path = path_copy, .succeeded = false, .changed = false, .error_message = "Failed to write backup" };
     }
 
@@ -162,15 +165,15 @@ fn applyToOneFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !A
     return .{ .path = path_copy, .succeeded = true, .changed = true, .error_message = null };
 }
 
-fn backupExists(allocator: std.mem.Allocator, io: std.Io, path: []const u8) bool {
-    const backup_path = allocator.print("{s}.bak", .{path}) catch |err| {
-        slog.err("Failed to build the backup path for '{s}': {}", .{ path, err });
-        return false;
-    };
+/// Only a missing file counts as no backup: one that can't be checked must not be overwritten, as it holds the settings from before the first apply.
+fn backupExists(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !bool {
+    const backup_path = try allocator.print("{s}.bak", .{path});
     defer allocator.free(backup_path);
 
-    const file = std.Io.Dir.cwd().openFile(io, backup_path, .{}) catch return false;
-    file.close(io);
+    std.Io.Dir.cwd().access(io, backup_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
     return true;
 }
 

@@ -4,15 +4,13 @@ const win32 = @import("platform/win32.zig");
 const config_mod = @import("config.zig");
 const update = @import("update.zig");
 const actions = @import("clients/actions.zig");
-const hotkeys = @import("hotkeys/manager.zig");
-const painter_mod = @import("painter.zig");
-const auto_minimize = @import("clients/auto_minimize.zig");
+const app_mod = @import("app.zig");
 const knots_host = @import("dialog/knots/host.zig");
-const scout_mod = @import("clients/scout.zig");
+const scout = @import("clients/scout.zig");
 const alert_effects = @import("notifications/alert_effects.zig");
-const main = @import("main.zig");
 const log = @import("log.zig");
 
+const App = app_mod.App;
 const slog = log.Scoped("tray");
 
 /// Keeps profile item IDs inside their range above IDM_PROFILE_BASE.
@@ -81,16 +79,17 @@ pub const TrayIcon = struct {
         self.profiles = .empty;
     }
 
-    pub fn handleTrayMessage(self: *TrayIcon, lParam: win32.LPARAM, config: *const config_mod.Config) void {
+    pub fn handleTrayMessage(self: *TrayIcon, lParam: win32.LPARAM, app: *App) void {
         if (lParam == win32.WM_RBUTTONUP) {
-            self.showContextMenu(config);
+            self.showContextMenu(app);
         } else if (lParam == win32.WM_LBUTTONDBLCLK) {
             slog.info("Opening configuration dialog from system tray double-click", .{});
             knots_host.open();
         }
     }
 
-    fn showContextMenu(self: *TrayIcon, config: *const config_mod.Config) void {
+    fn showContextMenu(self: *TrayIcon, app: *App) void {
+        const config = &app.store.live;
         var cursor_position: win32.POINT = undefined;
         if (!win32.toBool(win32.GetCursorPos(&cursor_position))) {
             slog.err("Failed to get cursor position", .{});
@@ -108,35 +107,35 @@ pub const TrayIcon = struct {
             slog.err("Failed to create profile submenu", .{});
             return;
         };
-        self.appendProfiles(profile_menu, config.profile_name);
+        self.appendProfiles(app.io, profile_menu, config.profile_name);
 
         _ = win32.AppendMenuA(menu, win32.MF_POPUP, @intFromPtr(profile_menu), "Load Profile");
         _ = win32.AppendMenuA(menu, win32.MF_STRING, win32.IDM_OPEN_CONFIG, "Open Configuration...");
         _ = win32.AppendMenuA(menu, win32.MF_SEPARATOR, 0, null);
 
-        const painter = painter_mod.g_painter_ptr;
+        const thumbnail_set = app.thumbnail_set;
         appendChecked(menu, config.interaction.enableDragging, win32.IDM_TOGGLE_DRAGGING, "Enable Dragging");
-        appendChecked(menu, if (painter) |p| p.auto_minimize.isEnabled(p) else config.autoMinimize.enabled, win32.IDM_TOGGLE_AUTO_MINIMIZE, "Enable Auto-Minimize");
+        appendChecked(menu, app.auto_minimizer.isEnabled(config), win32.IDM_TOGGLE_AUTO_MINIMIZE, "Enable Auto-Minimize");
         appendChecked(menu, config.travel.enabled, win32.IDM_TOGGLE_TRAVEL_MODE, "Enable Travel Mode");
         if (config.display.viewMode == .Nothing) {
             _ = win32.AppendMenuA(menu, win32.MF_STRING | win32.MF_GRAYED, win32.IDM_TOGGLE_VISIBILITY, "Show Thumbnails");
         } else {
-            appendChecked(menu, if (painter) |p| p.thumbnailsShown() else false, win32.IDM_TOGGLE_VISIBILITY, "Show Thumbnails");
+            appendChecked(menu, if (thumbnail_set) |p| p.thumbnailsShown() else false, win32.IDM_TOGGLE_VISIBILITY, "Show Thumbnails");
         }
         _ = win32.AppendMenuA(menu, win32.MF_STRING, win32.IDM_RESTORE_SAVED_POSITIONS, "Restore Saved Positions");
         _ = win32.AppendMenuA(menu, win32.MF_SEPARATOR, 0, null);
 
-        appendChecked(menu, if (painter) |p| p.isHistoryPanelVisible() else config.display.showNotifInfoPanel, win32.IDM_TOGGLE_NOTIF_HISTORY, "Show Notification History");
+        appendChecked(menu, app.notifications.panel.isVisible(config, scout.anyCharacterLoggedIn(app.scout.getWindows())), win32.IDM_TOGGLE_NOTIF_HISTORY, "Show Notification History");
         _ = win32.AppendMenuA(menu, win32.MF_STRING, win32.IDM_CLEAR_NOTIF_HISTORY, "Clear Notification History");
         appendChecked(menu, alert_effects.isMuted(), win32.IDM_TOGGLE_ALERT_MUTE, "Mute Audio Alerts");
         _ = win32.AppendMenuA(menu, win32.MF_SEPARATOR, 0, null);
 
-        if (hotkeys.g_hotkey_manager_ptr) |manager| {
+        if (app.hotkey_manager) |manager| {
             appendChecked(menu, manager.areHotkeysSuspended(), win32.IDM_SUSPEND_HOTKEYS, "Suspend Hotkeys");
             _ = win32.AppendMenuA(menu, win32.MF_SEPARATOR, 0, null);
         }
 
-        if (update.g_update_status.isAvailable()) {
+        if (update.g_update_status.isAvailable(app.io)) {
             _ = win32.AppendMenuA(menu, win32.MF_STRING, win32.IDM_UPDATE, "Update Available!");
             _ = win32.AppendMenuA(menu, win32.MF_SEPARATOR, 0, null);
         }
@@ -151,9 +150,9 @@ pub const TrayIcon = struct {
     }
 
     /// Re-reads the profiles, so the list matches the folder each time the menu opens.
-    fn appendProfiles(self: *TrayIcon, profile_menu: win32.HMENU, current_profile: []const u8) void {
+    fn appendProfiles(self: *TrayIcon, io: std.Io, profile_menu: win32.HMENU, current_profile: []const u8) void {
         self.freeProfiles();
-        self.profiles = config_mod.listProfiles(self.allocator) catch |err| blk: {
+        self.profiles = config_mod.listProfiles(self.allocator, io) catch |err| blk: {
             slog.err("Failed to enumerate profiles: {}", .{err});
             break :blk .empty;
         };
@@ -173,20 +172,21 @@ pub const TrayIcon = struct {
         }
     }
 
-    pub fn handleMenuCommand(self: *const TrayIcon, command_id: u16, store: *config_mod.ProfileStore) void {
+    pub fn handleMenuCommand(self: *const TrayIcon, command_id: u16, app: *App) void {
         if (command_id >= win32.IDM_PROFILE_BASE and command_id < win32.IDM_PROFILE_BASE + MAX_PROFILE_ITEMS) {
             const index = command_id - win32.IDM_PROFILE_BASE;
             if (index >= self.profiles.items.len) return;
             slog.info("Profile selected from menu: {s}", .{self.profiles.items[index]});
-            main.requestProfileSwitch(self.profiles.items[index]);
+            app.requestProfileSwitch(self.profiles.items[index]);
             return;
         }
 
+        const store = &app.store;
         const config = &store.live;
         switch (command_id) {
             win32.IDM_EXIT => {
                 slog.info("Exit requested from system tray", .{});
-                main.requestExit();
+                app_mod.requestExit();
             },
             win32.IDM_OPEN_CONFIG => {
                 slog.info("Opening configuration dialog from system tray", .{});
@@ -197,13 +197,7 @@ pub const TrayIcon = struct {
                 store.update(.{ .interaction = .{ .enableDragging = is_enabled } });
                 slog.info("Thumbnail dragging toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
             },
-            win32.IDM_TOGGLE_AUTO_MINIMIZE => {
-                const painter = painter_mod.g_painter_ptr orelse {
-                    slog.err("Failed to toggle auto-minimize: the painter isn't ready", .{});
-                    return;
-                };
-                auto_minimize.toggle(painter);
-            },
+            win32.IDM_TOGGLE_AUTO_MINIMIZE => app.toggleAutoMinimize(),
             win32.IDM_TOGGLE_TRAVEL_MODE => {
                 const is_enabled = !config.travel.enabled;
                 store.update(.{ .travel = .{ .enabled = is_enabled } });
@@ -211,35 +205,27 @@ pub const TrayIcon = struct {
             },
             win32.IDM_TOGGLE_VISIBILITY => {
                 slog.info("Toggle visibility requested from system tray", .{});
-                const painter = painter_mod.g_painter_ptr orelse {
-                    slog.err("Failed to toggle visibility: the painter isn't ready", .{});
+                const thumbnail_set = app.thumbnail_set orelse {
+                    slog.err("Failed to toggle visibility: the thumbnail set isn't ready", .{});
                     return;
                 };
-                painter.toggleAllThumbnailsVisibility();
+                thumbnail_set.toggleAllThumbnailsVisibility();
             },
             win32.IDM_TOGGLE_NOTIF_HISTORY => {
                 slog.info("Toggle history panel requested from system tray", .{});
-                const painter = painter_mod.g_painter_ptr orelse {
-                    slog.err("Failed to toggle the History Panel: the painter isn't ready", .{});
-                    return;
-                };
-                painter.toggleHistoryPanel();
+                app.notifications.panel.toggle(app.allocator, store, app.instance, scout.anyCharacterLoggedIn(app.scout.getWindows()));
             },
             win32.IDM_CLEAR_NOTIF_HISTORY => {
                 slog.info("Clear notification history requested from system tray", .{});
-                const painter = painter_mod.g_painter_ptr orelse {
-                    slog.err("Failed to clear notification history: the painter isn't ready", .{});
-                    return;
-                };
-                painter.notification_history.clear();
+                app.notifications.history.clear();
             },
             win32.IDM_TOGGLE_ALERT_MUTE => alert_effects.toggleMuted(),
             win32.IDM_SUSPEND_HOTKEYS => {
-                if (hotkeys.g_hotkey_manager_ptr) |manager| manager.runGlobalAction(.suspend_hotkeys);
+                if (app.hotkey_manager) |manager| manager.runGlobalAction(.suspend_hotkeys);
             },
             win32.IDM_RESTORE_SAVED_POSITIONS => {
                 slog.info("Restore saved positions requested from system tray", .{});
-                const manager = hotkeys.g_hotkey_manager_ptr orelse {
+                const manager = app.hotkey_manager orelse {
                     slog.err("Failed to restore saved positions: the hotkey manager isn't ready", .{});
                     return;
                 };
@@ -247,15 +233,11 @@ pub const TrayIcon = struct {
             },
             win32.IDM_CLOSE_ALL_CLIENTS => {
                 slog.info("Close all clients requested from system tray", .{});
-                const scout = scout_mod.g_scout_ptr orelse {
-                    slog.err("Failed to close all clients: Scout isn't ready", .{});
-                    return;
-                };
-                actions.closeAllClients(scout.getWindows(), config);
+                actions.closeAllClients(app.scout.getWindows(), config, &app.exclusions);
             },
             win32.IDM_UPDATE => {
                 slog.info("Opening releases page from tray menu", .{});
-                update.openReleasesPage();
+                update.openReleasesPage(app.io);
             },
             else => {},
         }

@@ -91,7 +91,6 @@ pub const Scout = struct {
         };
     }
 
-    /// Hooks title changes and destroys for `process_id` once its first window is tracked.
     fn watchProcess(self: *Scout, process_id: win32.DWORD) void {
         if (self.process_hooks.contains(process_id)) return;
 
@@ -108,7 +107,6 @@ pub const Scout = struct {
         };
     }
 
-    /// Unhooks every process no tracked window belongs to any more.
     fn unwatchUnusedProcesses(self: *Scout) void {
         if (!self.has_stale_process_hooks) return;
         self.has_stale_process_hooks = false;
@@ -130,12 +128,13 @@ pub const Scout = struct {
         return false;
     }
 
-    pub fn setGlobalInstance(self: *Scout) void {
-        g_scout_ptr = self;
+    /// Points the WinEvent callbacks at this Scout, which mustn't move afterwards.
+    pub fn listenForEvents(self: *Scout) void {
+        g_event_scout = self;
     }
 
     pub fn deinit(self: *Scout) void {
-        g_scout_ptr = null;
+        if (g_event_scout == self) g_event_scout = null;
 
         var hooks = self.process_hooks.valueIterator();
         while (hooks.next()) |process_hooks| process_hooks.unhook();
@@ -157,7 +156,7 @@ pub const Scout = struct {
         self.has_stale_process_hooks = true;
     }
 
-    /// Hands `window` to the next update's closed_windows, so the painter and chatlog let it go like any closed client; false (already logged) if it couldn't be.
+    /// Hands `window` to the next update's closed_windows, so the thumbnail set and chatlog let it go like any closed client; false (already logged) if it couldn't be.
     fn reportClosed(self: *Scout, window: EveWindow) bool {
         const name = self.allocator.dupe(u8, window.character_name) catch |err| {
             slog.err("Failed to allocate closed character name '{s}': {}", .{ window.character_name, err });
@@ -204,7 +203,6 @@ pub const Scout = struct {
         return self.windows.items;
     }
 
-    /// Re-reads hwnd's title and records a NameChange if the character behind it changed.
     fn updateWindowTitle(self: *Scout, hwnd: win32.HWND) void {
         const index = self.indexOf(hwnd) orelse return;
         const eve_window = &self.windows.items[index];
@@ -383,11 +381,19 @@ pub const Scout = struct {
     }
 };
 
-/// Set by setGlobalInstance, for the WinEvent callbacks and other modules.
-pub var g_scout_ptr: ?*Scout = null;
+/// Set by listenForEvents, for the WinEvent callbacks alone.
+var g_event_scout: ?*Scout = null;
 
 pub fn isGenericCharacterName(name: []const u8) bool {
     return std.mem.eql(u8, name, GENERIC_CHARACTER_NAME);
+}
+
+/// Whether any window is past the login screen; a window filter's window counts, as it's never at one.
+pub fn anyCharacterLoggedIn(windows: []const EveWindow) bool {
+    for (windows) |window| {
+        if (!isGenericCharacterName(window.character_name)) return true;
+    }
+    return false;
 }
 
 /// "EVE - CharacterName" gives "CharacterName"; the whole title when nothing follows a " - ".
@@ -419,7 +425,6 @@ fn enumWindowsCallback(hwnd: win32.HWND, lParam: win32.LPARAM) callconv(.c) win3
 
     if (!win32.isWindowVisible(hwnd)) return win32.TRUE;
 
-    // Already tracked: skip the class-name lookup and filter-match loop below entirely.
     if (scout.indexOf(hwnd) != null) return win32.TRUE;
 
     // Class first, since it's much cheaper than opening the process for its executable path.
@@ -474,7 +479,7 @@ fn nameChangeCallback(_: win32.HANDLE, _: win32.DWORD, hwnd: win32.HWND, id_obje
     // The main window only, not child controls.
     if (id_object != 0) return;
 
-    const scout = g_scout_ptr orelse return;
+    const scout = g_event_scout orelse return;
     scout.updateWindowTitle(hwnd);
 }
 
@@ -482,7 +487,7 @@ fn windowDestroyCallback(_: win32.HANDLE, _: win32.DWORD, hwnd: win32.HWND, id_o
     // The main window only, not child controls.
     if (id_object != 0) return;
 
-    const scout = g_scout_ptr orelse return;
+    const scout = g_event_scout orelse return;
 
     // By hwnd alone, since a partially-destroyed window can fail GetClassNameA.
     const index = scout.indexOf(hwnd) orelse return;
@@ -494,6 +499,14 @@ fn windowDestroyCallback(_: win32.HANDLE, _: win32.DWORD, hwnd: win32.HWND, id_o
 }
 
 const testing = std.testing;
+
+test "anyCharacterLoggedIn counts any window past the login screen, including a filter's" {
+    const hwnd: win32.HWND = @ptrFromInt(0x1000);
+    const login_screen = [_]EveWindow{.{ .hwnd = hwnd, .character_name = GENERIC_CHARACTER_NAME, .process_id = 1, .is_eve_client = true }};
+    try testing.expect(!anyCharacterLoggedIn(&login_screen));
+    const filtered = [_]EveWindow{ login_screen[0], .{ .hwnd = hwnd, .character_name = "Discord", .process_id = 2, .is_eve_client = false } };
+    try testing.expect(anyCharacterLoggedIn(&filtered));
+}
 
 test "extractCharacterName takes what follows ' - ', else the whole title" {
     try testing.expectEqualStrings("Some Pilot", extractCharacterName("EVE - Some Pilot"));

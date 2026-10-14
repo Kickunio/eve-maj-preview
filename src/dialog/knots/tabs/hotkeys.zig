@@ -10,6 +10,7 @@ const profiles = @import("../profiles.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
 const window_picker = @import("../window_picker.zig");
+const lang = @import("../../../lang/lang.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -103,61 +104,72 @@ pub fn show(context: *ui.Frame) !void {
 
     const system = try widgets.openSection(context, "Hotkey System", "Controls how the hotkeys below are registered and triggered.", &style.section);
     try bind.toggle(context, profile_hotkeys, "requireEveFocus", "Require EVE Focus");
-    try widgets.hintText(context, .src(@src()), "Hotkeys are ignored unless an EVE window is currently focused.");
+    try widgets.hintText(context, .src(@src()), "Stops hotkeys clashing with other apps.");
     try bind.toggle(context, profile_hotkeys, "allowHotkeyAutoRepeat", "Repeat Hotkey While Held");
-    try widgets.hintText(context, .src(@src()), "Holding a hotkey down repeats its action instead of firing once.");
+    try widgets.hintText(context, .src(@src()), "When off, holding a key fires it once.");
     try bind.toggle(context, profile_hotkeys, "exactHotkeyModifiers", "Match Modifiers Exactly");
-    try widgets.hintText(context, .src(@src()), "Only fire a hotkey when exactly its modifiers are held, so a hotkey on 1 won't fire on Alt+1 and Alt+1 reaches the game.");
+    try widgets.hintText(context, .src(@src()), "A hotkey on 1 won't fire on Alt+1, so Alt+1 still reaches the game.");
     try system.close(context);
 
     const actions = try widgets.openSection(context, "Window Actions", "Minimize, close, hide thumbnails, toggle auto-minimize, or send every window back to its saved position.", &style.section);
     try binding(context, profile_hotkeys, "hotkeyCloseAll", "Close All Clients");
+    try widgets.hintText(context, .src(@src()), "Closes every EVE client, except those set below.");
     // Straight under the hotkey they qualify.
     const close_all = session.profile().child("closeAll");
     try bind.toggle(context, close_all, "excludeCycleExcludedClients", "Don't Close Excluded Clients");
-    try widgets.hintText(context, .src(@src()), "Same exclusion list as Character Exclusion on the Behavior tab.");
+    try widgets.hintText(context, .src(@src()), "Uses the excluded characters from the Behavior tab.");
     try bind.toggle(context, close_all, "excludeLoginScreenClients", "Don't Close Logged-Out Clients");
-    try widgets.hintText(context, .src(@src()), "Skips any client still sitting at the character-selection screen.");
+    try widgets.hintText(context, .src(@src()), "Leaves clients at the login screen running.");
     try binding(context, profile_hotkeys, "hotkeyCloseActive", "Close Active Client");
+    try widgets.hintText(context, .src(@src()), "Closes the EVE client you're in.");
     try binding(context, profile_hotkeys, "hotkeyMinimizeAll", "Minimize All Clients");
+    try widgets.hintText(context, .src(@src()), "Minimizes every EVE client at once.");
     try binding(context, profile_hotkeys, "hotkeyToggleVisibility", "Toggle Thumbnail Visibility");
+    try widgets.hintText(context, .src(@src()), "Hides or shows all thumbnails.");
     try binding(context, profile_hotkeys, "hotkeyToggleAutoMinimize", "Toggle Auto-Minimize");
-    try widgets.hintText(context, .src(@src()), "Toggle Auto-Minimize only flips the setting for this session; it isn't saved and reverts to the profile's saved value on restart.");
+    try widgets.hintText(context, .src(@src()), "Lasts until restart; it isn't saved.");
     try binding(context, profile_hotkeys, "hotkeyMoveToSavedPositions", "Move Windows to Saved Positions");
+    try widgets.hintText(context, .src(@src()), "Uses the window positions saved on the Characters tab.");
     try actions.close(context);
 
     const cycling = try widgets.openSection(context, "Special Cycling", "Step through the excluded characters, or the ones that recently notified.", &style.section);
     try pair(context, profile_hotkeys, "hotkeyPreviousExcluded", "hotkeyNextExcluded", "Excluded Characters");
+    try widgets.hintText(context, .src(@src()), "Steps through only the characters you've excluded.");
     try pair(context, profile_hotkeys, "hotkeyPreviousNotified", "hotkeyCycleNotified", "Notified Characters");
-    try widgets.hintText(context, .src(@src()), "How long a character counts as \"recently notified\" is set by Keep in Notified Cycle For on the Notifications tab.");
+    try widgets.hintText(context, .src(@src()), "Characters with a recent alert. Set how recent on the Notifications tab.");
     try binding(context, profile_hotkeys, "hotkeyToggleExclusion", "Toggle Character Exclusion");
-    try widgets.hintText(context, .src(@src()), "Applies to whichever EVE window currently has Windows focus, not the thumbnail under your cursor.");
+    try widgets.hintText(context, .src(@src()), "Acts on the EVE window you're in, not the thumbnail under the mouse.");
     try cycling.close(context);
 
     const suspend_exit = try widgets.openSection(context, "Suspend and Exit", "Suspend or resume every hotkey (the suspend hotkey itself always works), or close EVE-Maj Preview. EVE clients stay open.", &style.section);
     try binding(context, profile_hotkeys, "hotkeySuspend", "Toggle Suspend Hotkeys");
+    try widgets.hintText(context, .src(@src()), "This hotkey keeps working while the others are off.");
     try binding(context, profile_hotkeys, "hotkeyToggleAlertMute", "Mute Audio Alerts");
-    try widgets.hintText(context, .src(@src()), "Mutes every TTS and sound alert for this session; it isn't saved and resets on restart. Also in the tray menu.");
+    try widgets.hintText(context, .src(@src()), "Mutes spoken and sound alerts until restart. Also in the tray menu.");
     try binding(context, profile_hotkeys, "hotkeyExitApp", "Exit App");
+    try widgets.hintText(context, .src(@src()), "Closes EVE-Maj Preview; your EVE clients stay open.");
     try suspend_exit.close(context);
 
     const clients = try widgets.openSection(context, "Client Cycling", "Step through open EVE client windows, ordered by the Characters list of whichever profile is loaded.", &style.section);
     try bind.toggle(context, global, "cycleAllClientsRespectExclusions", "Skip Excluded Characters");
-    try widgets.hintText(context, .src(@src()), "Same exclusion list as Character Exclusion on the Behavior tab.");
+    try widgets.hintText(context, .src(@src()), "Uses the excluded characters from the Behavior tab.");
     try pair(context, global, "hotkeyCycleAllClientsBackward", "hotkeyCycleAllClientsForward", "Logged-In Clients");
+    try widgets.hintText(context, .src(@src()), "Every logged-in client, in Characters tab order.");
     try pair(context, global, "hotkeyCycleNotLoggedInBackward", "hotkeyCycleNotLoggedInForward", "Logged-Out Clients");
-    try widgets.hintText(context, .src(@src()), "Steps through EVE client windows still sitting at the login/character-select screen.");
+    try widgets.hintText(context, .src(@src()), "Clients at the login screen, oldest logout first.");
     try clients.close(context);
 
     const profile_section = try widgets.openSection(context, "Profiles", "Cycle through profiles, or switch straight to one.", &style.section);
     try pair(context, global, "hotkeyPreviousProfile", "hotkeyNextProfile", "Profile");
+    try widgets.hintText(context, .src(@src()), "Loads the previous or next profile.");
     try profileSwitchRows(context);
     try profile_section.close(context);
 
     const outside = try widgets.openSection(context, "Outside EVE", "Jump to the app you last had focused, to a specific running application, or to a URL in your browser.", &style.section);
     try binding(context, global, "hotkeyReturnToLastApp", "Return to Last App");
+    try widgets.hintText(context, .src(@src()), "Jumps back to the app you used before EVE.");
     try pair(context, global, "hotkeyCycleAppsBackward", "hotkeyCycleAppsForward", "Cycle Apps");
-    try widgets.hintText(context, .src(@src()), "Steps through the App Hotkeys below, in list order, skipping any that aren't running.");
+    try widgets.hintText(context, .src(@src()), "Steps through the running apps below, in order.");
     try widgets.subheading(context, .src(@src()), "App Hotkeys");
     try appHotkeys(context);
     try widgets.subheading(context, .src(@src()), "URL Hotkeys");
@@ -187,10 +199,11 @@ fn pair(context: *ui.Frame, ref: anytype, comptime previous: []const u8, comptim
 /// One row per existing profile rather than a list of its own, so adding or deleting a profile changes the rows.
 fn profileSwitchRows(context: *ui.Frame) !void {
     for (profiles.list(), 0..) |name, index| {
-        const label = try std.fmt.allocPrint(context.arena(), "Switch to: {s}", .{profiles.displayName(name)});
+        const label = try lang.format(context.arena(), "Switch to: {name}", .{ .name = profiles.displayName(name) });
         const row = try widgets.openBinding(context, ui.Key.str("knots.hotkeys.profile").indexed(index), label);
         try hotkey.field(context, ProfileSwitch{ .index = index, .target = name }, "hotkey");
         try row.close(context);
+        try widgets.hintText(context, ui.Key.str("knots.hotkeys.profile.hint").indexed(index), "Loads this profile.");
     }
 }
 
@@ -214,7 +227,7 @@ fn appHotkeys(context: *ui.Frame) !void {
         }
     }
     try draftAppRow(context, global.ptr.appHotkeys.items.len);
-    try widgets.hintText(context, .src(@src()), "Fill in the empty row to add one; clear a row's name and key to remove it.");
+    try widgets.paragraph(context, .src(@src()), "Fill in the empty row to add one; clear a row to remove it.");
 }
 
 /// An empty row after the app hotkeys, so the list never looks empty; typing, binding or picking into it adds the entry.
@@ -260,6 +273,7 @@ fn urlHotkeys(context: *ui.Frame) !void {
         // Only aDashboard takes a clipboard upload, so the option hangs under its row and is cleared for any other URL.
         if (isAdashboard(entry.get("url"))) {
             try bind.toggle(context, entry, "uploadClipboard", "Upload Clipboard Content (dscan/local)");
+            try widgets.hintText(context, ui.Key.str("knots.hotkeys.url.upload.hint").indexed(index), "Sends the clipboard to aDashboard and opens the result.");
         } else if (entry.get("uploadClipboard")) {
             entry.set("uploadClipboard", false);
         }

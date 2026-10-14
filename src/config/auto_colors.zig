@@ -10,9 +10,10 @@ const slog = log.Scoped("config");
 
 const AUTO_COLORS_FILE = files.AUTO_COLORS_FILE;
 
-/// Runtime state owned by Painter, not a setting; saved to AUTO_COLORS_FILE rather than the profile so saving the profile mid live-preview can't leak unsaved edits.
+/// Runtime state owned by ThumbnailSet, not a setting; saved to AUTO_COLORS_FILE rather than the profile so saving the profile mid live-preview can't leak unsaved edits.
 pub const AutoColorStore = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     system: color.AutoColors = .{},
     character: color.AutoColors = .{},
     is_loaded: bool = false,
@@ -27,8 +28,8 @@ pub const AutoColorStore = struct {
         color: wire.Argb,
     };
 
-    pub fn init(allocator: std.mem.Allocator) AutoColorStore {
-        return .{ .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) AutoColorStore {
+        return .{ .allocator = allocator, .io = io };
     }
 
     /// Flushes first, so pending colours aren't lost.
@@ -92,12 +93,11 @@ pub const AutoColorStore = struct {
         return self.character.colorFor(self.allocator, character_name, overrides[0..override_count]);
     }
 
-    /// Reads the file on first use only; later calls do nothing.
     fn load(self: *AutoColorStore) void {
         if (self.is_loaded) return;
         self.is_loaded = true;
 
-        const content = std.Io.Dir.cwd().readFileAlloc(files.g_io, AUTO_COLORS_FILE, self.allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
+        const content = std.Io.Dir.cwd().readFileAlloc(self.io, AUTO_COLORS_FILE, self.allocator, .limited(files.MAX_CONFIG_FILE_SIZE)) catch |err| {
             if (err != error.FileNotFound) slog.warn("Failed to read '{s}': {}", .{ AUTO_COLORS_FILE, err });
             return;
         };
@@ -151,7 +151,7 @@ pub const AutoColorStore = struct {
         };
         defer self.allocator.free(json);
 
-        files.atomicWriteFile(self.allocator, files.g_io, AUTO_COLORS_FILE, json) catch |err| {
+        files.atomicWriteFile(self.allocator, self.io, AUTO_COLORS_FILE, json) catch |err| {
             slog.warn("Failed to save '{s}': {}", .{ AUTO_COLORS_FILE, err });
         };
     }

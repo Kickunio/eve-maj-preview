@@ -1,4 +1,4 @@
-//! The configuration window's frame: categorised tab sidebar, the open tab, the Save footer and the unsaved-changes prompt; main thread only.
+//! The configuration window's frame: categorised tab sidebar, the open tab, the Save footer and the unsaved-changes prompts; main thread only.
 const std = @import("std");
 const knots = @import("knots");
 const ui = @import("ui");
@@ -12,7 +12,9 @@ const update_notice = @import("update_notice.zig");
 const search = @import("search.zig");
 const hotkey = @import("hotkey.zig");
 const header = @import("header.zig");
+const profiles = @import("profiles.zig");
 const status = @import("status.zig");
+const lang = @import("../../lang/lang.zig");
 const about = @import("tabs/about.zig");
 const backups = @import("tabs/backups.zig");
 const general = @import("tabs/general.zig");
@@ -34,7 +36,6 @@ const Button = ui.component.Button;
 const Canvas = ui.component.Canvas;
 
 const CONTENT_KEY: ui.Key = .str("knots.content");
-const SEARCH_KEY: ui.Key = .str("knots.search");
 
 /// A heading in the sidebar over the tabs that belong to it.
 const Category = enum {
@@ -123,7 +124,6 @@ const Tab = enum {
         };
     }
 
-    /// Shown only in Advanced Mode.
     fn isAdvanced(self: Tab) bool {
         return switch (self) {
             .mining => true,
@@ -131,7 +131,6 @@ const Tab = enum {
         };
     }
 
-    /// Shown only while clients are shown as thumbnails.
     fn needsThumbnails(self: Tab) bool {
         return switch (self) {
             .placement => true,
@@ -178,6 +177,7 @@ pub fn confirmClose() void {
 }
 
 pub fn frame(_: *knots.View, context: *ui.Frame) !void {
+    host.useLanguage(session.global().get("language"));
     session.beginFrame();
     widgets.beginFrame();
     search.beginFrame();
@@ -227,6 +227,8 @@ pub fn frame(_: *knots.View, context: *ui.Frame) !void {
     try import_dialog.show(context);
     try update_notice.show(context);
     try unsavedPrompt(context);
+    // Last, so it opens over the Import dialog that queued its switch.
+    try switchPrompt(context);
     // An edit made after what shows it was drawn, e.g. + Add Character under its list, appears on the next frame.
     if (session.takeEdited()) context.requestRedraw();
 
@@ -269,7 +271,7 @@ fn indexTabs(context: *ui.Frame, offered: Offered) !void {
 }
 
 fn sidebar(context: *ui.Frame, offered: Offered) !void {
-    const bar = Rect{ .key = .src(@src()), .style = &style.sidebar };
+    const bar = Rect{ .key = .src(@src()), .style = try sidebarStyle(context, offered) };
     _ = try bar.open(context);
     var last_category: ?Category = null;
     for (std.enums.values(Tab)) |tab| {
@@ -283,7 +285,7 @@ fn sidebar(context: *ui.Frame, offered: Offered) !void {
                 .{Text{
                     .selectable = false,
                     .key = ui.Key.str("knots.tab.category.label").indexed(index),
-                    .content = tab.category().label(),
+                    .content = lang.text(tab.category().label()),
                     .style = &style.tab_category_text,
                 }},
             });
@@ -291,6 +293,26 @@ fn sidebar(context: *ui.Frame, offered: Offered) !void {
         try tabItem(context, tab);
     }
     try bar.close(context);
+}
+
+/// style.sidebar, widened to its longest tab or category name in the chosen language.
+fn sidebarStyle(context: *ui.Frame, offered: Offered) !*const ui.Style {
+    const item_padding = comptime style.tab_item.padding.?;
+    const category_padding = comptime style.tab_category.padding.?;
+    const bar_padding = comptime style.sidebar.padding.?;
+    const bar_border = 1;
+    var widest: f32 = 0;
+    for (std.enums.values(Tab)) |tab| {
+        if (!offered.has(tab)) continue;
+        const label_width = try widgets.textWidth(context, lang.text(tab.label()), &style.tab_label);
+        widest = @max(widest, item_padding.left() + glyphs.TAB_SIZE + style.tab_item.gap.? + label_width + item_padding.right());
+        const category_width = try widgets.textWidth(context, lang.text(tab.category().label()), &style.tab_category_text);
+        widest = @max(widest, category_padding.left() + category_width + category_padding.right());
+    }
+    const width = std.math.clamp(@ceil(bar_padding.left() + widest + bar_padding.right() + bar_border), style.SIDEBAR_WIDTH, style.SIDEBAR_MAX_WIDTH);
+    const sized = try context.arena().create(ui.Style);
+    sized.* = style.sidebar.with(.{ .width = .fixed(width) });
+    return sized;
 }
 
 fn tabItem(context: *ui.Frame, tab: Tab) !void {
@@ -311,7 +333,7 @@ fn tabItem(context: *ui.Frame, tab: Tab) !void {
     try context.e(Text{
         .selectable = false,
         .key = ui.Key.str("knots.tab.label").indexed(index),
-        .content = tab.label(),
+        .content = lang.text(tab.label()),
         .style = if (is_active or response.hovered) &style.tab_label_lit else &style.tab_label,
     });
     try item.close(context);
@@ -329,7 +351,6 @@ fn selectTab(context: *ui.Frame, tab: Tab) void {
 fn footer(context: *ui.Frame) !void {
     const bar = Rect{ .key = .src(@src()), .style = &style.footer };
     _ = try bar.open(context);
-    try searchBox(context);
     // A copy, since a dialog drawn after the footer may show a new status this frame, rewriting the buffer under it.
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = try context.arena().dupe(u8, status.text()), .style = switch (status.kind()) {
         .info => &style.status_info,
@@ -341,49 +362,36 @@ fn footer(context: *ui.Frame) !void {
         Rect{ .key = .src(@src()), .style = &style.unsaved_chip },
         .{
             Text{ .selectable = false, .key = .src(@src()), .content = "●", .style = &style.unsaved_dot },
-            Text{ .selectable = false, .key = .src(@src()), .content = "Unsaved changes", .style = &style.unsaved_text },
+            Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Unsaved changes"), .style = &style.unsaved_text },
         },
     });
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Close", .style = &style.outline_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Close"), .style = &style.outline_button })).clicked) {
         host.requestClose();
     }
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Save", .style = &style.primary_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Save"), .style = &style.primary_button })).clicked) {
         host.postCommand(.save);
     }
     try bar.close(context);
-}
-
-/// The settings search: the box, its clear button, and how many sections match.
-fn searchBox(context: *ui.Frame) !void {
-    const box = Rect{ .key = .src(@src()), .style = &style.search_container };
-    _ = try box.open(context);
-    try widgets.searchBox(context, SEARCH_KEY, &search.g_query, "Search settings...");
-    try box.close(context);
-    if (search.isActive() and !search.needsIndex()) {
-        const match_count = search.matchCount();
-        const text = if (match_count == 0) "No matches" else try std.fmt.allocPrint(context.arena(), "{d} {s}", .{ match_count, if (match_count == 1) "section" else "sections" });
-        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = text, .style = if (match_count == 0) &style.search_count_none else &style.search_count_some });
-    }
 }
 
 fn unsavedPrompt(context: *ui.Frame) !void {
     if (!g_is_close_prompt_open) return;
     const dialog = widgets.modal(.src(@src()), &g_is_close_prompt_open, &style.modal);
     _ = try dialog.open(context);
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Unsaved Changes", .style = &style.heading });
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "You have unsaved changes. Save them before closing, or close without saving?", .style = &style.modal_text });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Unsaved Changes"), .style = &style.heading });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("You have unsaved changes. Save them before closing, or close without saving?"), .style = &style.modal_text });
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
     // Furthest from Save, so the destructive choice isn't beside the default one.
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Discard", .style = &style.danger_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Discard"), .style = &style.danger_button })).clicked) {
         g_is_close_prompt_open = false;
         host.postCommand(.discard_and_close);
     }
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Cancel", .style = &style.outline_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Cancel"), .style = &style.outline_button })).clicked) {
         g_is_close_prompt_open = false;
         context.requestRedraw();
     }
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Save", .style = &style.primary_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Save"), .style = &style.primary_button })).clicked) {
         g_is_close_prompt_open = false;
         host.postCommand(.save_and_close);
     }
@@ -391,9 +399,40 @@ fn unsavedPrompt(context: *ui.Frame) !void {
     try dialog.close(context);
 }
 
-/// The edited profile's accentColor tints the window.
+/// A profile switch waiting on unsaved changes, which it would otherwise drop.
+fn switchPrompt(context: *ui.Frame) !void {
+    const target = profiles.awaitedName() orelse return;
+    const is_open = profiles.awaitingFlag();
+    const dialog = widgets.modal(.src(@src()), is_open, &style.modal);
+    _ = try dialog.open(context);
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Unsaved Changes"), .style = &style.heading });
+    try context.e(Text{
+        .selectable = false,
+        .key = .src(@src()),
+        .content = try lang.format(context.arena(), "Switching to '{name}' drops your unsaved changes. Save them first?", .{ .name = target }),
+        .style = &style.modal_text,
+    });
+    const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
+    _ = try actions.open(context);
+    var choice: ?profiles.Unsaved = null;
+    // Furthest from Save, so the destructive choice isn't beside the default one.
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Discard"), .style = &style.danger_button })).clicked) choice = .discard;
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Cancel"), .style = &style.outline_button })).clicked) is_open.* = false;
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Save and Switch"), .style = &style.primary_button })).clicked) choice = .save;
+    try actions.close(context);
+    try dialog.close(context);
+    if (choice) |unsaved| {
+        profiles.resolve(unsaved);
+    } else if (!is_open.*) {
+        // Cancel, Escape and a click outside all close it without an answer.
+        profiles.cancel();
+        context.requestRedraw();
+    }
+}
+
+/// The edited profile's accentColor tints the window, or the one a prompt is picking for a new profile.
 fn applyAccent(context: *ui.Frame) void {
-    const argb = header.previewAccent() orelse session.profile().ptr.accentColor;
+    const argb = header.previewAccent() orelse import_dialog.previewAccent() orelse session.profile().ptr.accentColor;
     const r: u8 = @truncate(argb >> 16);
     const g: u8 = @truncate(argb >> 8);
     const b: u8 = @truncate(argb);

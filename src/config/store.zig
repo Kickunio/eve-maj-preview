@@ -13,13 +13,14 @@ const slog = log.Scoped("config");
 pub const ProfileStore = struct {
     live: Config,
     saved: Config,
+    io: std.Io,
 
     /// Takes ownership of `config`, freeing it on failure.
-    pub fn init(config: Config) !ProfileStore {
+    pub fn init(config: Config, io: std.Io) !ProfileStore {
         var live = config;
         errdefer live.deinit();
         patch_mod.assignIds(Config, &live);
-        return .{ .live = live, .saved = try live.clone(live.allocator) };
+        return .{ .live = live, .saved = try live.clone(live.allocator), .io = io };
     }
 
     pub fn deinit(self: *ProfileStore) void {
@@ -82,7 +83,6 @@ pub const ProfileStore = struct {
         return is_member;
     }
 
-    /// Saves everything the dialog changed in `live`.
     pub fn commit(self: *ProfileStore) !void {
         const fresh = try self.live.clone(self.live.allocator);
         self.saved.deinit();
@@ -98,7 +98,6 @@ pub const ProfileStore = struct {
         self.live = fresh;
     }
 
-    /// Whether `live` holds dialog edits not yet saved.
     pub fn isDirty(self: *const ProfileStore) bool {
         var arena = std.heap.ArenaAllocator.init(self.live.allocator);
         defer arena.deinit();
@@ -123,12 +122,11 @@ pub const ProfileStore = struct {
         const allocator = self.saved.allocator;
         const path = try profiles.path(allocator, self.saved.profile_name);
         defer allocator.free(path);
-        try profiles.save(&self.saved, allocator, path);
+        try profiles.save(&self.saved, allocator, self.io, path);
     }
 };
 
-/// Shared with the dialog's edits to a profile the app isn't running, which only exist on disk.
-pub fn applyWindowPosition(config: *Config, character_name: ?[]const u8, position: ?config_mod.Position, size: ?config_mod.WindowSize) !void {
+fn applyWindowPosition(config: *Config, character_name: ?[]const u8, position: ?config_mod.Position, size: ?config_mod.WindowSize) !void {
     if (character_name) |name| {
         if (position == null and config.findCharacter(name) == null) return;
         const character = try config.getOrCreateCharacter(name);

@@ -8,6 +8,7 @@ const host = @import("../host.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
 const window_picker = @import("../window_picker.zig");
+const lang = @import("../../../lang/lang.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -51,9 +52,13 @@ fn preferences(context: *ui.Frame) !void {
         &style.section,
     );
     const global = session.global();
+    try bind.choice(context, global, "language", "Language");
+    try widgets.hintText(context, .src(@src()), "Also used for the app's on-screen messages.");
     try bind.toggle(context, global, "advancedMode", "Advanced Mode");
+    try widgets.hintText(context, .src(@src()), "Shows extra, rarely changed settings and tabs.");
     const was_on_top = global.get("alwaysOnTop");
     try bind.toggle(context, global, "alwaysOnTop", "Always on Top");
+    try widgets.hintText(context, .src(@src()), "Keeps this window above other windows.");
     if (global.get("alwaysOnTop") != was_on_top) host.setAlwaysOnTop(!was_on_top);
     try section.close(context);
 }
@@ -61,14 +66,14 @@ fn preferences(context: *ui.Frame) !void {
 fn logging(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Logging", "How much detail is written to the log file.", &style.section);
     try bind.choice(context, session.global(), "logLevel", "Log Level");
-    try widgets.hintText(context, .src(@src()), "Debug is verbose and mainly useful for troubleshooting; Warning/Error only record problems.");
+    try widgets.hintText(context, .src(@src()), "Use Debug when reporting a problem.");
     try section.close(context);
 }
 
 fn scanning(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Scanning", "How often to check for new EVE windows.", &style.section);
     try bind.number(context, session.profile().child("timer"), "scanIntervalMs", "Scan Interval", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "Lower values pick up new or closed clients faster, at the cost of slightly more CPU usage.");
+    try widgets.hintText(context, .src(@src()), "How often to look for opened or closed clients.");
     try section.close(context);
 }
 
@@ -77,7 +82,7 @@ fn windowFilters(context: *ui.Frame) !void {
     var is_enabled = g_are_filters_enabled orelse (profile.ptr.windowFilters.items.len > 0);
     const section = try widgets.openSwitchedSection(context, "Window Filters", "Configure which applications to track. Each filter can match by window class name and executable name.", &style.section, .{ .is_on = &is_enabled });
     if (section.is_flipped) g_are_filters_enabled = is_enabled;
-    try widgets.hintText(context, .src(@src()), "When off, only EVE Online client windows are tracked.");
+    try widgets.hintText(context, .src(@src()), "When off, only EVE windows are shown.");
 
     const options = try widgets.openGroup(context, .src(@src()), is_enabled);
     try filterList(context, profile);
@@ -118,16 +123,19 @@ fn filterList(context: *ui.Frame, profile: ProfileRef) !void {
             g_selected_index = index;
             context.requestRedraw();
         }
+        const name = if (filter.name.len > 0) filter.name else try lang.format(arena, "New Filter {n}", .{ .n = index + 1 });
         try context.e(Text{
             .selectable = false,
             .key = ui.Key.str("knots.filter.name").indexed(index),
-            .content = if (filter.name.len > 0) filter.name else try std.fmt.allocPrint(arena, NEW_FILTER_NAME ++ " {d}", .{index + 1}),
+            .content = name,
             .style = if (is_selected) &style.roster_name_selected else &style.roster_name,
         });
-        if (!filter.enabled) try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.filter.badge").indexed(index), .content = "Disabled", .style = &style.roster_badge });
+        const badge = if (filter.enabled) "" else lang.text("Disabled");
+        if (badge.len > 0) try context.e(Text{ .selectable = false, .key = ui.Key.str("knots.filter.badge").indexed(index), .content = badge, .style = &style.roster_badge });
+        try widgets.fitRosterRow(context, name, 0, badge);
         try row.close(context);
     }
-    const added: ?FilterRef = if (try list.close(context, .{ .add_label = "Add Window Filter" }) == .add) profile.append("windowFilters", .{ .name = NEW_FILTER_NAME, .enabled = true }) else null;
+    const added: ?FilterRef = if (try list.close(context, .{ .add_label = "Add Window Filter" }) == .add) profile.append("windowFilters", .{ .name = lang.text(NEW_FILTER_NAME), .enabled = true }) else null;
     if (added) |filter| g_selected_index = filter.index;
     if (first_editable == null and added == null) {
         const empty = Rect{ .key = .src(@src()), .style = &style.detail_fit };
@@ -146,7 +154,7 @@ fn filterDetail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     _ = try stack.open(context);
 
     const header = try widgets.openDetailHeader(context, .src(@src()));
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Filter Name", .style = &style.inline_label });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Filter Name"), .style = &style.inline_label });
     const name_before = try context.arena().dupe(u8, filter.get("name"));
     try bind.textBox(context, filter, "name", "e.g., EVE Online");
     const name_after = filter.get("name");
@@ -156,16 +164,19 @@ fn filterDetail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
 
     var is_enabled: bool = filter.get("enabled");
     if (try widgets.switchRow(context, ui.Key.str("knots.filter.enabled").indexed(index), "Enabled", &is_enabled)) filter.set("enabled", is_enabled);
+    try widgets.hintText(context, ui.Key.str("knots.filter.enabled.hint").indexed(index), "When off, this filter matches nothing.");
     const classes = try widgets.openBinding(context, ui.Key.str("knots.filter.classes").indexed(index), "Window Classes");
     try bind.csvBox(context, filter, "class_names", "e.g., trinityWindow");
     try classes.close(context);
-    try widgets.hintText(context, ui.Key.str("knots.filter.classes.hint").indexed(index), "Optional: narrows the match further, but leaving this blank still matches by Executable Name below.");
+    try widgets.hintText(context, ui.Key.str("knots.filter.classes.hint").indexed(index), "Optional. Leave blank to match by Executable Names only.");
     const executables = try widgets.openBinding(context, ui.Key.str("knots.filter.exes").indexed(index), "Executable Names");
     try bind.csvBox(context, filter, "executable_names", "e.g., exefile.exe");
     try executables.close(context);
+    try widgets.hintText(context, ui.Key.str("knots.filter.exes.hint").indexed(index), "Separate names with commas.");
     const detect = try widgets.openBinding(context, ui.Key.str("knots.filter.detect").indexed(index), "Detect");
     if (try widgets.glyphButton(context, ui.Key.str("knots.filter.pick").indexed(index), .refresh, "Pick Running Window", &style.plain_button, false)) window_picker.open(g_allocator, &g_picker, index);
     try detect.close(context);
+    try widgets.hintText(context, ui.Key.str("knots.filter.detect.hint").indexed(index), "Pick an open window to fill in this filter.");
     try picker(context, profile, filter);
     try stack.close(context);
 

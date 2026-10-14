@@ -85,7 +85,6 @@ pub fn build(arena: std.mem.Allocator, text: []const u8, source_profile: ?[]cons
     return .{ .ops = try draft_mod.toOps(arena, &draft, doc), .notes = draft.notes.items, .skipped = draft.skipped.items };
 }
 
-/// Null for a file none of the formats recognise.
 fn detect(arena: std.mem.Allocator, raw_text: []const u8) !?Source {
     const text = textOf(raw_text);
     if (std.json.parseFromSliceLeaky(Value, arena, text, .{ .duplicate_field_behavior = .use_last })) |root| {

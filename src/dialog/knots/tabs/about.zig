@@ -5,6 +5,7 @@ const win32 = @import("../../../platform/win32.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
 const images = @import("../images.zig");
+const lang = @import("../../../lang/lang.zig");
 const log = @import("../../../log.zig");
 
 const Rect = ui.component.Rect;
@@ -45,7 +46,7 @@ fn brand(context: *ui.Frame) !void {
 fn fact(context: *ui.Frame, comptime label: []const u8, value: []const u8, url: ?[]const u8) !void {
     const row = Rect{ .key = .str("knots.about.fact:" ++ label), .style = &.{ .direction = .row, .@"align" = .center, .gap = 6, .padding = .xy(style.ROW_INSET, 0) } };
     _ = try row.open(context);
-    try context.e(Text{ .selectable = false, .key = .str("knots.about.fact.label:" ++ label), .content = label, .style = &style.fact_label });
+    try context.e(Text{ .selectable = false, .key = .str("knots.about.fact.label:" ++ label), .content = lang.text(label), .style = &style.fact_label });
     const target = url orelse {
         try context.e(Text{ .selectable = false, .key = .str("knots.about.fact.value:" ++ label), .content = value, .style = &style.hint_plain });
         try row.close(context);

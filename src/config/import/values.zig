@@ -16,7 +16,6 @@ pub fn has(object: ?Value, key: []const u8) bool {
     return get(object, key) != null;
 }
 
-/// The object at `key`, or null for anything else.
 pub fn objectAt(object: ?Value, key: []const u8) ?Value {
     const value = get(object, key) orelse return null;
     return if (value == .object) value else null;

@@ -1,4 +1,4 @@
-//! A thumbnail's visibility, and the state that picks its look.
+//! Whether a thumbnail is shown, or hidden by hand or automatically.
 pub const VisibilityState = enum {
     visible,
     /// Auto-hidden via hideWhenNoEveFocus; can be auto-shown again.
@@ -9,13 +9,4 @@ pub const VisibilityState = enum {
     pub fn isVisible(self: VisibilityState) bool {
         return self == .visible;
     }
-};
-
-/// Used purely as a style-lookup key (config.zig's getStateConfig) - never persisted per-thumbnail; see ThumbnailWindow.effectiveRenderState.
-pub const ThumbnailState = enum {
-    inactive,
-    active,
-    alert,
-    minimized,
-    dragging,
 };

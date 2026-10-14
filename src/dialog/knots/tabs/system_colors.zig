@@ -6,6 +6,7 @@ const bind = @import("../bind.zig");
 const color_convert = @import("../color_convert.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
+const lang = @import("../../../lang/lang.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -19,7 +20,7 @@ var g_selected_index: usize = 0;
 /// Both thumbnails and the client list colour system names by these.
 pub fn show(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "System Colors", "Colors chosen systems' names on thumbnails and in the client list.", &style.section);
-    try widgets.hintText(context, .src(@src()), "These win over Unique System Colors. An exact name beats a pattern; otherwise the first matching row wins.");
+    try widgets.hintText(context, .src(@src()), "These beat Unique System Colors. Exact names win over partial ones.");
     const profile = session.profile();
     const count = profile.ptr.systemColors.items.len;
     // The list can shrink while the window is open, e.g. on a profile switch.
@@ -56,12 +57,14 @@ fn roster(context: *ui.Frame, profile: ProfileRef) !void {
         const dot_style = try arena.create(ui.Style);
         dot_style.* = style.space_dot.with(.{ .background = color_convert.solid(entry.color) });
         try context.e(Rect{ .key = ui.Key.str("knots.system_color.dot").indexed(index), .style = dot_style });
+        const name = try rowName(context, profile, index);
         try context.e(Text{
             .selectable = false,
             .key = ui.Key.str("knots.system_color.name").indexed(index),
-            .content = try rowName(context, profile, index),
+            .content = name,
             .style = if (is_selected) &style.roster_name_selected else &style.roster_name,
         });
+        try widgets.fitRosterRow(context, name, style.SPACE_DOT_SIZE, "");
         try row.close(context);
     }
     if (try list.close(context, .{ .add_label = "Add System Color" }) == .add) {
@@ -71,7 +74,7 @@ fn roster(context: *ui.Frame, profile: ProfileRef) !void {
 
 fn rowName(context: *ui.Frame, profile: ProfileRef, index: usize) ![]const u8 {
     const name = try bind.liveText(context, profile.item("systemColors", index), "systemName");
-    return if (name.len > 0) name else UNNAMED;
+    return if (name.len > 0) name else lang.text(UNNAMED);
 }
 
 fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
@@ -80,7 +83,7 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     _ = try stack.open(context);
 
     const header = try widgets.openDetailHeader(context, .src(@src()));
-    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Systems", .style = &style.inline_label });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Systems"), .style = &style.inline_label });
     try bind.textBox(context, entry, "systemName", "e.g. Jita, Amarr or J######");
     const removed = try widgets.confirmButton(context, ui.Key.str("knots.system_color.remove").indexed(index), "Remove", "Confirm", &style.plain_button, &style.confirm_button);
     try header.close(context);
@@ -88,6 +91,7 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     const color_row = try widgets.openBinding(context, ui.Key.str("knots.system_color.color").indexed(index), "Color");
     try bind.colorBox(context, entry, "color");
     try color_row.close(context);
+    try widgets.hintText(context, .src(@src()), "The color these systems' names are drawn in.");
     // Always shown, unlike a field hint: the wildcards are easy to miss otherwise.
     try widgets.paragraph(context, .src(@src()), "Separate names with commas. Wildcards: * any text, ? one character, # one digit, so J###### is every wormhole.");
     try stack.close(context);

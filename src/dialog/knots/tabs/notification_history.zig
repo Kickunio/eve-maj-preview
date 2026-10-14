@@ -80,12 +80,15 @@ fn layout(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "\u{00D7}", .style = &style.muted_text });
     try bind.unitNumberBox(context, ref, "notifInfoPanelHeight", "px", .{});
     try size.close(context);
+    try widgets.hintText(context, .src(@src()), "You can also drag the panel's edges to resize it.");
     try bind.number(context, ref, "notifInfoPanelMaxRows", "Max Rows", .{});
+    try widgets.hintText(context, .src(@src()), "Older notifications drop off past this.");
     const font = try widgets.openBinding(context, .src(@src()), "Font");
     try bind.fontBox(context, ref, "notifInfoPanelFontName");
     try bind.unitNumberBox(context, ref, "notifInfoPanelFontSize", "px", .{});
     try bind.choiceBox(context, ref, "notifInfoPanelFontWeight");
     try font.close(context);
+    try widgets.hintText(context, .src(@src()), "Used for every row's text.");
     try options.close(context);
     try section.close(context);
 }
@@ -94,8 +97,11 @@ fn visibility(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
     const section = try widgets.openSection(context, "Panel Visibility", "Where the panel opens, how see-through it is, and when it's hidden automatically.", &style.section);
     const options = try widgets.openGroup(context, .src(@src()), is_shown);
     try bind.toggle(context, ref, "rememberNotifInfoPanelPosition", "Remember Position");
+    try widgets.hintText(context, .src(@src()), "Opens the panel where you last left it.");
     try bind.slider(context, ref, "notifInfoPanelOpacity", "Opacity", .{ .display = .percent_of_255 });
+    try widgets.hintText(context, .src(@src()), "Lower lets you see through the panel.");
     try bind.toggle(context, ref, "hideNotifInfoPanelWhenNoCharacters", "Hide When No Characters Are Logged In");
+    try widgets.hintText(context, .src(@src()), "The panel comes back when a character logs in.");
     try options.close(context);
     try section.close(context);
 }
@@ -106,11 +112,12 @@ fn rowSettings(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
     try bind.toggle(context, ref, "notifInfoPanelShowTimestamp", "Relative Timestamps");
     try widgets.hintText(context, .src(@src()), "Shows times like \"5m ago\" instead of a fixed clock time.");
     try bind.toggle(context, ref, "notifInfoPanelShowCategoryFilters", "Category Filters");
-    try widgets.hintText(context, .src(@src()), "Adds filter buttons for each notification category to the panel.");
+    try widgets.hintText(context, .src(@src()), "Adds buttons to filter the panel by type.");
     try bind.toggle(context, ref, "notifInfoPanelMergeEnabled", "Merge Repeats");
-    try widgets.hintText(context, .src(@src()), "Combines identical notifications fired back to back into one row with a +N count. Click a merged row to expand it.");
+    try widgets.hintText(context, .src(@src()), "Repeats share one row with a count; click it to expand.");
     const merge = try widgets.openGroup(context, .src(@src()), ref.get("notifInfoPanelMergeEnabled"));
     try bind.number(context, ref, "notifInfoPanelMergeWindowSec", "Merge Window", .{ .unit = "s" });
+    try widgets.hintText(context, .src(@src()), "Repeats this close together share a row.");
     try merge.close(context);
     try options.close(context);
     try section.close(context);

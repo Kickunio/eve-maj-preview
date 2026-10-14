@@ -2,7 +2,6 @@
 const ui = @import("ui");
 const win32 = @import("../../../platform/win32.zig");
 const config = @import("../../../config.zig");
-const scout = @import("../../../clients/scout.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
 const status = @import("../status.zig");
@@ -37,6 +36,16 @@ const MATCH_CLIENT_INDEX = 0;
 const CUSTOM_INDEX = RATIOS.len - 1;
 
 const Ratio = struct { label: []const u8, ratio: ?f32 };
+
+/// One border state's row: its label and hint, and the ThumbnailConfig fields it binds.
+const BorderFields = struct {
+    label: []const u8,
+    hint: []const u8,
+    show_field: []const u8,
+    width_field: []const u8,
+    style_field: []const u8,
+    color_field: []const u8,
+};
 
 pub fn show(context: *ui.Frame) !void {
     const thumbnail = session.profile().child("thumbnail");
@@ -76,7 +85,7 @@ fn dimensions(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     try context.e(Text{ .selectable = false, .key = .str("knots.thumbnails.size.x"), .content = "\u{00D7}", .style = &style.muted_text });
     try bind.unitNumberBox(context, thumbnail, "height", "px", .{});
     try row.close(context);
-    try widgets.hintText(context, .src(@src()), "The slider keeps the current aspect ratio; type into the boxes for any size.");
+    try widgets.hintText(context, .src(@src()), "The slider keeps the shape; type in the boxes for any size.");
     try section.close(context);
 }
 
@@ -85,6 +94,7 @@ fn aspectRatio(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     const row = try widgets.openBinding(context, .str("knots.thumbnails.ratio"), "Aspect Ratio");
     const picked = try widgets.segmented(context, .str("knots.thumbnails.ratio.options"), &RATIO_LABELS, currentRatio(thumbnail.get("width"), thumbnail.get("height")));
     try row.close(context);
+    try widgets.hintText(context, .src(@src()), "Match EVE copies the shape of an open EVE window.");
 
     const index = picked orelse return;
     const width: f32 = @floatFromInt(thumbnail.get("width"));
@@ -107,7 +117,7 @@ fn currentRatio(width: i32, height: i32) usize {
 
 /// The first open, non-minimized client's game-area ratio.
 fn clientRatio() ?f32 {
-    const scout_ptr = scout.g_scout_ptr orelse return null;
+    const scout_ptr = &session.runningApp().scout;
     for (scout_ptr.getWindows()) |window| {
         // A minimized window's client area reads as 0x0.
         if (!window.is_eve_client or win32.isWindowIconic(window.hwnd)) continue;
@@ -123,41 +133,58 @@ fn clientRatio() ?f32 {
 fn borders(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     const section = try widgets.openSection(context, "Borders", "Draw a styled border around thumbnails based on their focus state.", &style.section);
     const uses_unique = thumbnail.get("useUniqueCharacterBorderColors");
-    try borderRow(context, thumbnail, "Focused Border", "showBorderWhenFocused", "borderWidth", "borderStyle", "borderColor", uses_unique);
-    try borderRow(context, thumbnail, "Inactive Border", "showBorderWhenInactive", "inactiveBorderWidth", "inactiveBorderStyle", "inactiveBorderColor", false);
+    try borderRow(context, thumbnail, .{
+        .label = "Focused Border",
+        .hint = "The border on the thumbnail of the client you're in.",
+        .show_field = "showBorderWhenFocused",
+        .width_field = "borderWidth",
+        .style_field = "borderStyle",
+        .color_field = "borderColor",
+    }, uses_unique);
+    try borderRow(context, thumbnail, .{
+        .label = "Inactive Border",
+        .hint = "The border on every other thumbnail.",
+        .show_field = "showBorderWhenInactive",
+        .width_field = "inactiveBorderWidth",
+        .style_field = "inactiveBorderStyle",
+        .color_field = "inactiveBorderColor",
+    }, false);
     const unique_group = try widgets.openGroup(context, .src(@src()), thumbnail.get("showBorderWhenFocused"));
     try bind.toggle(context, thumbnail, "useUniqueCharacterBorderColors", "Unique Character Focused Border Colors");
-    try widgets.hintText(context, .src(@src()), "Auto-generates a color per character name, overriding the Focused Border color above.");
+    try widgets.hintText(context, .src(@src()), "Each character gets its own color, in place of the Focused Border color.");
     try unique_group.close(context);
     try section.close(context);
 }
 
 /// The state's width, style and colour, then its checkbox last so it lines up with the other rows' checkboxes.
-fn borderRow(context: *ui.Frame, thumbnail: ThumbnailRef, comptime label: []const u8, comptime show_field: []const u8, comptime width_field: []const u8, comptime style_field: []const u8, comptime color_field: []const u8, is_color_overridden: bool) !void {
-    const row = try widgets.openBinding(context, .str("knots.border.row:" ++ label), label);
-    const settings = try widgets.openInlineGroup(context, .str("knots.border.settings:" ++ label), thumbnail.get(show_field));
-    try bind.unitNumberBox(context, thumbnail, width_field, "px", .{});
-    try bind.choiceBox(context, thumbnail, style_field);
+fn borderRow(context: *ui.Frame, thumbnail: ThumbnailRef, comptime fields: BorderFields, is_color_overridden: bool) !void {
+    const row = try widgets.openBinding(context, .str("knots.border.row:" ++ fields.label), fields.label);
+    const settings = try widgets.openInlineGroup(context, .str("knots.border.settings:" ++ fields.label), thumbnail.get(fields.show_field));
+    try bind.unitNumberBox(context, thumbnail, fields.width_field, "px", .{});
+    try bind.choiceBox(context, thumbnail, fields.style_field);
     // Unique colours replace it per character.
-    const color = try widgets.openInlineGroup(context, .str("knots.border.color:" ++ label), !is_color_overridden);
-    try bind.colorBox(context, thumbnail, color_field);
+    const color = try widgets.openInlineGroup(context, .str("knots.border.color:" ++ fields.label), !is_color_overridden);
+    try bind.colorBox(context, thumbnail, fields.color_field);
     try color.close(context);
     try settings.close(context);
-    try bind.toggle(context, thumbnail, show_field, "");
+    try bind.toggle(context, thumbnail, fields.show_field, "");
     try row.close(context);
+    try widgets.hintText(context, .str("knots.border.hint:" ++ fields.label), fields.hint);
 }
 
 fn visibility(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     const section = try widgets.openSection(context, "Visibility", "How see-through thumbnails are, and when they're hidden automatically.", &style.section);
     try bind.slider(context, thumbnail, "thumbnailOpacity", "Opacity", .{ .display = .percent_of_255 });
+    try widgets.hintText(context, .src(@src()), "Lower lets you see through thumbnails.");
     try bind.toggle(context, thumbnail, "applyOpacityToOverlayTexts", "Apply Opacity to Overlay Texts");
-    try widgets.hintText(context, .src(@src()), "Also fades the name/badge/combat/mining/bounty/resource overlay text and backgrounds with the Opacity slider above; otherwise they stay fully opaque.");
+    try widgets.hintText(context, .src(@src()), "When off, texts stay solid while the thumbnail fades.");
     try bind.toggle(context, thumbnail, "activeThumbnailHidden", "Hide Active Thumbnail");
+    try widgets.hintText(context, .src(@src()), "Hides the thumbnail of the client you're in.");
     try bind.toggle(context, thumbnail, "hideWhenNoEveFocus", "Hide When No EVE Focus");
-    try widgets.hintText(context, .src(@src()), "Hides all thumbnails while no EVE client window has focus.");
+    try widgets.hintText(context, .src(@src()), "Thumbnails come back when you return to EVE.");
     const delay = try widgets.openGroup(context, .src(@src()), thumbnail.get("hideWhenNoEveFocus"));
     try bind.number(context, thumbnail, "hideDebounceMs", "Hide Delay", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "Delay before hiding, so switching briefly doesn't flicker.");
+    try widgets.hintText(context, .src(@src()), "Waits this long, so quick switches don't flicker.");
     try delay.close(context);
     try section.close(context);
 }
@@ -166,5 +193,6 @@ fn visibility(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
 fn displayMode(context: *ui.Frame, display: DisplayRef) !void {
     const section = try widgets.openSection(context, "Display Mode", "Thumbnails shows a live preview of each client. Client List is a compact text panel that uses fewer resources, ideal with many clients. None shows nothing; hotkeys and notifications keep working.", &style.section);
     try bind.segmented(context, display, "viewMode", "Show Clients As", &.{ "Thumbnails", "Client List", "None" });
+    try widgets.hintText(context, .src(@src()), "Client List is lighter on your PC than Thumbnails.");
     try section.close(context);
 }

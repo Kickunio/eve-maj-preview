@@ -1,21 +1,36 @@
-//! Profile actions from the header and the Backups tab, run between frames since each can replace the documents, reload the app or change the profile folder, and the profile list they keep current; main thread only.
+//! Profile actions, run between frames since each can replace the documents, reload the app or change the profile folder, and the profile list, names and colours they keep current; main thread only.
 const std = @import("std");
 const config = @import("../../config.zig");
-const main = @import("../../main.zig");
+const profile_files = @import("../../config/profiles.zig");
+const host = @import("host.zig");
 const session = @import("session.zig");
 const status = @import("status.zig");
+const style = @import("style.zig");
 const import_dialog = @import("import_dialog.zig");
 const log = @import("../../log.zig");
 
 const slog = log.Scoped("dialog_knots");
 
+/// Re-exported, since every caller in the window already reaches profiles through this module.
+pub const displayName = config.profileDisplayName;
+
+/// A new profile's accent colour, Config's own default.
+pub const DEFAULT_ACCENT = blk: {
+    const index = std.meta.fieldIndex(config.Config, "accentColor").?;
+    break :blk @typeInfo(config.Config).@"struct".field_attrs[index].defaultValue(u32).?;
+};
+/// What a profile name may hold, for the prompts that ask for one; part of en.json's keys, so a new length limit needs them updated.
+pub const NAME_RULES = std.fmt.comptimePrint("letters, digits, spaces, '-' and '_', up to {d} characters", .{profile_files.MAX_NAME_LENGTH});
+
+comptime {
+    std.debug.assert(style.ACCENT_PRESETS[0] == DEFAULT_ACCENT);
+}
+
 pub const Action = enum {
-    /// The app switches to the profile, and the window edits it.
-    make_live,
-    /// The window edits the profile as a draft; the app keeps running its own.
-    edit,
+    /// The app switches to the profile.
+    switch_to,
     create,
-    /// A copy of the profile being edited.
+    /// A copy of the running profile.
     copy,
     /// Moved to a backup, not deleted.
     delete,
@@ -24,9 +39,12 @@ pub const Action = enum {
     restore,
     /// A backup removed for good; the name is the backup's file name.
     delete_backup,
-    /// A new profile, edited as a draft, with the Import dialog's chosen sections applied to it.
+    /// A new profile with the Import dialog's chosen sections applied to it, unsaved.
     import_new,
 };
+
+/// What happens to unsaved changes before an action that switches profiles.
+pub const Unsaved = enum { save, discard };
 
 /// Called with an action to run between frames, i.e. a posted command.
 pub const Schedule = *const fn () void;
@@ -34,17 +52,21 @@ pub const Schedule = *const fn () void;
 var g_allocator: std.mem.Allocator = undefined;
 var g_schedule: Schedule = undefined;
 var g_action: ?Action = null;
-/// The profile file name the pending action is about. Owned; freed by runPending.
+/// The profile file name the pending action is about. Owned; freed by runPending or clearPending.
 var g_name: ?[]u8 = null;
 var g_accent: ?u32 = null;
-/// The backup file a pending restore reads. Owned; freed by runPending.
+/// The backup file a pending restore reads. Owned; freed by runPending or clearPending.
 var g_backup: ?[]u8 = null;
+/// Set while the pending action waits on the unsaved-changes prompt, whose modal clears it to cancel.
+var g_is_awaiting_choice: bool = false;
+/// The prompt's answer, applied before the pending action runs.
+var g_unsaved: ?Unsaved = null;
 /// Bumped each time the profile list is re-read, i.e. after every action.
 var g_revision: u32 = 0;
-/// A profile just created or copied, which the header offers to switch to. Owned; freed by takeCreated or deinit.
-var g_created: ?[]u8 = null;
 /// Profile file names, sorted. Owned; refreshed after every action.
 var g_profiles: std.ArrayList([]const u8) = .empty;
+/// Each profile's saved accent colour, in g_profiles' order.
+var g_accents: std.ArrayList(u32) = .empty;
 
 pub fn init(allocator: std.mem.Allocator, schedule: Schedule) void {
     g_allocator = allocator;
@@ -55,18 +77,17 @@ pub fn init(allocator: std.mem.Allocator, schedule: Schedule) void {
 /// Once the window has closed.
 pub fn deinit() void {
     freeProfiles();
-    if (g_name) |name| g_allocator.free(name);
-    g_name = null;
-    if (g_backup) |backup| g_allocator.free(backup);
-    g_backup = null;
-    g_action = null;
-    if (g_created) |name| g_allocator.free(name);
-    g_created = null;
+    clearPending();
 }
 
 /// Borrows from this module until the next action runs.
 pub fn list() []const []const u8 {
     return g_profiles.items;
+}
+
+/// Each listed profile's saved accent colour, in list()'s order; borrows like list().
+pub fn accents() []const u32 {
+    return g_accents.items;
 }
 
 /// Queues `action` on `name` (a profile file name); a request made while another is pending replaces it.
@@ -79,6 +100,8 @@ pub fn request(action: Action, name: []const u8, accent: ?u32) void {
     g_name = owned;
     g_action = action;
     g_accent = accent;
+    g_is_awaiting_choice = false;
+    g_unsaved = null;
     g_schedule();
 }
 
@@ -93,30 +116,64 @@ pub fn requestRestore(name: []const u8, backup: []const u8, accent: ?u32) void {
     request(.restore, name, accent);
 }
 
+/// The profile a pending action would switch to, while it waits on the unsaved-changes prompt. Borrows from this module.
+pub fn awaitedName() ?[]const u8 {
+    if (!g_is_awaiting_choice) return null;
+    return displayName(g_name orelse return null);
+}
+
+/// The unsaved-changes prompt's open flag.
+pub fn awaitingFlag() *bool {
+    return &g_is_awaiting_choice;
+}
+
+/// Runs the action waiting on the unsaved-changes prompt, after saving or discarding the changes.
+pub fn resolve(unsaved: Unsaved) void {
+    g_is_awaiting_choice = false;
+    g_unsaved = unsaved;
+    g_schedule();
+}
+
+/// Drops the action waiting on the unsaved-changes prompt.
+pub fn cancel() void {
+    clearPending();
+}
+
 /// Between frames, from the posted command.
 pub fn runPending() void {
     const action = g_action orelse return;
     const name = g_name orelse return;
+    const unsaved = g_unsaved;
+    if (unsaved == null and switchesProfile(action) and session.isDirty()) {
+        g_is_awaiting_choice = true;
+        return;
+    }
     g_action = null;
     g_name = null;
+    g_unsaved = null;
     defer g_allocator.free(name);
-    run(action, name, g_accent) catch |err| {
-        slog.err("Failed to {s} profile '{s}': {}", .{ verb(action), name, err });
-        status.show(.failure, "Failed to {s} profile '{s}': {t}", .{ verb(action), shownName(action, name), err });
+    run(action, name, g_accent, unsaved) catch |err| {
+        slog.err("Failed to run profile action '{t}' on '{s}': {}", .{ action, name, err });
+        status.show(.failure, failureText(action), .{ .name = shownName(action, name), .err = err });
     };
+    session.profileReplaced();
     refresh();
 }
 
-/// The profile just created or copied, if any; the caller owns it.
-pub fn takeCreated() ?[]u8 {
-    const name = g_created orelse return null;
-    g_created = null;
-    return name;
-}
-
-/// "Main" for "Main.json".
-pub fn displayName(file_name: []const u8) []const u8 {
-    return if (std.mem.endsWith(u8, file_name, ".json")) file_name[0 .. file_name.len - ".json".len] else file_name;
+/// Why `typed` can't name a new profile, or null while it can or nothing is typed yet.
+pub fn nameProblem(arena: std.mem.Allocator, typed: []const u8) ?[]const u8 {
+    if (typed.len == 0) return null;
+    const file_name = config.profileFileName(arena, typed) catch |err| switch (err) {
+        error.InvalidProfileName => return "Use " ++ NAME_RULES ++ ".",
+        else => {
+            slog.warn("Failed to check profile name '{s}': {}", .{ typed, err });
+            return null;
+        },
+    };
+    for (g_profiles.items) |name| {
+        if (std.ascii.eqlIgnoreCase(name, file_name)) return "A profile with this name already exists.";
+    }
+    return null;
 }
 
 /// Changes after every profile action, so a list built from the profile folder, e.g. the backups, can tell to read it again.
@@ -124,35 +181,33 @@ pub fn revision() u32 {
     return g_revision;
 }
 
-fn run(action: Action, name: []const u8, accent: ?u32) !void {
+fn run(action: Action, name: []const u8, accent: ?u32, unsaved: ?Unsaved) !void {
+    const app = session.runningApp();
+    if (unsaved) |choice| switch (choice) {
+        .save => try session.save(),
+        .discard => try host.discardChanges(),
+    };
     switch (action) {
-        .make_live => {
-            try session.editProfile(main.g_store.live.profile_name);
-            main.switchProfile(name);
-            status.show(.success, "Switched to profile '{s}'", .{displayName(name)});
-        },
-        .edit => {
-            try session.editProfile(name);
-            status.show(.info, "Editing profile '{s}'; the app keeps running '{s}'", .{ displayName(name), displayName(main.g_store.live.profile_name) });
+        .switch_to => {
+            app.switchProfile(name);
+            status.show(.success, "Switched to profile '{name}'", .{ .name = displayName(name) });
         },
         .create => {
-            try config.createProfile(g_allocator, name, accent);
-            try offerSwitch(name);
-            status.show(.success, "Created profile '{s}'", .{displayName(name)});
+            try config.createProfile(g_allocator, app.io, name, accent);
+            app.switchProfile(name);
+            status.show(.success, "Created profile '{name}'", .{ .name = displayName(name) });
         },
         .copy => {
-            try config.copyProfile(g_allocator, session.profile().ptr.profile_name, name, accent);
-            try offerSwitch(name);
-            status.show(.success, "Copied to profile '{s}'", .{displayName(name)});
+            try config.copyProfile(g_allocator, app.io, app.store.live.profile_name, name, accent);
+            app.switchProfile(name);
+            status.show(.success, "Copied to profile '{name}'", .{ .name = displayName(name) });
         },
         .delete => {
             // Checked before any switch, which a refused delete mustn't cause.
             try config.checkProfileDeletable(name);
-            const is_running = std.mem.eql(u8, name, main.g_store.live.profile_name);
-            if (is_running or std.mem.eql(u8, name, session.profile().ptr.profile_name)) try session.editProfile(main.g_store.live.profile_name);
-            if (is_running) main.switchProfile(config.DEFAULT_PROFILE);
-            try config.deleteProfileToBackup(g_allocator, name);
-            status.show(.success, "Deleted profile '{s}' (kept as a backup)", .{displayName(name)});
+            if (std.mem.eql(u8, name, app.store.live.profile_name)) app.switchProfile(config.DEFAULT_PROFILE);
+            try config.deleteProfileToBackup(g_allocator, app.io, name);
+            status.show(.success, "Deleted profile '{name}' (kept as a backup)", .{ .name = displayName(name) });
         },
         .restore => {
             const backup = g_backup orelse return error.MissingBackup;
@@ -160,50 +215,47 @@ fn run(action: Action, name: []const u8, accent: ?u32) !void {
                 g_allocator.free(backup);
                 g_backup = null;
             }
-            try config.restoreProfileBackup(g_allocator, backup, name, accent);
-            try offerSwitch(name);
-            status.show(.success, "Profile restored successfully", .{});
+            try config.restoreProfileBackup(g_allocator, app.io, backup, name, accent);
+            app.switchProfile(name);
+            status.show(.success, "Restored profile '{name}'", .{ .name = displayName(name) });
         },
         .delete_backup => {
-            try config.deleteProfileBackup(g_allocator, name);
-            status.show(.success, "Deleted the backup of '{s}'", .{shownName(action, name)});
+            try config.deleteProfileBackup(g_allocator, app.io, name);
+            status.show(.success, "Deleted the backup of '{name}'", .{ .name = shownName(action, name) });
         },
         .import_new => {
-            try config.createProfile(g_allocator, name, accent);
-            try session.editProfile(name);
+            try config.createProfile(g_allocator, app.io, name, accent);
+            app.switchProfile(name);
             import_dialog.applyImport();
-            status.show(.info, "Imported into new profile '{s}'; review it, then Save", .{displayName(name)});
+            status.show(.info, "Imported into new profile '{name}'; review it, then Save", .{ .name = displayName(name) });
         },
         .reset => {
-            try config.writeDefaultProfile(g_allocator, name, null);
-            if (std.mem.eql(u8, name, main.g_store.live.profile_name)) {
-                try session.editProfile(name);
-                main.switchProfile(name);
-            } else if (std.mem.eql(u8, name, session.profile().ptr.profile_name)) {
-                try session.editProfile(name);
-            }
-            status.show(.success, "Reset profile '{s}' to defaults", .{displayName(name)});
+            try config.writeDefaultProfile(g_allocator, app.io, name, null);
+            if (std.mem.eql(u8, name, app.store.live.profile_name)) app.switchProfile(name);
+            status.show(.success, "Reset profile '{name}' to defaults", .{ .name = displayName(name) });
         },
     }
 }
 
-fn offerSwitch(name: []const u8) !void {
-    const owned = try g_allocator.dupe(u8, name);
-    if (g_created) |old| g_allocator.free(old);
-    g_created = owned;
+/// Whether `action` replaces the running profile with another, dropping unsaved changes unless the prompt saves them.
+fn switchesProfile(action: Action) bool {
+    return switch (action) {
+        .switch_to, .create, .copy, .restore, .import_new => true,
+        .delete, .reset, .delete_backup => false,
+    };
 }
 
-fn verb(action: Action) []const u8 {
+/// Whole sentences, since a translation can't put a verb into someone else's.
+fn failureText(action: Action) []const u8 {
     return switch (action) {
-        .make_live => "switch to",
-        .edit => "edit",
-        .create => "create",
-        .copy => "copy to",
-        .delete => "delete",
-        .reset => "reset",
-        .restore => "restore",
-        .delete_backup => "delete the backup of",
-        .import_new => "import into",
+        .switch_to => "Failed to switch to profile '{name}': {err}",
+        .create => "Failed to create profile '{name}': {err}",
+        .copy => "Failed to copy to profile '{name}': {err}",
+        .delete => "Failed to delete profile '{name}': {err}",
+        .reset => "Failed to reset profile '{name}': {err}",
+        .restore => "Failed to restore profile '{name}': {err}",
+        .delete_backup => "Failed to delete the backup of profile '{name}': {err}",
+        .import_new => "Failed to import into profile '{name}': {err}",
     };
 }
 
@@ -211,21 +263,51 @@ fn verb(action: Action) []const u8 {
 fn shownName(action: Action, name: []const u8) []const u8 {
     return switch (action) {
         .delete_backup => config.parseBackupName(name).name,
-        .make_live, .edit, .create, .copy, .delete, .reset, .restore, .import_new => displayName(name),
+        .switch_to, .create, .copy, .delete, .reset, .restore, .import_new => displayName(name),
     };
+}
+
+fn clearPending() void {
+    if (g_name) |name| g_allocator.free(name);
+    g_name = null;
+    if (g_backup) |backup| g_allocator.free(backup);
+    g_backup = null;
+    g_action = null;
+    g_is_awaiting_choice = false;
+    g_unsaved = null;
 }
 
 fn refresh() void {
     g_revision +%= 1;
     freeProfiles();
-    g_profiles = config.listProfiles(g_allocator) catch |err| blk: {
+    const io = session.runningApp().io;
+    g_profiles = config.listProfiles(g_allocator, io) catch |err| blk: {
         slog.err("Failed to list profiles: {}", .{err});
         break :blk .empty;
     };
+    std.mem.sort([]const u8, g_profiles.items, {}, alphabetically);
+    g_accents.ensureTotalCapacity(g_allocator, g_profiles.items.len) catch |err| {
+        slog.err("Failed to read the profiles' colours: {}", .{err});
+        freeProfiles();
+        return;
+    };
+    for (g_profiles.items) |name| {
+        const accent = config.readProfileAccent(g_allocator, io, name) catch |err| blk: {
+            slog.warn("Failed to read the colour of profile '{s}': {}", .{ name, err });
+            break :blk null;
+        };
+        g_accents.appendAssumeCapacity(accent orelse DEFAULT_ACCENT);
+    }
+}
+
+fn alphabetically(_: void, a: []const u8, b: []const u8) bool {
+    return std.ascii.lessThanIgnoreCase(a, b);
 }
 
 fn freeProfiles() void {
     for (g_profiles.items) |name| g_allocator.free(name);
     g_profiles.deinit(g_allocator);
     g_profiles = .empty;
+    g_accents.deinit(g_allocator);
+    g_accents = .empty;
 }

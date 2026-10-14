@@ -15,7 +15,7 @@ pub const Entry = struct {
     text_buf: [96]u8 = undefined,
     text_len: u8 = 0,
     timestamp: win32.Ticks = .{},
-    /// Resolved once at push time; a past entry's color is fixed once recorded, so history_panel.zig reads this instead of re-resolving from config every render tick.
+    /// Fixed at push time, so the panel doesn't re-resolve it every render.
     character_color: ?u32 = null,
     is_unmerged: bool = false,
 

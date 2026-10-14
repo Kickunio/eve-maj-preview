@@ -20,7 +20,7 @@ const ENTITIES = [_]Entity{
 
 const Entity = struct { name: []const u8, char: u8 };
 
-/// Raw unit count plus the mined ore/ice/gas name, copied by value since parseMiningLine's buffer is stack-local.
+/// Holds the name by value, since parseMiningLine's buffer is stack-local.
 pub const ParsedMiningEvent = struct {
     amount: u32,
     name_buf: [64]u8 = undefined,
@@ -73,7 +73,7 @@ pub fn parseCombatLine(stripped_line: []const u8) ?struct { amount: u32, is_inco
     return .{ .amount = leading.amount, .is_incoming = is_incoming, .weapon = weapon };
 }
 
-/// True if `weapon` case-insensitively contains any comma-separated entry of `excluded_csv`; empty entries are skipped so trailing/stray commas don't match everything.
+/// Empty entries are skipped, so stray commas don't match everything.
 pub fn isWeaponExcluded(weapon: []const u8, excluded_csv: []const u8) bool {
     if (weapon.len == 0 or excluded_csv.len == 0) return false;
     var it = std.mem.splitScalar(u8, excluded_csv, ',');

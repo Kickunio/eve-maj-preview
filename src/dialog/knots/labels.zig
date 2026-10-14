@@ -13,9 +13,6 @@ const OVERRIDES = std.StaticStringMap([]const u8).initComptime(.{
     .{ "RegionFitDirection.ColumnFirst_BTT_LTR", "Columns \u{2191} \u{2192}" },
     .{ "RegionFitDirection.ColumnFirst_BTT_RTL", "Columns \u{2191} \u{2190}" },
     .{ "BorderStyle.DashDot", "Dash-Dot" },
-    .{ "ViewMode.Thumbnails", "Thumbnails (live video preview)" },
-    .{ "ViewMode.ClientList", "Client List (compact text panel)" },
-    .{ "ViewMode.Nothing", "Nothing (no display, saves resources)" },
     .{ "ListViewOrder.Tracked", "Tracked Order" },
     .{ "ListViewOrder.ConfiguredCharacters", "Configured Character Order" },
     .{ "ClickTrigger.MouseDown", "Mouse Down (Instant)" },
@@ -27,6 +24,14 @@ const OVERRIDES = std.StaticStringMap([]const u8).initComptime(.{
     .{ "IskRateUnit.hour", "Per Hour" },
     .{ "LogLevel.warn", "Warning" },
     .{ "LogLevel.err", "Error" },
+    // Each language in its own words, so it can be found whatever the window is showing.
+    .{ "Language.en", "English" },
+    .{ "Language.de", "Deutsch" },
+    .{ "Language.es", "Español" },
+    .{ "Language.fr", "Français" },
+    .{ "Language.pl", "Polski" },
+    .{ "Language.pt", "Português" },
+    .{ "Language.ru", "Русский" },
 });
 
 /// An enum's tags as words, in declaration order: "TopLeft" reads "Top Left", unless OVERRIDES has better.

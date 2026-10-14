@@ -21,9 +21,8 @@ pub const Backoff = struct {
 };
 
 pub const LogFile = struct {
-    /// Owned; freed in deinit.
+    /// Both strings owned; freed in deinit.
     path: []const u8,
-    /// Owned; freed in deinit.
     character_name: []const u8,
     /// UTF-16 LE if true, UTF-8 if not.
     is_chatlog: bool,
@@ -42,7 +41,6 @@ pub const LogFile = struct {
     u16_buffer: std.ArrayList(u16) = .empty,
     utf8_buffer: std.ArrayList(u8) = .empty,
     system_name_buffer: std.ArrayList(u8) = .empty,
-    /// Owned by the monitor's parse of this file.
     last_system_hash: u64 = 0,
     long_line_warning_count: u32 = 0,
 

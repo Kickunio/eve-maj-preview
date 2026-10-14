@@ -25,6 +25,8 @@ pub const BORDER_STRONG = color("#6b6e75");
 pub const TEXT = color("#e8e6e1");
 pub const TEXT_SECONDARY = color("#c4c0b6");
 pub const MUTED = color("#8b8f96");
+/// Hints and intros: lighter than MUTED so small text stays readable, still a step under labels.
+pub const HINT_TEXT = color("#a9acb2");
 pub const DESTRUCTIVE = color("#d3673f");
 pub const DESTRUCTIVE_FILL = color("#ad4527");
 pub const DESTRUCTIVE_FILL_HOVER = color("#bb4f30");
@@ -88,7 +90,7 @@ const SCROLLBAR_THICKNESS = 8;
 /// Right padding in a scrolling pane: the scrollbar draws over the content, so this keeps a gap between it and what's inside.
 const SCROLLBAR_GUTTER = SCROLLBAR_THICKNESS + 10;
 /// A smaller gutter for panes of rows, whose content already sits a row's inset inside them.
-const ROW_SCROLLBAR_GUTTER = SCROLLBAR_THICKNESS + 2;
+pub const ROW_SCROLLBAR_GUTTER = SCROLLBAR_THICKNESS + 2;
 pub const LABEL_WIDTH = 190;
 
 /// Its sides are a row's inset short of the top and bottom, so a row's hover fill reaches past its text and every text and control sits SECTION_EDGE in, like the heading.
@@ -106,9 +108,12 @@ pub const section: Style = .{
 /// A section that fills its tab, like the Characters list's.
 pub const fill_section: Style = section.with(.{ .height = .grow() });
 
-/// Fits the longest label inside the inset items; knots can't size a rail to stretched children.
+/// The sidebar's width in English; form.zig widens it for a longer translation's labels.
+pub const SIDEBAR_WIDTH = 184;
+pub const SIDEBAR_MAX_WIDTH = 260;
+/// knots can't size a rail to stretched children, so form.zig measures its labels instead.
 pub const sidebar: Style = .{
-    .width = .fixed(184),
+    .width = .fixed(SIDEBAR_WIDTH),
     .height = .grow(),
     .direction = .column,
     .padding = .xy(6, 6),
@@ -159,8 +164,9 @@ const content_scroll_pane: Style = .{
 /// The tab's content when the tab fills it itself.
 pub const content_fill: Style = .{ .width = .grow(), .height = .grow(), .direction = .column, .gap = 8, .padding = .all(8) };
 
-/// Every master list's width: the narrowest that fits the widest footer, Characters' Add Character and refresh buttons.
-const ROSTER_WIDTH = 170;
+/// Every master list's width in English, fitting Characters' Add Character and refresh buttons; widgets widens it for a longer translation.
+pub const ROSTER_WIDTH = 170;
+pub const ROSTER_MAX_WIDTH = 240;
 /// An inset well, darker than its section, rather than another bordered box.
 pub const roster: Style = .{
     .width = .fixed(ROSTER_WIDTH),
@@ -220,7 +226,8 @@ pub const empty_state_actions: Style = .{ .direction = .row, .gap = 8, .padding 
 pub const roster_empty: Style = .{ .width = .grow(), .padding = .xy(8, 6) };
 pub const roster_empty_text: Style = .{ .width = .grow(), .wrap = true, .font_size = .xs, .foreground = .{ .color = MUTED } };
 
-pub const roster_portrait: Style = .{ .width = .fixed(16), .height = .fixed(16), .radius = .sm };
+pub const ROSTER_PORTRAIT_SIZE = 16;
+pub const roster_portrait: Style = .{ .width = .fixed(ROSTER_PORTRAIT_SIZE), .height = .fixed(ROSTER_PORTRAIT_SIZE), .radius = .sm };
 
 /// widgets.dragHandle: no fill of its own, so it reads as part of its row.
 pub const drag_handle: Style = .{
@@ -249,8 +256,9 @@ const detail_scroll_pane: Style = .{
     .overflow = .scroll_y,
 };
 
-/// Fits the longest plain detail row label, e.g. Character Name.
-const DETAIL_LABEL_WIDTH = 96;
+/// Fits the longest detail label in English, e.g. Character Name; widgets widens it for a translation's longest word.
+pub const DETAIL_LABEL_WIDTH = 96;
+pub const DETAIL_LABEL_MAX_WIDTH = 150;
 /// A master-detail pane's label column, narrower than label to leave its controls room.
 pub const detail_label: Style = label.with(.{ .width = .fixed(DETAIL_LABEL_WIDTH) });
 /// widgets.openFieldGroup's row: its label stays at the top beside a taller column.
@@ -290,6 +298,15 @@ pub const text_input: Style = .{
 pub const text_input_aligned: Style = text_input.with(.{ .width = .fixed(230) });
 /// Wider than text_input_aligned, since a folder path is the longest value a row holds.
 pub const path_input: Style = text_input.with(.{ .width = .fixed(360) });
+/// A row label's tooltip: wider than knots' 260, in its own colours since `.elevated` darkens inside a popover.
+pub const row_tooltip: Style = .{
+    .width = .{ .kind = .fit, .max = 360 },
+    // Above the modal layer, like color_popup, or a disabled group's veil in a popover covers it.
+    .layer = ui.Layer.fromIndex(ui.Layer.modal.z + 1),
+    .background = .{ .color = CHROME },
+    .border_color = .{ .color = BORDER },
+    .foreground = .{ .color = TEXT },
+};
 /// Wider than knots' 260, so a full path rarely wraps.
 pub const path_tooltip: Style = .{ .width = .{ .kind = .fit, .max = 480 } };
 
@@ -298,17 +315,17 @@ pub const heading: Style = .{ .font = FONT_SEMIBOLD, .font_size = .md, .foregrou
 /// Set apart by the space above it, not a rule; the row after it starts a new run with no divider.
 pub const subheading_box: Style = .{ .width = .grow(), .padding = .init(16, ROW_INSET, 0, ROW_INSET) };
 pub const subheading: Style = .{ .font = FONT_SEMIBOLD, .foreground = .{ .color = TEXT } };
-/// subheading_box outside a section, e.g. in a modal, where nothing is inset.
-pub const modal_subheading_box: Style = subheading_box.with(.{ .padding = .init(16, 0, 0, 0) });
 /// Inset like a row, for a section's content that isn't one, e.g. a table or a full-width button.
 pub const inset_column: Style = .{ .width = .grow(), .direction = .column, .gap = 8, .padding = .xy(ROW_INSET, 0) };
 
 /// No italics: Geist ships them as a separate face we don't embed.
-pub const hint: Style = .{ .font_size = .xs, .foreground = .{ .color = MUTED }, .wrap = true, .width = .grow() };
+pub const hint: Style = .{ .font_size = .xs, .foreground = .{ .color = HINT_TEXT }, .wrap = true, .width = .grow() };
 /// Around a hint that goes with rows, so it starts where their labels do; knots ignores a Text's own padding.
 pub const hint_box: Style = .{ .width = .grow(), .padding = .xy(ROW_INSET, 0) };
-/// widgets.hintWithLink's row, inset like hint_box.
-pub const hint_link_row: Style = hint_row.with(.{ .padding = .xy(ROW_INSET, 0) });
+/// widgets.hintWithLink's row, inset like hint_box and drawn up into the gap after the row it explains, since knots has no margins.
+pub const hint_link_row: Style = hint_row.with(.{ .padding = .init(-HINT_LINK_PULL, ROW_INSET, 0, ROW_INSET) });
+/// Less than any gap between rows, so the link row never overlaps the row above.
+const HINT_LINK_PULL = 6;
 /// A hint that always shows, warning that a setting won't take effect.
 pub const hint_warning: Style = hint.with(.{ .foreground = .accent });
 
@@ -324,27 +341,8 @@ pub const notice_text: Style = .{ .width = .grow(), .wrap = true, .foreground = 
 
 /// Inset like the rows, so the title, description and labels share one left edge and the switch lines up over the rows' own.
 pub const section_heading: Style = .{ .width = .grow(), .direction = .row, .justify = .space_between, .@"align" = .center, .padding = .xy(ROW_INSET, 0) };
-/// The title and its ? button, so the right of the heading is left to the section's switch.
+/// The title's own row, so the right of the heading is left to the section's switch.
 pub const section_heading_title: Style = .{ .direction = .row, .@"align" = .center, .gap = 8 };
-
-/// The section's ? button, filled while its field hints show.
-pub const hint_toggle: Style = .{
-    .padding = .xy(5, 1),
-    .font_size = .{ .px = 9 },
-    .background = .transparent,
-    .foreground = .{ .color = MUTED },
-    .border_width = .all(1),
-    .border_color = .{ .color = BORDER },
-    .radius = .{ .fixed = 2 },
-    .hover = &.{ .border_color = .accent, .foreground = .accent, .state_layer = 0 },
-    .active = &.{ .state_layer = 0 },
-};
-pub const hint_toggle_on: Style = hint_toggle.with(.{
-    .background = .accent,
-    .foreground = .on_accent,
-    .border_color = .accent,
-    .hover = &.{ .state_layer = 0 },
-});
 
 pub const label: Style = .{ .width = .fixed(LABEL_WIDTH), .wrap = true, .foreground = .{ .color = TEXT } };
 /// Grows to push the row's controls to its right edge.
@@ -408,7 +406,6 @@ pub const switch_knob_off: Style = .{
 };
 pub const switch_knob_on: Style = switch_knob_off.with(.{ .background = .{ .color = INK_DARK } });
 pub const SWITCH_ANIMATION_MS = 200;
-/// How far the knob moves from off to on.
 pub const SWITCH_TRAVEL = SWITCH_WIDTH - 2 * SWITCH_INSET - SWITCH_KNOB;
 const SWITCH_WIDTH = 30;
 const SWITCH_HEIGHT = 16;
@@ -569,7 +566,7 @@ pub const link: Style = .{
 /// One of three equal columns, as the credits list them.
 pub const thanks_name: Style = .{ .width = .grow(), .font_size = .xs, .foreground = .{ .color = MUTED } };
 
-/// The bar across the top, holding the profile picker and its buttons.
+/// The bar across the top, holding the brand and the profile button.
 pub const header: Style = .{
     .width = .grow(),
     .height = .fixed(44),
@@ -583,7 +580,99 @@ pub const header: Style = .{
 };
 
 pub const app_mark: Style = .{ .width = .fixed(18), .height = .fixed(18) };
-pub const app_name: Style = .{ .font = FONT_SEMIBOLD, .font_size = .md, .foreground = .{ .color = TEXT } };
+pub const brand: Style = .{ .direction = .row, .@"align" = .center, .gap = 8 };
+pub const brand_name: Style = .{ .font = FONT_SEMIBOLD, .font_size = .md, .foreground = .{ .color = TEXT } };
+
+/// Opens the profile menu; as tall as the controls beside it.
+pub const profile_button: Style = .{
+    .width = .{ .kind = .fit, .min = 150 },
+    .height = .fixed(CONTROL_HEIGHT),
+    .justify = .start,
+    .gap = 8,
+    .padding = .xy(8, 0),
+    .background = .{ .color = SURFACE },
+    .border_width = .all(1),
+    .border_color = .{ .color = BORDER },
+    .radius = .md,
+    .hover = &.{ .border_color = .accent, .state_layer = 0 },
+    .active = &.{ .state_layer = 0 },
+};
+pub const profile_button_open: Style = profile_button.with(.{ .border_color = .accent });
+pub const profile_name: Style = .{ .width = .grow(), .font = FONT_SEMIBOLD, .foreground = .{ .color = TEXT } };
+/// A profile's accent colour beside its name; the caller sets its colour.
+pub const profile_swatch: Style = .{ .width = .fixed(12), .height = .fixed(12), .radius = .{ .fixed = 3 } };
+
+pub const MENU_WIDTH = 260;
+/// widgets.openMenu's panel.
+pub const menu: Style = .{
+    .width = .fixed(MENU_WIDTH),
+    .gap = 2,
+    .padding = .all(6),
+    .background = .{ .color = PANEL },
+    .border_color = .{ .color = BORDER_STRONG },
+    .radius = .md,
+};
+/// The small heading over a menu's entries, lined up with their text.
+pub const menu_caption: Style = .{ .width = .grow(), .padding = .init(6, 8, 4, 8) };
+/// A menu entry: a Button, so the whole row is clickable.
+pub const menu_item: Style = .{
+    .width = .grow(),
+    .justify = .start,
+    .gap = 8,
+    .padding = .xy(8, 7),
+    .background = .transparent,
+    .radius = .md,
+    .hover = &.{ .background = .{ .color = SURFACE }, .state_layer = 0 },
+    .active = &.{ .state_layer = 0 },
+};
+/// The running profile, lit like a roster's selected row.
+pub const menu_item_current: Style = menu_item.with(.{ .background = .{ .color = SURFACE_ALT }, .hover = &.{ .state_layer = 0 } });
+pub const menu_item_disabled: Style = menu_item.with(.{ .hover = &.{ .state_layer = 0 } });
+pub const menu_label: Style = .{ .width = .grow(), .foreground = .{ .color = TEXT_SECONDARY } };
+pub const menu_label_lit: Style = menu_label.with(.{ .foreground = .{ .color = TEXT } });
+pub const menu_label_danger: Style = menu_label.with(.{ .foreground = .{ .color = DESTRUCTIVE } });
+pub const menu_label_disabled: Style = menu_label.with(.{ .foreground = .{ .color = BORDER_STRONG } });
+/// Around a separator between a menu's groups of entries.
+pub const menu_divider: Style = .{ .width = .grow(), .padding = .xy(2, 4) };
+pub const menu_glyph: Style = .{ .width = .fixed(glyphs.ICON_SIZE), .height = .fixed(glyphs.ICON_SIZE) };
+
+/// Under a field whose value can't be used, saying why.
+pub const field_error: Style = hint.with(.{ .foreground = .{ .color = ERROR } });
+/// The accents offered beside the rainbow picker when naming a profile; the first is Config's default.
+pub const ACCENT_PRESETS = [_]u32{ 0xFFD9A441, 0xFF5EC9C9, 0xFF7FB3D9, 0xFFA988D1, 0xFF5EC98F, 0xFFD3673F, 0xFFD97AA0 };
+pub const accent_choices: Style = .{ .direction = .row, .@"align" = .center, .gap = 6 };
+const ACCENT_RING_SIZE = 24;
+const ACCENT_SWATCH_SIZE = 16;
+/// Around each accent choice in the profile name prompt, centring it so every ring lines up; lit in the accent while it's the chosen one.
+pub const accent_ring: Style = .{
+    .width = .fixed(ACCENT_RING_SIZE),
+    .height = .fixed(ACCENT_RING_SIZE),
+    .justify = .center,
+    .@"align" = .center,
+    .border_width = .all(1),
+    .border_color = .transparent,
+    .radius = .md,
+};
+pub const accent_ring_chosen: Style = accent_ring.with(.{ .border_color = .accent });
+/// A preset accent inside its ring; the caller sets its colour.
+pub const accent_preset: Style = .{
+    .width = .fixed(ACCENT_SWATCH_SIZE),
+    .height = .fixed(ACCENT_SWATCH_SIZE),
+    .padding = .all(0),
+    .radius = .{ .fixed = 3 },
+    .hover = &.{ .state_layer = 0 },
+    .active = &.{ .state_layer = 0 },
+};
+/// The picker for any other accent, drawn the size of a preset; it shows a rainbow rather than the colour.
+pub const accent_custom: Style = color_picker.with(.{
+    .width = .fixed(ACCENT_SWATCH_SIZE),
+    .height = .fixed(ACCENT_SWATCH_SIZE),
+    .padding = .all(0),
+    .justify = .center,
+    .border_width = .all(0),
+    .radius = .{ .fixed = 3 },
+});
+pub const accent_custom_fill: Style = .{ .width = .fixed(ACCENT_SWATCH_SIZE), .height = .fixed(ACCENT_SWATCH_SIZE), .radius = .{ .fixed = 3 } };
 
 /// A square plain button holding a drawn icon.
 pub const icon_button: Style = plain_button.with(.{ .width = .fixed(CONTROL_HEIGHT), .padding = .all(0), .justify = .center });
@@ -620,13 +709,6 @@ pub const outline_button: Style = plain_button.with(.{
     .hover = &.{ .background = .{ .color = SURFACE }, .foreground = .{ .color = TEXT }, .border_color = .accent, .state_layer = 0 },
 });
 
-/// The header's icon buttons each hover in their own colour.
-pub const icon_button_add: Style = icon_button.with(.{ .hover = &.{ .background = .{ .color = SURFACE }, .border_color = .{ .color = SUCCESS }, .state_layer = 0 } });
-pub const icon_button_danger: Style = icon_button.with(.{ .hover = &.{ .background = .{ .color = SURFACE }, .border_color = .{ .color = DESTRUCTIVE }, .state_layer = 0 } });
-pub const icon_button_reset: Style = icon_button.with(.{ .hover = &.{ .background = .{ .color = SURFACE }, .border_color = .{ .color = PURPLE }, .state_layer = 0 } });
-pub const icon_button_import: Style = icon_button.with(.{ .hover = &.{ .background = .{ .color = SURFACE }, .border_color = .{ .color = SKY }, .state_layer = 0 } });
-
-/// A plain button: surface fill, accent border on hover.
 pub const plain_button: Style = .{
     .height = .fixed(CONTROL_HEIGHT),
     .padding = .xy(12, 0),
@@ -659,7 +741,7 @@ pub const modal: Style = .{
     .overflow = .visible,
     .background = .{ .color = PANEL },
     .border_color = .{ .color = BORDER },
-    .radius = .lg,
+    .radius = .md,
 };
 
 /// widgets.modal's backdrop: blurs the dialog under it on top of knots' own dimming, so the modal reads as in front.
@@ -667,7 +749,6 @@ pub const modal_backdrop: Style = .{ .backdrop = .{ .blur = 3 } };
 
 pub const modal_text: Style = .{ .foreground = .{ .color = TEXT_SECONDARY }, .wrap = true, .width = .grow() };
 
-/// Outlined in the accent at rest, filled on hover.
 pub const primary_button: Style = .{
     .height = .fixed(CONTROL_HEIGHT),
     .padding = .xy(12, 0),
@@ -680,7 +761,9 @@ pub const primary_button: Style = .{
     .hover = &.{ .background = .accented, .border_color = .accented, .foreground = .on_accent, .state_layer = 0 },
     .active = &.{ .state_layer = 0 },
 };
-/// primary_button for a destructive action: outlined in red at rest, filled on hover.
+/// primary_button while it can't be pressed, in its font so it keeps its width.
+pub const disabled_primary_button: Style = disabled_button.with(.{ .font = FONT_SEMIBOLD });
+/// primary_button for a destructive action.
 pub const danger_primary_button: Style = primary_button.with(.{
     .border_color = .{ .color = DESTRUCTIVE },
     .foreground = .{ .color = DESTRUCTIVE },
@@ -703,7 +786,7 @@ pub const popover: Style = .{
     .padding = .all(12),
     .background = .{ .color = PANEL },
     .border_color = .{ .color = BORDER_STRONG },
-    .radius = .lg,
+    .radius = .md,
 };
 pub const popover_title: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .justify = .space_between };
 pub const popover_close: Style = plain_button.with(.{ .width = .fixed(CONTROL_HEIGHT), .padding = .all(0), .justify = .center });
@@ -715,15 +798,13 @@ pub const group_fill: Style = group.with(.{ .height = .grow() });
 pub const group_inline: Style = .{ .direction = .row, .@"align" = .center, .gap = 8 };
 /// Strong enough that the controls under the veil read as disabled.
 const GROUP_VEIL_ALPHA = 0.7;
-/// Veils a disabled group and takes its clicks; knots' opacity wouldn't fade the children's boxes and borders.
-pub const group_blocker: Style = .{
+/// Veils a disabled group, whose controls are already inert; knots' opacity wouldn't fade the children's boxes and borders.
+pub const group_veil: Style = .{
     .position = .absolute,
     .offset = .{ 0, 0 },
     .padding = .all(0),
     .background = .{ .color = .{ .value = .{ PANEL.value[0], PANEL.value[1], PANEL.value[2], GROUP_VEIL_ALPHA } } },
     .radius = .none,
-    .hover = &.{ .state_layer = 0 },
-    .active = &.{ .state_layer = 0 },
 };
 
 /// A remove button waiting for its second click.
@@ -734,15 +815,14 @@ pub const confirm_button: Style = plain_button.with(.{
     .hover = &.{ .background = .{ .color = DESTRUCTIVE_FILL_HOVER }, .foreground = .{ .color = WHITE }, .state_layer = 0 },
 });
 pub const button_text: Style = .{ .foreground = .{ .color = TEXT } };
-/// Buttons in neighbouring rows, e.g. Set All over Clear All, at one width so their edges line up; it fits "Clear All" and "Confirm".
-const PAIRED_BUTTON_WIDTH = 90;
+/// Buttons in neighbouring rows, e.g. Set All over Clear All, at one width so their edges line up; fits English, and behavior.zig widens them for a longer translation.
+pub const PAIRED_BUTTON_WIDTH = 90;
 pub const paired_button: Style = plain_button.with(.{ .width = .fixed(PAIRED_BUTTON_WIDTH), .justify = .center });
 pub const paired_disabled_button: Style = disabled_button.with(.{ .width = .fixed(PAIRED_BUTTON_WIDTH), .justify = .center });
 pub const paired_danger_button: Style = danger_button.with(.{ .width = .fixed(PAIRED_BUTTON_WIDTH), .justify = .center });
 pub const paired_confirm_button: Style = confirm_button.with(.{ .width = .fixed(PAIRED_BUTTON_WIDTH), .justify = .center });
 /// A button spanning its container, e.g. under a list.
 pub const full_width_button: Style = plain_button.with(.{ .width = .grow() });
-/// Buttons sharing a line.
 pub const button_row: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .gap = 8, .padding = .xy(ROW_INSET, 0) };
 /// button_row at the right edge, under its rows' controls.
 pub const button_row_end: Style = button_row.with(.{ .justify = .end });
@@ -766,7 +846,13 @@ pub const stage_frame: Style = .{
 pub const stage_row: Style = .{ .width = .grow(), .justify = .center };
 
 /// A thumbnail space's colour in the roster; the roster sets its colour.
-pub const space_dot: Style = .{ .width = .fixed(10), .height = .fixed(10), .radius = .{ .fixed = 2 } };
+pub const SPACE_DOT_SIZE = 10;
+pub const space_dot: Style = .{ .width = .fixed(SPACE_DOT_SIZE), .height = .fixed(SPACE_DOT_SIZE), .radius = .{ .fixed = 2 } };
+/// A built-in space's name in place of its text box, as tall as one so the header doesn't jump between spaces.
+pub const space_fixed_name: Style = .{ .width = .grow(), .height = .fixed(CONTROL_HEIGHT), .direction = .row, .@"align" = .center, .padding = .xy(8, 0) };
+pub const space_fixed_name_text: Style = .{ .foreground = .{ .color = TEXT } };
+/// Marks the Login Screen and Unassigned Characters spaces; its radius is half its height, rounding it into a pill.
+pub const space_built_in_tag: Style = .{ .padding = .xy(8, 2), .border_width = .all(1), .border_color = .{ .color = BORDER_STRONG }, .radius = .{ .fixed = 9 } };
 /// A space's Holds grid of hotkey group pills; the dialog sets its rows.
 pub const group_chip_grid: Style = .{ .width = .grow(), .direction = .grid, .gap = 6 };
 pub const GROUP_CHIP_HEIGHT = 26;
@@ -821,7 +907,7 @@ pub const roster_category: Style = .{ .width = .grow(), .padding = .init(8, 6, 2
 /// Before an Event Alerts row: filled while the event is enabled, a hollow ring while it's off.
 pub const event_dot_on: Style = .{ .width = .fixed(EVENT_DOT_SIZE), .height = .fixed(EVENT_DOT_SIZE), .radius = .{ .fixed = EVENT_DOT_SIZE / 2 }, .background = .accent };
 pub const event_dot_off: Style = event_dot_on.with(.{ .background = .transparent, .border_width = .all(1), .border_color = .{ .color = BORDER_STRONG } });
-const EVENT_DOT_SIZE = 6;
+pub const EVENT_DOT_SIZE = 6;
 /// A roster row's glyph after its name, e.g. an event's speech marker: the size of its square.
 pub const ROSTER_MARKER_SIZE = 10;
 pub const roster_marker: Style = .{ .width = .fixed(ROSTER_MARKER_SIZE), .height = .fixed(ROSTER_MARKER_SIZE) };
@@ -830,9 +916,9 @@ pub const select_fill: Style = select.with(.{ .width = .grow() });
 
 /// A field hint with a link after it.
 pub const hint_row: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .gap = 4 };
-pub const hint_inline: Style = .{ .font_size = .xs, .foreground = .{ .color = MUTED }, .wrap = true };
+pub const hint_inline: Style = .{ .font_size = .xs, .foreground = .{ .color = HINT_TEXT } };
 
-/// Bordered rows with a category column, as the ore price table shows them.
+/// Bordered rows grouped by category, as the ore price table shows them.
 pub const table: Style = .{
     .width = .grow(),
     .direction = .column,
@@ -844,20 +930,27 @@ pub const table_header: Style = .{
     .width = .grow(),
     .direction = .row,
     .@"align" = .center,
-    .padding = .xy(6, 4),
-    .gap = 8,
+    .padding = .xy(TABLE_INSET, 4),
+    .gap = TABLE_COLUMN_GAP,
     .border_width = .edges(0, 0, 1, 0),
     .border_color = .{ .color = BORDER },
 };
-pub const table_row: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .padding = .xy(6, 2), .gap = 8 };
-/// The first row of a new category, ruled off from the one before.
-pub const table_row_separated: Style = table_row.with(.{ .border_width = .edges(1, 0, 0, 0), .border_color = .{ .color = BORDER } });
-pub const table_category_cell: Style = .{ .width = .fixed(60), .font_size = .xs, .foreground = .{ .color = MUTED } };
+/// Two ores side by side, each a table_cell.
+pub const table_row: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .padding = .xy(TABLE_INSET, 2), .gap = TABLE_COLUMN_GAP };
+pub const table_cell: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .gap = 8 };
+/// A full-width category heading over its ore rows.
+pub const table_band: Style = .{ .width = .grow(), .padding = .xy(TABLE_INSET, 4), .background = .{ .color = SURFACE_ALT } };
+pub const table_band_separated: Style = table_band.with(.{ .border_width = .edges(1, 0, 0, 0), .border_color = .{ .color = BORDER } });
+pub const table_category_label: Style = .{ .font = FONT_SEMIBOLD, .font_size = .xs, .foreground = .{ .color = TEXT_SECONDARY } };
 pub const table_name_cell: Style = .{ .width = .grow(), .font_size = .xs, .foreground = .{ .color = TEXT_SECONDARY } };
 pub const table_heading_grow: Style = .{ .width = .grow(), .font = FONT_SEMIBOLD, .font_size = .xs, .foreground = .{ .color = TEXT } };
 pub const table_heading_price: Style = .{ .width = .fixed(PRICE_INPUT_WIDTH), .font = FONT_SEMIBOLD, .font_size = .xs, .foreground = .{ .color = TEXT } };
 pub const price_input: Style = number_input.with(.{ .width = .fixed(PRICE_INPUT_WIDTH), .height = .fixed(24) });
 const PRICE_INPUT_WIDTH = 140;
+/// The header's, bands' and rows' side padding, so their text starts on one edge.
+const TABLE_INSET = 6;
+/// Between the two ore columns, in the header and every row alike so they line up.
+const TABLE_COLUMN_GAP = 24;
 
 /// widgets.searchBox's box and clear button.
 pub const search_row: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .gap = 4 };
@@ -917,8 +1010,6 @@ pub const keycap_text: Style = .{ .font_size = .{ .px = 10 }, .foreground = .{ .
 pub const keycap_modifier_text: Style = keycap_text.with(.{ .foreground = .{ .color = MUTED } });
 pub const keycap_plus: Style = .{ .font_size = .{ .px = 9 }, .foreground = .{ .color = MUTED } };
 pub const keycap_separator: Style = .{ .font_size = .sm, .foreground = .{ .color = MUTED } };
-/// A read-only value in a detail form, e.g. the file an import reads.
-pub const detail_value: Style = .{ .width = .grow(), .foreground = .{ .color = TEXT_SECONDARY } };
 
 /// widgets.openMarkedBinding's label and mark, outside aligned rows.
 pub const label_cell: Style = .{ .direction = .row, .@"align" = .center, .gap = 8 };
@@ -964,10 +1055,10 @@ pub const section_hidden: Style = .{
     .height = .fixed(0),
     .overflow = .hidden,
 };
-/// The settings search at the footer's left: room for a 180px box, the gap and its clear button.
+/// The settings search at the header's right: room for a 180px box, the gap and its clear button.
 pub const search_container: Style = .{ .width = .fixed(180 + 4 + CONTROL_HEIGHT) };
-pub const search_count_none: Style = .{ .width = .fixed(60), .foreground = .{ .color = ERROR } };
-pub const search_count_some: Style = .{ .width = .fixed(60), .foreground = .accent };
+pub const search_count_none: Style = .{ .foreground = .{ .color = ERROR } };
+pub const search_count_some: Style = .{ .foreground = .accent };
 
 /// Open clients' names offered under a name box.
 pub const suggest_list: Style = .{
@@ -989,6 +1080,19 @@ pub const suggest_row: Style = .{
     .hover = &.{ .background = .{ .color = SURFACE_ALT }, .foreground = .{ .color = TEXT }, .state_layer = 0 },
     .active = &.{ .state_layer = 0 },
 };
+
+/// The Import dialog's file line before a file is picked.
+pub const import_file_none: Style = label_aligned.with(.{ .foreground = .{ .color = MUTED } });
+/// The Import dialog's "Sections to import" with its All and None links, set apart by the space above it like subheading_box.
+pub const import_sections_heading: Style = .{ .width = .grow(), .direction = .row, .@"align" = .center, .gap = 12, .padding = .init(16, 0, 0, 0) };
+/// The Import dialog's sections, two to a row.
+pub const import_section_grid: Style = .{ .width = .grow(), .direction = .column, .gap = 6 };
+/// import_section_grid under a group's checkbox, indented past it.
+pub const import_section_grid_grouped: Style = import_section_grid.with(.{ .padding = .init(0, 0, 0, 20) });
+pub const import_section_pair: Style = .{ .width = .grow(), .direction = .row, .gap = 8 };
+pub const import_section_cell: Style = .{ .width = .grow() };
+/// A group of the Import dialog's sections: its checkbox over its grid.
+pub const import_section_group: Style = .{ .width = .grow(), .direction = .column, .gap = 6, .padding = .init(6, 0, 0, 0) };
 
 /// Room for the Import dialog's lists, scrolling once they outgrow the window.
 pub const modal_wide: Style = modal.with(.{ .width = .fixed(520), .overflow = .scroll_y });

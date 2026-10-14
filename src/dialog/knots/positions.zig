@@ -1,18 +1,15 @@
-//! Characters' saved EVE client window positions, taken from the live windows: saved at once for the running profile, like a drag, and kept in another profile's draft until Save; main thread only.
+//! Characters' saved EVE client window positions, taken from the live windows and saved at once, like a drag; main thread only.
 const std = @import("std");
 const win32 = @import("../../platform/win32.zig");
 const config = @import("../../config.zig");
-const patch = @import("../../config/patch.zig");
-const main = @import("../../main.zig");
 const scout_mod = @import("../../clients/scout.zig");
 const session = @import("session.zig");
 
-/// A live game window's top-left corner and size.
 const LiveWindow = struct { position: config.Position, size: config.WindowSize };
 
 /// Logged-in clients' character names, for picking a window to copy from. Copied into `arena`.
 pub fn openClients(arena: std.mem.Allocator) ![]const []const u8 {
-    const scout = scout_mod.g_scout_ptr orelse return &.{};
+    const scout = &session.runningApp().scout;
     var names: std.ArrayList([]const u8) = .empty;
     for (scout.getWindows()) |window| {
         if (!window.is_eve_client or scout_mod.isGenericCharacterName(window.character_name)) continue;
@@ -40,7 +37,7 @@ pub fn clear(name: []const u8) !void {
 }
 
 fn liveWindow(character_name: []const u8) !LiveWindow {
-    const scout = scout_mod.g_scout_ptr orelse return error.MissingCharacterWindow;
+    const scout = &session.runningApp().scout;
     const hwnd = scout.getHwndByName(character_name) orelse return error.MissingCharacterWindow;
     // A minimized window sits at the off-screen parking spot, not a real position.
     if (win32.isWindowIconic(hwnd)) return error.CharacterWindowIsMinimized;
@@ -52,9 +49,5 @@ fn liveWindow(character_name: []const u8) !LiveWindow {
 fn setWindowPositions(character_name: ?[]const u8, window: ?LiveWindow) !void {
     const position: ?config.Position = if (window) |live| live.position else null;
     const size: ?config.WindowSize = if (window) |live| live.size else null;
-    if (!session.editsDraft()) return main.g_store.setWindowPosition(character_name, position, size);
-    const draft = session.profile().ptr;
-    try config.applyWindowPosition(draft, character_name, position, size);
-    patch.assignIds(config.Config, draft);
-    session.editedOutside();
+    try session.runningApp().store.setWindowPosition(character_name, position, size);
 }

@@ -156,7 +156,6 @@ fn firstActiveWith(items: []const ThumbnailSpace, comptime flag_name: []const u8
     return null;
 }
 
-/// Whether one of this space's hotkey groups lists the character.
 fn holdsGroupOf(config: *const Config, space: *const ThumbnailSpace, character_name: []const u8) bool {
     for (config.hotkeyGroups.items) |group| {
         if (space.groupIndex(group.name) == null) continue;

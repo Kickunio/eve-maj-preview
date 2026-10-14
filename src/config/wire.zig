@@ -71,14 +71,12 @@ pub fn isNested(comptime T: type) bool {
     return @typeInfo(T) == .@"struct" and @hasDecl(T, "Wire");
 }
 
-/// The section type inside an optional nested section, e.g. CharacterConfig's `?CharacterBorderColorsConfig`.
 pub fn OptionalNested(comptime T: type) ?type {
     const info = @typeInfo(T);
     if (info != .optional or !isNested(info.optional.child)) return null;
     return info.optional.child;
 }
 
-/// The item type of a `std.ArrayList` field, which is saved as a JSON array.
 pub fn ListItem(comptime T: type) ?type {
     if (@typeInfo(T) != .@"struct" or !@hasField(T, "items") or !@hasField(T, "capacity")) return null;
     const Item = @typeInfo(@FieldType(T, "items")).pointer.child;
@@ -318,7 +316,6 @@ pub fn parse(comptime T: type, allocator: std.mem.Allocator, json_text: []const 
     return parseMigrated(T, allocator, json_text, null);
 }
 
-/// Like parse, with `migrate` first upgrading an older file's JSON to the current schema.
 pub fn parseMigrated(comptime T: type, allocator: std.mem.Allocator, json_text: []const u8, migrate: ?*const fn (std.mem.Allocator, *std.json.Value) anyerror!void) !std.json.Parsed(T) {
     var tree = try std.json.parseFromSlice(std.json.Value, allocator, json_text, .{ .duplicate_field_behavior = .use_last });
     defer tree.deinit();

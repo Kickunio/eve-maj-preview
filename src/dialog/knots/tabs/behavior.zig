@@ -3,7 +3,6 @@ const std = @import("std");
 const ui = @import("ui");
 const win32 = @import("../../../platform/win32.zig");
 const config = @import("../../../config.zig");
-const files = @import("../../../config/files.zig");
 const ultra_potato = @import("../../tools/ultra_potato.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
@@ -11,6 +10,7 @@ const positions = @import("../positions.zig");
 const status = @import("../status.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
+const lang = @import("../../../lang/lang.zig");
 const log = @import("../../../log.zig");
 
 const Button = ui.component.Button;
@@ -76,11 +76,13 @@ fn startup(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Startup", "Launch on Windows login, and register the evemajpreview:// URL protocol for external control (Stream Deck, scripts, etc.).", &style.section);
     const global = session.global();
     try bind.toggle(context, global, "runOnStartup", "Run on Startup");
+    try widgets.hintText(context, .src(@src()), "Starts EVE-Maj Preview when you sign in to Windows.");
     try bind.toggle(context, global, "autoRegisterProtocol", "Auto-Register Protocol Handler");
-    if (try widgets.hintWithLink(context, .src(@src()), "Needed once for links like evemajpreview://cycle-next to work from other apps.", "Learn more")) {
+    if (try widgets.hintWithLink(context, .src(@src()), "Lets links in other apps control EVE-Maj Preview.", "Learn more")) {
         if (!win32.shellOpenUrl(PROTOCOL_DOCS_URL)) slog.warn("Failed to open '{s}' in the browser", .{PROTOCOL_DOCS_URL});
     }
     try bind.toggle(context, global, "disableUpdateChecks", "Disable Update Checks");
+    try widgets.hintText(context, .src(@src()), "Stops checking online for new versions.");
     try section.close(context);
 }
 
@@ -88,18 +90,18 @@ fn interaction(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Interaction", "Mouse behavior for thumbnails and client list rows, including when to activate the EVE client window on left-click, and whether client windows animate when restored or minimized.", &style.section);
     const ref = session.profile().child("interaction");
     try bind.toggle(context, ref, "clickThrough", "Click Through");
-    try widgets.hintText(context, .src(@src()), "Thumbnails and the client list ignore all mouse input and let clicks/drags pass through to whatever is behind them; disables click-to-focus, exclusion toggling, and dragging.");
+    try widgets.hintText(context, .src(@src()), "Clicks go through thumbnails and the client list to what's behind.");
     const is_click_through = ref.get("clickThrough");
 
     const mouse_options = try widgets.openGroup(context, .src(@src()), !is_click_through);
     try bind.choice(context, ref, "clickTrigger", "Click Trigger");
-    try widgets.hintText(context, .src(@src()), "Mouse Up avoids accidental drags from a quick click.");
+    try widgets.hintText(context, .src(@src()), "Mouse Up avoids accidental drags.");
     try bind.choice(context, ref, "hoverCursor", "Hover Cursor");
-    try widgets.hintText(context, .src(@src()), "Mouse cursor shown while hovering a thumbnail or a client list row.");
+    try widgets.hintText(context, .src(@src()), "The pointer shown over thumbnails and the client list.");
     try mouse_options.close(context);
 
     try bind.choice(context, ref, "animationStyle", "Animation Style");
-    try widgets.hintText(context, .src(@src()), "No Animation restores and minimizes clients instantly; Original Animation keeps Windows' native effect.");
+    try widgets.hintText(context, .src(@src()), "How clients look as they're restored or minimized.");
 
     if (session.showsThumbnails()) try hoverZoom(context, ref, is_click_through);
     try section.close(context);
@@ -108,12 +110,12 @@ fn interaction(context: *ui.Frame) !void {
 fn hoverZoom(context: *ui.Frame, ref: session.Ref(config.InteractionConfig), is_click_through: bool) !void {
     const zoom_options = try widgets.openGroup(context, .src(@src()), !is_click_through);
     try bind.toggle(context, ref, "hoverZoomEnabled", "Zoom on Hover");
-    try widgets.hintText(context, .src(@src()), "Shows an enlarged copy of a thumbnail, with its overlay text, while the cursor rests on it.");
+    try widgets.hintText(context, .src(@src()), "Shows a bigger copy of a thumbnail while you hover over it.");
     const zoom = try widgets.openGroup(context, .src(@src()), ref.get("hoverZoomEnabled"));
     try bind.number(context, ref, "hoverZoomPercent", "Zoom Size", .{ .unit = "%" });
-    try widgets.hintText(context, .src(@src()), "Size of the zoom relative to the thumbnail, shrunk if needed to fit its monitor.");
+    try widgets.hintText(context, .src(@src()), "Shrinks to fit if it would go off the monitor.");
     try bind.choice(context, ref, "hoverZoomAnchor", "Zoom Anchor");
-    try widgets.hintText(context, .src(@src()), "The point of the thumbnail that stays in place as the zoom grows.");
+    try widgets.hintText(context, .src(@src()), "The part of the thumbnail that stays put as it grows.");
     try zoom.close(context);
     try zoom_options.close(context);
 }
@@ -123,12 +125,12 @@ fn autoMinimize(context: *ui.Frame) !void {
     const section = try bind.switchedSection(context, "Auto-Minimize", "Minimizes an EVE client window after it's been unfocused for the configured delay.", ref, "enabled", true);
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
     try bind.toggle(context, ref, "exemptLastActiveOnFocusLoss", "Keep Last-Active Client Visible");
-    try widgets.hintText(context, .src(@src()), "Exempts whichever client you focused most recently, even past the delay.");
+    try widgets.hintText(context, .src(@src()), "Never minimizes the client you were just in, even after the delay.");
     try bind.number(context, ref, "delayMs", "Delay", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "How long a client can sit unfocused before it's minimized.");
+    try widgets.hintText(context, .src(@src()), "How long a client waits in the background before it's minimized.");
     try options.close(context);
     try bind.toggle(context, ref, "startMinimized", "Start Clients Minimized");
-    try widgets.hintText(context, .src(@src()), "Minimizes each EVE client as soon as it launches, even with Auto-Minimize off.");
+    try widgets.hintText(context, .src(@src()), "Minimizes each client as it opens, even with Auto-Minimize off.");
     try section.close(context);
 }
 
@@ -137,10 +139,11 @@ fn exclusion(context: *ui.Frame) !void {
     const ref = session.profile().child("exclusion");
     // The Toggle Character Exclusion hotkey excludes too, so the settings below don't depend on Shift+Click.
     try bind.toggle(context, ref, "enableShiftClickExclude", "Enable Shift+Click to Exclude");
+    try widgets.hintText(context, .src(@src()), "Shift+click a thumbnail to skip its character when cycling.");
     try bind.toggle(context, ref, "autoMinimizeExcluded", "Auto-Minimize Excluded Characters");
-    try widgets.hintText(context, .src(@src()), "Minimizes immediately on exclusion, not on the Auto-Minimize delay above.");
+    try widgets.hintText(context, .src(@src()), "Minimizes them straight away, without the delay.");
     try bind.toggle(context, ref, "logoutClearsExclusion", "Logging Out Clears Exclusion");
-    try widgets.hintText(context, .src(@src()), "Includes a character again once its client returns to the login screen.");
+    try widgets.hintText(context, .src(@src()), "A character stops being excluded once you log it out.");
     if (session.showsThumbnails()) try exclusionOverlay(context);
     try section.close(context);
 }
@@ -149,21 +152,24 @@ fn exclusion(context: *ui.Frame) !void {
 fn exclusionOverlay(context: *ui.Frame) !void {
     const thumbnail = session.profile().child("thumbnail");
     try bind.choice(context, thumbnail, "exclusionOverlayStyle", "Overlay Style");
+    try widgets.hintText(context, .src(@src()), "How excluded thumbnails are marked.");
     try bind.rgb(context, thumbnail, "exclusionOverlayColor", "Overlay Color");
+    try widgets.hintText(context, .src(@src()), "The tint laid over excluded thumbnails.");
     try bind.alphaSlider(context, thumbnail, "exclusionOverlayColor", "Overlay Opacity");
+    try widgets.hintText(context, .src(@src()), "How strongly excluded thumbnails are tinted.");
 }
 
 fn windowPosition(context: *ui.Frame) !void {
     const section = try widgets.openSection(context, "Window Position", "Saves each character's real EVE client window position, restored via the Move to Saved Positions hotkey or automatically on login. Set All copies the selected window's current position to every character; Clear All removes every saved position.", &style.section);
     const ref = session.profile().child("autoMovePosition");
     try bind.toggle(context, ref, "enabled", "Restore Saved Position on Login");
-    try widgets.hintText(context, .src(@src()), "Moves a client to its saved position when its character logs in.");
+    try widgets.hintText(context, .src(@src()), "Uses each character's window position from the Characters tab.");
     try bind.toggle(context, ref, "moveOnStartup", "Restore Saved Position on App Startup");
-    try widgets.hintText(context, .src(@src()), "Moves clients already logged in when the app launches.");
+    try widgets.hintText(context, .src(@src()), "Also moves clients already logged in when the app starts.");
     try bind.number(context, ref, "verifyIntervalMs", "Recheck Interval", .{ .shows_seconds = true, .unit = "s" });
-    try widgets.hintText(context, .src(@src()), "How often a moved client's position is rechecked, since EVE can shift its own window while loading.");
+    try widgets.hintText(context, .src(@src()), "EVE can shift its window while loading, so it's checked again this often.");
     try bind.number(context, ref, "verifyCount", "Recheck Count", .{});
-    try widgets.hintText(context, .src(@src()), "How many times to recheck and reapply the position after a move. 0 turns rechecking off.");
+    try widgets.hintText(context, .src(@src()), "How many times to check again; 0 turns this off.");
 
     if (g_sources == null or g_is_sources_rescan_due) scanSources();
     const set_all = try widgets.openBinding(context, .src(@src()), "Copy to All From");
@@ -172,18 +178,35 @@ fn windowPosition(context: *ui.Frame) !void {
         g_is_sources_rescan_due = true;
         context.requestRedraw();
     }
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Set All", .disabled = source == null, .style = if (source == null) &style.paired_disabled_button else &style.paired_button })).clicked) setAll(source);
+    const paired_width = try pairedButtonWidth(context);
+    const set_all_style = try widgets.withWidth(context, if (source == null) &style.paired_disabled_button else &style.paired_button, paired_width);
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Set All"), .disabled = source == null, .style = set_all_style })).clicked) setAll(source);
     try set_all.close(context);
+    try widgets.hintText(context, .src(@src()), "Copies that window's position to every character.");
     const clear_all = try widgets.openBinding(context, .src(@src()), "Saved Positions");
-    if (try widgets.confirmButton(context, .src(@src()), "Clear All", "Confirm", &style.paired_danger_button, &style.paired_confirm_button)) clearAll();
+    const clear_style = try widgets.withWidth(context, &style.paired_danger_button, paired_width);
+    const confirm_style = try widgets.withWidth(context, &style.paired_confirm_button, paired_width);
+    if (try widgets.confirmButton(context, .src(@src()), "Clear All", "Confirm", clear_style, confirm_style)) clearAll();
     try clear_all.close(context);
+    try widgets.hintText(context, .src(@src()), "Clear All removes every character's saved window position.");
     try section.close(context);
+}
+
+/// Set All, Clear All and its Confirm share a width, so their edges line up: the widest of their labels, at least style.PAIRED_BUTTON_WIDTH.
+fn pairedButtonWidth(context: *ui.Frame) !f32 {
+    const padding = comptime style.plain_button.padding.?;
+    const border = 2;
+    var widest: f32 = 0;
+    for ([_][]const u8{ "Set All", "Clear All", "Confirm" }) |label| {
+        widest = @max(widest, try widgets.textWidth(context, lang.text(label), &style.button_text));
+    }
+    return @max(style.PAIRED_BUTTON_WIDTH, @ceil(padding.left() + widest + padding.right() + border));
 }
 
 fn clearAll() void {
     positions.clearAll() catch |err| {
         slog.err("Failed to clear all character window positions: {}", .{err});
-        status.show(.failure, "Failed to save: {}", .{err});
+        status.show(.failure, "Failed to save: {err}", .{ .err = err });
         return;
     };
     status.show(.success, "Window positions cleared", .{});
@@ -194,7 +217,7 @@ fn sourceSelect(context: *ui.Frame) !?[]const u8 {
     const sources = if (g_sources) |*scan| scan else return null;
     const key: ui.Key = .str("knots.positions.source");
     if (sources.names.len == 0) {
-        try context.e(Text{ .selectable = false, .key = key, .content = "No open EVE clients", .style = &style.muted_text });
+        try context.e(Text{ .selectable = false, .key = key, .content = lang.text("No open EVE clients"), .style = &style.muted_text });
         return null;
     }
     const values = try context.arena().alloc(u32, sources.names.len);
@@ -246,7 +269,7 @@ fn setAll(source: ?[]const u8) void {
     };
     positions.setAll(name) catch |err| {
         slog.err("Failed to set all character window positions: {}", .{err});
-        status.show(.failure, "Failed to save: {}", .{err});
+        status.show(.failure, "Failed to save: {err}", .{ .err = err });
         return;
     };
     status.show(.success, "Window position saved", .{});
@@ -262,12 +285,14 @@ fn ultraPotato(context: *ui.Frame) !void {
         context.requestRedraw();
     }
     try row.close(context);
+    try widgets.hintText(context, .src(@src()), "The EVE settings to change. Close EVE first.");
     const apply = try widgets.openBinding(context, .src(@src()), "Lowest Graphics Settings");
     const can_apply = paths != null;
-    if ((try context.interact(Button{ .key = .src(@src()), .label = "Apply Ultra Potato Mode", .disabled = !can_apply, .style = if (can_apply) &style.plain_button else &style.disabled_button })).clicked) {
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Apply Ultra Potato Mode"), .disabled = !can_apply, .style = if (can_apply) &style.plain_button else &style.disabled_button })).clicked) {
         if (paths) |chosen| applyPotato(chosen);
     }
     try apply.close(context);
+    try widgets.hintText(context, .src(@src()), "Each file is backed up before its first change.");
     try section.close(context);
 }
 
@@ -278,12 +303,12 @@ fn potatoSelect(context: *ui.Frame) !?[]const []const u8 {
         .found => |*found| found,
         .not_scanned, .failed => {
             const message = if (g_potato == .failed) "Failed to scan for EVE settings profiles" else "Scanning for EVE settings profiles...";
-            try context.e(Text{ .selectable = false, .key = key, .content = message, .style = &style.muted_text });
+            try context.e(Text{ .selectable = false, .key = key, .content = lang.text(message), .style = &style.muted_text });
             return null;
         },
     };
     if (found.profiles.len == 0) {
-        try context.e(Text{ .selectable = false, .key = key, .content = "No EVE settings profiles found", .style = &style.muted_text });
+        try context.e(Text{ .selectable = false, .key = key, .content = lang.text("No EVE settings profiles found"), .style = &style.muted_text });
         return null;
     }
     const arena = context.arena();
@@ -291,7 +316,7 @@ fn potatoSelect(context: *ui.Frame) !?[]const []const u8 {
     const option_count = found.profiles.len + @intFromBool(has_all);
     const labels = try arena.alloc([]const u8, option_count);
     const values = try arena.alloc(u32, option_count);
-    if (has_all) labels[0] = "All Profiles";
+    if (has_all) labels[0] = lang.text("All Profiles");
     for (found.profiles, @intFromBool(has_all)..) |profile, index| labels[index] = profile.label;
     for (values, 0..) |*value, index| value.* = @intCast(index);
     const response = try context.interact(SelectInput(u32){ .key = key, .labels = labels, .values = values, .initial_selected = found.selected_index, .style = try widgets.fittedSelect(context, labels), .parts = .{ .popup = &style.select_popup } });
@@ -316,7 +341,7 @@ fn scanPotato() void {
         return;
     };
     var arena = std.heap.ArenaAllocator.init(g_allocator);
-    const profiles = ultra_potato.scanProfiles(arena.allocator(), files.g_io, environ_map) catch |err| {
+    const profiles = ultra_potato.scanProfiles(arena.allocator(), session.runningApp().io, environ_map) catch |err| {
         arena.deinit();
         slog.err("Failed to scan EVE settings profiles: {}", .{err});
         g_potato = .failed;
@@ -328,9 +353,9 @@ fn scanPotato() void {
 fn applyPotato(paths: []const []const u8) void {
     var arena = std.heap.ArenaAllocator.init(g_allocator);
     defer arena.deinit();
-    const results = ultra_potato.applyToFiles(arena.allocator(), files.g_io, paths) catch |err| {
+    const results = ultra_potato.applyToFiles(arena.allocator(), session.runningApp().io, paths) catch |err| {
         slog.err("Failed to apply Ultra Potato Mode: {}", .{err});
-        status.show(.failure, "Failed: {}", .{err});
+        status.show(.failure, "Failed: {err}", .{ .err = err });
         return;
     };
     var changed_count: usize = 0;
@@ -343,12 +368,12 @@ fn applyPotato(paths: []const []const u8) void {
         } else if (result.changed) changed_count += 1 else already_set_count += 1;
     }
     if (first_failure) |failure| {
-        status.show(.failure, "Applied to {d}/{d}. Failed: {s} ({s})", .{ changed_count + already_set_count, results.len, failure.path, failure.error_message orelse "unknown error" });
+        status.show(.failure, "Applied to {done}/{total}. Failed: {path} ({err})", .{ .done = changed_count + already_set_count, .total = results.len, .path = failure.path, .err = lang.text(failure.error_message orelse "unknown error") });
     } else if (changed_count > 0 and already_set_count > 0) {
-        status.show(.success, "Applied to {d}, already set on {d} profile(s).", .{ changed_count, already_set_count });
+        status.show(.success, "Applied to {changed}, already set on {already} profile(s).", .{ .changed = changed_count, .already = already_set_count });
     } else if (changed_count > 0) {
-        status.show(.success, "Applied to {d} profile(s).", .{changed_count});
+        status.show(.success, "Applied to {n} profile(s).", .{ .n = changed_count });
     } else {
-        status.show(.success, "Already applied to {d} profile(s).", .{already_set_count});
+        status.show(.success, "Already applied to {n} profile(s).", .{ .n = already_set_count });
     }
 }

@@ -5,19 +5,17 @@ const focus_grant = @import("../platform/focus_grant.zig");
 const vk = @import("../platform/virtual_keys.zig");
 const scout = @import("../clients/scout.zig");
 const actions = @import("../clients/actions.zig");
-const auto_minimize = @import("../clients/auto_minimize.zig");
+const exclusions_mod = @import("../clients/exclusions.zig");
 const config_mod = @import("../config.zig");
 const protocol = @import("../protocol.zig");
-const painter_mod = @import("../painter.zig");
-const main = @import("../main.zig");
-const session = @import("../dialog/knots/session.zig");
+const app_mod = @import("../app.zig");
 const alert_effects = @import("../notifications/alert_effects.zig");
 const mouse_hook = @import("mouse_hook.zig");
 const keyboard_hook = @import("keyboard_hook.zig");
 const bindings = @import("bindings.zig");
 const cycling = @import("cycling.zig");
+const cycle_order = @import("cycle_order.zig");
 const membership = @import("membership.zig");
-const exclusions_mod = @import("exclusions.zig");
 const profile_switch = @import("profile_switch.zig");
 const launch = @import("launch.zig");
 const log = @import("../log.zig");
@@ -26,49 +24,52 @@ const HotkeyAction = bindings.HotkeyAction;
 const KeyList = config_mod.KeyList;
 const slog = log.Scoped("hotkeys");
 
+const KEY_NAME_SIZE = 32;
+const DESCRIPTION_SIZE = 160;
+
 /// The characters or hotkey groups bound to one key combo, in config order.
 const ComboSharers = struct {
     virtual_key: u32,
     indices: std.ArrayList(usize),
 };
 
-/// Cycling, exclusions, profile switching and app/URL launching live in their own modules.
 pub const HotkeyManager = struct {
     allocator: std.mem.Allocator,
+    /// Outlives the manager; its thumbnail set is read from here each time, since a rebuild replaces it.
+    app: *app_mod.App,
     /// The saved copy, for the bindings and the groups and characters their ids index into; other settings read live().
     config: *const config_mod.Config,
     /// Borrowed; outlives the manager.
     store: *config_mod.ProfileStore,
     /// Borrowed; outlives the manager.
     global_settings: *const config_mod.GlobalConfig,
-    /// Borrowed; outlives the manager.
+    /// A function rather than a pointer, since the config window's draft it may return comes and goes.
+    live_global: *const fn () *const config_mod.GlobalConfig,
+    /// Borrowed from `app`.
     scout: *scout.Scout,
-    /// Borrowed; outlives the manager.
-    painter: *painter_mod.Painter,
     hotkey_map: std.AutoHashMap(c_int, HotkeyAction),
     /// The suspend hotkey itself stays live.
     are_hotkeys_suspended: bool = false,
     /// Whether the config dialog is recording a new hotkey; kept separate from are_hotkeys_suspended so the two don't clobber each other.
     is_dialog_suspended: bool = false,
     cycle: cycling.CycleState,
-    /// Outlives the manager, so a Save that recreates it keeps them.
+    /// Borrowed from `app`, which keeps them across the Save that recreates the manager.
     exclusions: *exclusions_mod.Exclusions,
-    /// Most recent foreground window belonging to neither an EVE client nor this process; ReturnToLastApp's target, recorded by Painter's foreground hook.
-    last_non_eve_foreground: ?win32.HWND = null,
 
     /// Registers from the profile's saved copy, since bindings only change on Save.
-    pub fn init(allocator: std.mem.Allocator, store: *config_mod.ProfileStore, global_settings: *const config_mod.GlobalConfig, scout_ptr: *scout.Scout, painter: *painter_mod.Painter, exclusions: *exclusions_mod.Exclusions) !HotkeyManager {
-        const config = &store.saved;
+    pub fn init(allocator: std.mem.Allocator, app: *app_mod.App, live_global: *const fn () *const config_mod.GlobalConfig) !HotkeyManager {
+        const config = &app.store.saved;
         return .{
             .allocator = allocator,
+            .app = app,
             .config = config,
-            .store = store,
-            .global_settings = global_settings,
-            .scout = scout_ptr,
-            .painter = painter,
+            .store = &app.store,
+            .global_settings = &app.global_settings,
+            .live_global = live_global,
+            .scout = &app.scout,
             .hotkey_map = .init(allocator),
             .cycle = try cycling.CycleState.init(allocator, config.hotkeyGroups.items.len),
-            .exclusions = exclusions,
+            .exclusions = &app.exclusions,
         };
     }
 
@@ -78,21 +79,21 @@ pub const HotkeyManager = struct {
     }
 
     /// Like live(), for the global settings; `global_settings` stays the saved copy the bindings came from.
-    pub fn liveGlobal(_: *const HotkeyManager) *const config_mod.GlobalConfig {
-        return session.liveGlobal();
+    pub fn liveGlobal(self: *const HotkeyManager) *const config_mod.GlobalConfig {
+        return self.live_global();
     }
 
-    fn formatKeyName(virtual_key: u32, buffer: []u8) []const u8 {
+    fn formatKeyName(virtual_key: u32, buffer: *[KEY_NAME_SIZE]u8) []const u8 {
         var writer: std.Io.Writer = .fixed(buffer);
         vk.writeVirtualKey(&writer, virtual_key) catch |err| {
             slog.warn("Failed to format virtual key 0x{X}: {}", .{ virtual_key, err });
-            const fallback = std.mem.print(buffer, "VK{X}", .{virtual_key}) catch "VK?";
-            return fallback;
+            // "VK" and at most 8 hex digits always fit.
+            return std.mem.print(buffer, "VK{X}", .{virtual_key}) catch unreachable;
         };
         return writer.buffered();
     }
 
-    // Mouse buttons/wheel route through the mouse hook, everything else through the keyboard hook; both re-post a match as WM_HOTKEY.
+    /// Either hook re-posts a match to `hwnd` as WM_HOTKEY.
     fn hookKey(self: *const HotkeyManager, hwnd: win32.HWND, id: c_int, virtual_key: u32) !void {
         if (vk.isMouseHookVk(vk.extractVk(virtual_key))) try mouse_hook.register(self.allocator, hwnd, virtual_key, id) else try keyboard_hook.register(self.allocator, hwnd, virtual_key, id);
     }
@@ -103,7 +104,7 @@ pub const HotkeyManager = struct {
 
     /// Tracks `action` once if any key registers, since they all post one ID; logs each failure itself and returns how many failed.
     fn registerKeys(self: *HotkeyManager, hwnd: win32.HWND, id: c_int, keys: KeyList, action: HotkeyAction, description: []const u8) usize {
-        var key_name_buf: [32]u8 = undefined;
+        var key_name_buf: [KEY_NAME_SIZE]u8 = undefined;
         var registered: KeyList = .empty;
         for (keys.slice()) |virtual_key| {
             self.hookKey(hwnd, id, virtual_key) catch |err| {
@@ -130,20 +131,20 @@ pub const HotkeyManager = struct {
     /// Returns how many keys failed to register; groups sharing a combo cycle as one list.
     fn registerGroupChains(self: *HotkeyManager, hwnd: win32.HWND, chains: []const ComboSharers, is_forward: bool) usize {
         var failed_count: usize = 0;
-        var description_buf: [160]u8 = undefined;
+        var description_buf: [DESCRIPTION_SIZE]u8 = undefined;
         for (chains, 0..) |chain, chain_index| {
             const first_name = self.config.hotkeyGroups.items[chain.indices.items[0]].name;
             const slot = chain_index * 2 + @intFromBool(!is_forward);
             if (slot >= bindings.CYCLE_GROUP_SLOT_COUNT) {
-                slog.err("Failed to register hotkey group '{s}' {s}: too many group cycle keys", .{ first_name, cycling.directionName(is_forward) });
+                slog.err("Failed to register hotkey group '{s}' {s}: too many group cycle keys", .{ first_name, cycle_order.directionName(is_forward) });
                 failed_count += 1;
                 continue;
             }
 
             const description = if (chain.indices.items.len == 1)
-                formatDescription(&description_buf, "group [{s}] {s}", .{ first_name, cycling.directionName(is_forward) }, "group cycle")
+                formatDescription(&description_buf, "group [{s}] {s}", .{ first_name, cycle_order.directionName(is_forward) }, "group cycle")
             else
-                formatDescription(&description_buf, "groups [{s}...] {s} ({} sharing hotkey)", .{ first_name, cycling.directionName(is_forward), chain.indices.items.len }, "shared group cycle");
+                formatDescription(&description_buf, "groups [{s}...] {s} ({} sharing hotkey)", .{ first_name, cycle_order.directionName(is_forward), chain.indices.items.len }, "shared group cycle");
 
             const owned_indices = self.allocator.dupe(usize, chain.indices.items) catch |err| {
                 slog.err("Failed to copy hotkey group chain '{s}': {}", .{ first_name, err });
@@ -206,7 +207,7 @@ pub const HotkeyManager = struct {
         });
 
         var failed_count: usize = 0;
-        var description_buf: [160]u8 = undefined;
+        var description_buf: [DESCRIPTION_SIZE]u8 = undefined;
 
         failed_count += self.registerGroupChains(hwnd, forward_chains.items, true);
         failed_count += self.registerGroupChains(hwnd, backward_chains.items, false);
@@ -352,22 +353,22 @@ pub const HotkeyManager = struct {
             },
             .close_all => {
                 slog.info("Close all hotkey pressed", .{});
-                actions.closeAllClients(self.scout.getWindows(), self.live());
+                actions.closeAllClients(self.scout.getWindows(), self.live(), self.exclusions);
             },
             .toggle_visibility => {
                 slog.info("Toggle visibility hotkey pressed", .{});
-                self.painter.toggleAllThumbnailsVisibility();
+                if (self.app.thumbnail_set) |thumbnail_set| thumbnail_set.toggleAllThumbnailsVisibility();
             },
-            .next_profile => profile_switch.cycle(self.allocator, self.config.profile_name, true),
-            .previous_profile => profile_switch.cycle(self.allocator, self.config.profile_name, false),
-            .switch_to_profile => |switch_to| profile_switch.switchTo(self.global_settings, self.config.profile_name, switch_to.profile_index),
+            .next_profile => profile_switch.cycle(self.app, self.config.profile_name, true),
+            .previous_profile => profile_switch.cycle(self.app, self.config.profile_name, false),
+            .switch_to_profile => |switch_to| profile_switch.switchTo(self.app, self.config.profile_name, switch_to.profile_index),
             .toggle_exclusion => self.toggleForegroundExclusion(),
             .next_excluded => cycling.cycleExcluded(self, true),
             .previous_excluded => cycling.cycleExcluded(self, false),
             .suspend_hotkeys => self.toggleSuspend(),
             .toggle_auto_minimize => {
                 slog.info("Toggle auto-minimize hotkey pressed", .{});
-                auto_minimize.toggle(self.painter);
+                self.app.toggleAutoMinimize();
             },
             .toggle_alert_mute => alert_effects.toggleMuted(),
             .cycle_notified => cycling.cycleNotified(self, true),
@@ -378,18 +379,19 @@ pub const HotkeyManager = struct {
             .previous_not_logged_in => cycling.cycleNotLoggedIn(self, false),
             .move_to_saved_positions => {
                 slog.info("Move to saved positions hotkey pressed", .{});
-                actions.moveAllClientsToSavedPositions(self.scout.getWindows(), self.live(), self.painter);
+                const thumbnail_set = self.app.thumbnail_set orelse return;
+                actions.moveAllClientsToSavedPositions(self.scout.getWindows(), self.live(), thumbnail_set);
             },
-            .return_to_last_app => launch.returnToLastApp(&self.last_non_eve_foreground),
+            .return_to_last_app => launch.returnToLastApp(&self.app.focus.last_non_eve_foreground),
             .next_app => launch.cycleApps(self.global_settings, true),
             .previous_app => launch.cycleApps(self.global_settings, false),
             .exit_app => {
                 slog.info("Exit hotkey pressed", .{});
-                main.requestExit();
+                app_mod.requestExit();
             },
             .close_active => self.closeForegroundClient(),
             .activate_app => |activate| launch.activateApp(self.global_settings, activate.app_index),
-            .open_url => |open_url| launch.openUrl(self.allocator, self.global_settings, open_url.url_index),
+            .open_url => |open_url| launch.openUrl(self.allocator, self.app.io, self.global_settings, open_url.url_index),
         }
     }
 
@@ -431,7 +433,7 @@ pub const HotkeyManager = struct {
         const state = if (self.are_hotkeys_suspended) "suspended" else "resumed";
         slog.info("Hotkeys {s}", .{state});
 
-        if (main.g_timer_hwnd) |hwnd| {
+        if (self.app.timer_hwnd) |hwnd| {
             if (self.are_hotkeys_suspended) {
                 // The low-level hooks intercept system-wide, so leaving bindings registered while "suspended" would still block other apps from seeing those keys.
                 self.unregisterAll();
@@ -474,30 +476,16 @@ pub const HotkeyManager = struct {
         cycling.syncToFocusedCharacter(self, character_name, hwnd);
     }
 
+    pub fn clearLoggedOutExclusion(self: *HotkeyManager, character_name: []const u8) void {
+        membership.clearLoggedOutExclusion(self, character_name);
+    }
+
     pub fn deinit(self: *HotkeyManager) void {
         self.unregisterAll();
         self.cycle.deinit(self.allocator);
         self.hotkey_map.deinit();
     }
 };
-
-/// Set by main.zig for code that can't be handed the manager directly (window procs, Painter).
-pub var g_hotkey_manager_ptr: ?*HotkeyManager = null;
-
-/// Keeps cycle positions in step when `hwnd` becomes the focused client; no-op before the manager exists.
-pub fn syncFocusedCharacter(character_name: []const u8, hwnd: win32.HWND) void {
-    if (g_hotkey_manager_ptr) |manager| manager.updateFocusedCharacter(character_name, hwnd);
-}
-
-/// No-op before the manager exists.
-pub fn clearLoggedOutExclusion(character_name: []const u8) void {
-    if (g_hotkey_manager_ptr) |manager| membership.clearLoggedOutExclusion(manager, character_name);
-}
-
-/// The window ReturnToLastApp goes back to.
-pub fn recordNonEveForeground(hwnd: win32.HWND) void {
-    if (g_hotkey_manager_ptr) |manager| manager.last_non_eve_foreground = hwnd;
-}
 
 fn addComboSharer(allocator: std.mem.Allocator, list: *std.ArrayList(ComboSharers), combo_vk: u32, index: usize) !void {
     for (list.items) |*sharers| {

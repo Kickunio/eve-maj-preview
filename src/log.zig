@@ -31,18 +31,21 @@ pub const LogLevel = enum {
 };
 
 var g_level: LogLevel = .err;
-/// std.debug.print caches its stderr handle on first use, so printing before AllocConsole would keep a dead one; true only while the console is shown.
+/// True only while the console is shown, since std.debug.print caches its stderr handle and printing before AllocConsole would keep a dead one; main thread writes it under g_log_mutex.
 var g_is_console_shown = false;
 /// The console is hidden rather than freed, since a reallocated one would get a handle the cached one doesn't match.
 var g_has_console = false;
 
 var g_io: std.Io = undefined;
-/// Guards the file and buffer below, which every logging thread writes.
+/// Guards the file and buffers below, which every logging thread writes.
 var g_log_mutex: std.Io.Mutex = .init;
 var g_log_file: ?std.Io.File = null;
 /// Buffers debug/info lines, so the frequent debug-level scan tick costs a memcpy rather than a write syscall.
 var g_log_buf: [16 * 1024]u8 = undefined;
 var g_log_buf_len: usize = 0;
+/// The console's copy of the lines, written out together by flushConsole: each console write costs far more than a file write.
+var g_console_buf: [16 * 1024]u8 = undefined;
+var g_console_buf_len: usize = 0;
 
 pub fn setLevel(level: LogLevel) void {
     g_level = level;
@@ -65,20 +68,28 @@ pub fn openDebugConsole() void {
         _ = win32.SetConsoleCtrlHandler(consoleCtrlHandler, win32.TRUE);
         disableQuickEdit();
     }
-    g_is_console_shown = true;
+    setConsoleShown(true);
 }
 
 /// Hides the console and stops mirroring to it; openDebugConsole shows it again.
 pub fn closeDebugConsole() void {
     if (!g_is_console_shown) return;
-    g_is_console_shown = false;
+    setConsoleShown(false);
     if (win32.GetConsoleWindow()) |hwnd| _ = win32.ShowWindow(hwnd, win32.SW_HIDE);
+}
+
+/// From the app's tick, so console lines show within one tick of being logged.
+pub fn flushConsole() void {
+    g_log_mutex.lock(g_io) catch return;
+    defer g_log_mutex.unlock(g_io);
+    flushConsoleLocked();
 }
 
 pub fn deinitFile() void {
     g_log_mutex.lock(g_io) catch return;
     defer g_log_mutex.unlock(g_io);
     flushLocked();
+    flushConsoleLocked();
     if (g_log_file) |f| {
         f.close(g_io);
         g_log_file = null;
@@ -97,6 +108,7 @@ pub fn writeCrashLine(comptime fmt: []const u8, args: anytype) void {
     defer g_log_mutex.unlock(g_io);
 
     flushLocked();
+    flushConsoleLocked();
     var timestamp_buf: [23]u8 = undefined;
     var line_buf: [512]u8 = undefined;
     appendLocked(formatLine(&line_buf, "[{s}][CRASH] " ++ fmt ++ "\n", .{formatTimestamp(&timestamp_buf)} ++ args));
@@ -107,9 +119,7 @@ pub fn Scoped(comptime scope: []const u8) type {
         inline fn logImpl(comptime level: LogLevel, comptime fmt: []const u8, args: anytype) void {
             if (shouldLog(level)) {
                 var timestamp_buf: [23]u8 = undefined;
-                const timestamp = formatTimestamp(&timestamp_buf);
-                writeToFile(level, timestamp, scope, fmt, args);
-                if (g_is_console_shown) std.debug.print("[{s}][{s}][{s}] " ++ fmt ++ "\n", .{ timestamp, level.asString(), scope } ++ args);
+                writeLine(level, formatTimestamp(&timestamp_buf), scope, fmt, args);
             }
         }
 
@@ -173,6 +183,15 @@ fn flush() void {
     g_log_mutex.lock(g_io) catch return;
     defer g_log_mutex.unlock(g_io);
     flushLocked();
+    flushConsoleLocked();
+}
+
+/// Main thread only; on hiding, writes out what the console has buffered first.
+fn setConsoleShown(is_shown: bool) void {
+    g_log_mutex.lock(g_io) catch return;
+    defer g_log_mutex.unlock(g_io);
+    if (!is_shown) flushConsoleLocked();
+    g_is_console_shown = is_shown;
 }
 
 fn shouldLog(level: LogLevel) bool {
@@ -232,8 +251,15 @@ fn flushLocked() void {
     appendLocked(g_log_buf[0..g_log_buf_len]);
 }
 
-/// Callers already passed shouldLog; warnings and errors flush at once, so they survive a crash right after.
-inline fn writeToFile(comptime level: LogLevel, timestamp: []const u8, comptime scope: []const u8, comptime fmt: []const u8, args: anytype) void {
+/// Caller holds g_log_mutex.
+fn flushConsoleLocked() void {
+    if (g_console_buf_len == 0) return;
+    defer g_console_buf_len = 0;
+    if (g_is_console_shown) std.debug.print("{s}", .{g_console_buf[0..g_console_buf_len]});
+}
+
+/// Buffers the line for the file, and the console while it's shown; warnings and errors flush at once, so they survive a crash right after.
+inline fn writeLine(comptime level: LogLevel, timestamp: []const u8, comptime scope: []const u8, comptime fmt: []const u8, args: anytype) void {
     g_log_mutex.lock(g_io) catch return;
     defer g_log_mutex.unlock(g_io);
 
@@ -244,5 +270,14 @@ inline fn writeToFile(comptime level: LogLevel, timestamp: []const u8, comptime 
     @memcpy(g_log_buf[g_log_buf_len..][0..line.len], line);
     g_log_buf_len += line.len;
 
-    if (comptime @backingInt(level) >= @backingInt(LogLevel.warn)) flushLocked();
+    if (g_is_console_shown) {
+        if (line.len > g_console_buf.len - g_console_buf_len) flushConsoleLocked();
+        @memcpy(g_console_buf[g_console_buf_len..][0..line.len], line);
+        g_console_buf_len += line.len;
+    }
+
+    if (comptime @backingInt(level) >= @backingInt(LogLevel.warn)) {
+        flushLocked();
+        flushConsoleLocked();
+    }
 }

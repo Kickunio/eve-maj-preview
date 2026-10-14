@@ -4,6 +4,7 @@ const ui = @import("ui");
 const win32 = @import("../../platform/win32.zig");
 const status = @import("status.zig");
 const style = @import("style.zig");
+const lang = @import("../../lang/lang.zig");
 const log = @import("../../log.zig");
 
 const SelectInput = ui.component.SelectInput;
@@ -35,7 +36,7 @@ pub fn open(allocator: std.mem.Allocator, picker: *?Picker, index: usize) void {
     const windows = runningWindows(arena.allocator()) catch |err| {
         arena.deinit();
         slog.err("Failed to scan running windows: {}", .{err});
-        status.show(.failure, "Failed to scan clients: {}", .{err});
+        status.show(.failure, "Failed to scan running windows: {err}", .{ .err = err });
         return;
     };
     if (windows.len == 0) {
@@ -58,7 +59,7 @@ pub fn select(context: *ui.Frame, picker: *const ?Picker, key: ui.Key, index: us
     const arena = context.arena();
     const labels = try arena.alloc([]const u8, open_picker.windows.len + 1);
     const values = try arena.alloc(u32, open_picker.windows.len + 1);
-    labels[0] = PROMPT;
+    labels[0] = lang.text(PROMPT);
     values[0] = 0;
     for (open_picker.windows, 1..) |window, option| {
         labels[option] = try std.fmt.allocPrint(arena, "{s} \u{2014} {s}", .{ window.title, window.executable });

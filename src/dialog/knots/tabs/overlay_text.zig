@@ -1,5 +1,4 @@
 //! The names of the style settings every overlay text repeats: position, offsets, colours and font.
-/// The names an overlay's style fields go by in its settings struct.
 pub const Fields = struct {
     position: []const u8,
     offset_x: []const u8,

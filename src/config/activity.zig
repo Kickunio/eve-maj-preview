@@ -3,7 +3,6 @@ const types = @import("types.zig");
 const wire = @import("wire.zig");
 const ranges_mod = @import("ranges.zig");
 
-/// Refresh-rate bounds for Combat, Mining and Bounty; Resources sets its own.
 const UPDATE_INTERVAL_MS = .{ 1000, 10000 };
 
 pub const CombatConfig = struct {
@@ -134,7 +133,7 @@ pub const BountyConfig = struct {
     pub const Wire = wire.Wire(BountyConfig);
 };
 
-/// Per-process CPU/RAM/VRAM overlay; single combined label like BountyConfig, no alert machinery - see activity/resources.zig.
+/// One combined label and no alerts, like BountyConfig.
 pub const ResourcesConfig = struct {
     enabled: bool = false,
     show_cpu: bool = true,

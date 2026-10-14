@@ -6,6 +6,7 @@ const types = @import("../config/types.zig");
 const color_mod = @import("../util/color.zig");
 const pixel_buffer = @import("../util/pixel_buffer.zig");
 
+const Canvas = pixel_buffer.Canvas;
 const TextPosition = types.TextPosition;
 const BorderStyle = types.BorderStyle;
 
@@ -76,40 +77,36 @@ pub fn alignedLineY(block_y: i32, block_height: usize, line_height: usize, align
     };
 }
 
-pub fn calculateTextPosition(
-    position: TextPosition,
-    text_width: usize,
-    text_height: usize,
-    overlay_width: usize,
-    overlay_height: usize,
-    offset_x: i32,
-    offset_y: i32,
-) TextOrigin {
-    var x = alignedLineX(0, overlay_width, text_width, horizontalAlignOf(position));
-    var y = alignedLineY(0, overlay_height, text_height, verticalAlignOf(position));
+/// Where `text` sits in an `overlay`-sized box at `position`, moved by the offset and kept inside the box.
+pub fn calculateTextPosition(position: TextPosition, text: TextDimensions, overlay: TextDimensions, offset_x: i32, offset_y: i32) TextOrigin {
+    var x = alignedLineX(0, overlay.width, text.width, horizontalAlignOf(position));
+    var y = alignedLineY(0, overlay.height, text.height, verticalAlignOf(position));
 
     x += offset_x;
     y += offset_y;
 
-    x = @max(0, @min(x, @as(i32, @intCast(overlay_width)) - @as(i32, @intCast(text_width))));
-    y = @max(0, @min(y, @as(i32, @intCast(overlay_height)) - @as(i32, @intCast(text_height))));
+    x = @max(0, @min(x, @as(i32, @intCast(overlay.width)) - @as(i32, @intCast(text.width))));
+    y = @max(0, @min(y, @as(i32, @intCast(overlay.height)) - @as(i32, @intCast(text.height))));
 
     return .{ .x = x, .y = y };
 }
 
 /// Fills a text run's background rect, clipped to the buffer.
-pub fn fillTextBackground(pixels: [*]u32, width: usize, height: usize, x: i32, y: i32, text_width: usize, text_height: usize, color: u32) void {
+pub fn fillTextBackground(canvas: Canvas, x: i32, y: i32, text_width: usize, text_height: usize, color: u32) void {
     const start_x: usize = @intCast(@max(0, x));
     const start_y: usize = @intCast(@max(0, y));
-    const end_y = @min(start_y + text_height, height);
-    const end_x = @min(start_x + text_width, width);
+    const end_y = @min(start_y + text_height, canvas.height);
+    const end_x = @min(start_x + text_width, canvas.width);
     if (end_x <= start_x or end_y <= start_y) return;
     // Premultiplied, or fixTextAlphaRect would take a transparent non-black background for unfixed GDI text and make it opaque.
-    pixel_buffer.fillRect(pixels, width, height, start_x, start_y, end_x - start_x, end_y - start_y, color_mod.premultiplyAlpha(color));
+    pixel_buffer.fillRect(canvas, start_x, start_y, end_x - start_x, end_y - start_y, color_mod.premultiplyAlpha(color));
 }
 
 /// Draws the exclusion overlay onto an already-cleared buffer.
-pub fn drawExclusionOverlay(pixels: [*]u32, width: usize, height: usize, color: u32, style: types.ExclusionOverlayStyle) void {
+pub fn drawExclusionOverlay(canvas: Canvas, color: u32, style: types.ExclusionOverlayStyle) void {
+    const pixels = canvas.pixels;
+    const width = canvas.width;
+    const height = canvas.height;
     const alpha = (color >> 24) & 0xFF;
     if (alpha == 0) return;
     const blended = color_mod.premultiplyAlpha(color);
@@ -162,14 +159,17 @@ pub fn drawExclusionOverlay(pixels: [*]u32, width: usize, height: usize, color: 
             }
         },
         .X => {
-            drawDiagonalBand(pixels, width, height, blended, .backslash);
-            drawDiagonalBand(pixels, width, height, blended, .slash);
+            drawDiagonalBand(canvas, blended, .backslash);
+            drawDiagonalBand(canvas, blended, .slash);
         },
-        .DiagonalSlash => drawDiagonalBand(pixels, width, height, blended, .slash),
+        .DiagonalSlash => drawDiagonalBand(canvas, blended, .slash),
     }
 }
 
-pub fn drawBorder(pixels: [*]u32, width: usize, height: usize, border_width: usize, color: u32, style: BorderStyle) void {
+pub fn drawBorder(canvas: Canvas, border_width: usize, color: u32, style: BorderStyle) void {
+    const pixels = canvas.pixels;
+    const width = canvas.width;
+    const height = canvas.height;
     switch (style) {
         .Solid => {
             @memset(pixels[0 .. border_width * width], color);
@@ -182,11 +182,11 @@ pub fn drawBorder(pixels: [*]u32, width: usize, height: usize, border_width: usi
                 @memset(pixels[row + width - border_width .. row + width], color);
             }
         },
-        .Dashed => drawLengthwisePattern(pixels, width, height, border_width, color, DASH_LENGTH, DASH_GAP),
+        .Dashed => drawLengthwisePattern(canvas, border_width, color, DASH_LENGTH, DASH_GAP),
         .Dotted => {
             // Square-ish dots roughly one border-width wide, spaced two border-widths apart, distinct from Dashed's fixed 8px marks.
             const dot_length = if (border_width == 0) 0 else @max(1, border_width);
-            drawLengthwisePattern(pixels, width, height, border_width, color, dot_length, dot_length * 2);
+            drawLengthwisePattern(canvas, border_width, color, dot_length, dot_length * 2);
         },
         .Double => {
             // Mirrors the CSS "double" border look; at very thin widths the lines abut with no visible gap and just render as solid.
@@ -248,14 +248,14 @@ pub fn drawBorder(pixels: [*]u32, width: usize, height: usize, border_width: usi
             // Arm length scales with border_width but is capped at a third of the shorter dimension so brackets from adjacent corners never meet.
             const arm_length = @min(border_width * 4, @min(width, height) / 3);
 
-            pixel_buffer.fillRect(pixels, width, height, 0, 0, arm_length, border_width, color);
-            pixel_buffer.fillRect(pixels, width, height, 0, 0, border_width, arm_length, color);
-            pixel_buffer.fillRect(pixels, width, height, width - arm_length, 0, arm_length, border_width, color);
-            pixel_buffer.fillRect(pixels, width, height, width - border_width, 0, border_width, arm_length, color);
-            pixel_buffer.fillRect(pixels, width, height, 0, height - border_width, arm_length, border_width, color);
-            pixel_buffer.fillRect(pixels, width, height, 0, height - arm_length, border_width, arm_length, color);
-            pixel_buffer.fillRect(pixels, width, height, width - arm_length, height - border_width, arm_length, border_width, color);
-            pixel_buffer.fillRect(pixels, width, height, width - border_width, height - arm_length, border_width, arm_length, color);
+            pixel_buffer.fillRect(canvas, 0, 0, arm_length, border_width, color);
+            pixel_buffer.fillRect(canvas, 0, 0, border_width, arm_length, color);
+            pixel_buffer.fillRect(canvas, width - arm_length, 0, arm_length, border_width, color);
+            pixel_buffer.fillRect(canvas, width - border_width, 0, border_width, arm_length, color);
+            pixel_buffer.fillRect(canvas, 0, height - border_width, arm_length, border_width, color);
+            pixel_buffer.fillRect(canvas, 0, height - arm_length, border_width, arm_length, color);
+            pixel_buffer.fillRect(canvas, width - arm_length, height - border_width, arm_length, border_width, color);
+            pixel_buffer.fillRect(canvas, width - border_width, height - arm_length, border_width, arm_length, color);
         },
     }
 }
@@ -274,7 +274,10 @@ pub fn renderText(dc: win32.HDC, text: []const u8, x: i32, y: i32, color: u32) v
     gdi_overlay.drawText(TEXT_BUFFER_SIZE, dc, x + TEXT_PADDING_X, y + TEXT_PADDING_Y, text, color);
 }
 
-fn drawDiagonalBand(pixels: [*]u32, width: usize, height: usize, color: u32, diagonal: Diagonal) void {
+fn drawDiagonalBand(canvas: Canvas, color: u32, diagonal: Diagonal) void {
+    const pixels = canvas.pixels;
+    const width = canvas.width;
+    const height = canvas.height;
     const signed_width: i32 = @intCast(width);
     const signed_height: i32 = @intCast(height);
     // Scaled with the aspect ratio.
@@ -303,7 +306,10 @@ fn borderRegions(width: usize, height: usize, border_width: usize) [4]BorderRegi
 }
 
 /// Marks pixels along the border's length using a repeating mark/gap pattern, where `distance` runs along the edge.
-fn drawLengthwisePattern(pixels: [*]u32, width: usize, height: usize, border_width: usize, color: u32, mark_length: usize, gap_length: usize) void {
+fn drawLengthwisePattern(canvas: Canvas, border_width: usize, color: u32, mark_length: usize, gap_length: usize) void {
+    const pixels = canvas.pixels;
+    const width = canvas.width;
+    const height = canvas.height;
     const pattern_length = mark_length + gap_length;
 
     for (borderRegions(width, height, border_width)) |region| {
@@ -323,8 +329,10 @@ fn drawLengthwisePattern(pixels: [*]u32, width: usize, height: usize, border_wid
 }
 
 test "calculateTextPosition centres text and clamps it inside the overlay" {
-    try std.testing.expectEqual(TextOrigin{ .x = 40, .y = 20 }, calculateTextPosition(.Center, 20, 10, 100, 50, 0, 0));
-    try std.testing.expectEqual(TextOrigin{ .x = 80, .y = 40 }, calculateTextPosition(.BottomRight, 20, 10, 100, 50, 30, 30));
+    const text: TextDimensions = .{ .width = 20, .height = 10 };
+    const overlay: TextDimensions = .{ .width = 100, .height = 50 };
+    try std.testing.expectEqual(TextOrigin{ .x = 40, .y = 20 }, calculateTextPosition(.Center, text, overlay, 0, 0));
+    try std.testing.expectEqual(TextOrigin{ .x = 80, .y = 40 }, calculateTextPosition(.BottomRight, text, overlay, 30, 30));
 }
 
 test "alignedLineX keeps a line wider than its block at the block's start" {
@@ -342,7 +350,7 @@ test "borderRegions covers each edge at the border's width" {
 
 test "a solid border leaves the inside untouched" {
     var pixels: [8 * 6]u32 = @splat(0);
-    drawBorder(&pixels, 8, 6, 1, 0xFFFFFFFF, .Solid);
+    drawBorder(.{ .pixels = &pixels, .width = 8, .height = 6 }, 1, 0xFFFFFFFF, .Solid);
     try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0), pixels[2 * 8 + 3]);
 }
