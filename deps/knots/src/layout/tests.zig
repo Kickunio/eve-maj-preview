@@ -106,6 +106,49 @@ test "row: gap is accounted for in free space" {
     try expectRect(ctx.pool.get(2), 205, 0, 195, 50); // 195 + 10 gap = 205
 }
 
+test "row: centred children with a gap leave equal space either side" {
+    var ctx = initCtx();
+    defer ctx.deinit();
+
+    _ = try ctx.open(0, .{ .width = .fixed(100), .height = .fixed(20), .direction = .row, .justify = .center, .gap = 6 });
+    defer ctx.close();
+    {
+        _ = try ctx.open(1, .{ .width = .fixed(14), .height = .fixed(14) });
+        defer ctx.close();
+    }
+    {
+        _ = try ctx.open(2, .{ .width = .fixed(40), .height = .fixed(14) });
+        defer ctx.close();
+    }
+
+    try runLayout(&ctx);
+
+    // 14 + 6 + 40 = 60 wide, so 20 either side
+    try expectRect(ctx.pool.get(1), 20, 0, 14, 14);
+    try expectRect(ctx.pool.get(2), 40, 0, 40, 14);
+}
+
+test "row: space_between with a gap ends at the far edge" {
+    var ctx = initCtx();
+    defer ctx.deinit();
+
+    _ = try ctx.open(0, .{ .width = .fixed(100), .height = .fixed(20), .direction = .row, .justify = .space_between, .gap = 10 });
+    defer ctx.close();
+    {
+        _ = try ctx.open(1, .{ .width = .fixed(20), .height = .fixed(20) });
+        defer ctx.close();
+    }
+    {
+        _ = try ctx.open(2, .{ .width = .fixed(20), .height = .fixed(20) });
+        defer ctx.close();
+    }
+
+    try runLayout(&ctx);
+
+    try expectRect(ctx.pool.get(1), 0, 0, 20, 20);
+    try expectRect(ctx.pool.get(2), 80, 0, 20, 20);
+}
+
 test "column: one fixed, one grow" {
     var ctx = initCtx();
     defer ctx.deinit();

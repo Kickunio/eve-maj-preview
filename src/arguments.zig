@@ -8,7 +8,7 @@ pub const Arguments = struct {
     /// From `--profile <name>` or `-p <name>`; the last one given wins.
     profile: ?[]const u8 = null,
     should_open_config: bool = false,
-    /// The first argument that couldn't be used, reported only once a protocol URL has been forwarded, which never fails on it.
+    /// The first unusable argument; a protocol URL is still forwarded despite it.
     invalid: ?Invalid = null,
 };
 

@@ -7,15 +7,17 @@ const exclusions_mod = @import("clients/exclusions.zig");
 const auto_minimize = @import("control/auto_minimize.zig");
 const focus_mod = @import("control/focus.zig");
 const restart_plan = @import("control/restart_plan.zig");
+const thumbnail_input = @import("control/thumbnail_input.zig");
 const set = @import("thumbnail/set.zig");
 const hotkeys = @import("hotkeys/manager.zig");
+const hook_bindings = @import("hotkeys/hook_bindings.zig");
 const center = @import("notifications/center.zig");
+const list_view = @import("panels/list_view.zig");
 const chatlog = @import("chatlog.zig");
 const character_ids_mod = @import("chatlog/character_ids.zig");
 const runtime = @import("activity/runtime.zig");
 const travel_left_behind = @import("travel/left_behind.zig");
 const tray = @import("tray.zig");
-const update = @import("update.zig");
 const knots_host = @import("dialog/knots/host.zig");
 const session = @import("dialog/knots/session.zig");
 const schedule = @import("util/schedule.zig");
@@ -26,16 +28,16 @@ const ThumbnailSet = set.ThumbnailSet;
 const HotkeyManager = hotkeys.HotkeyManager;
 const slog = log.Scoped("app");
 
-/// The tick timer on the timer window, beside focus.zig's HIDE_DEBOUNCE_TIMER_ID.
+/// Shares the timer window with focus.zig's HIDE_DEBOUNCE_TIMER_ID.
 pub const TICK_TIMER_ID: usize = 1;
-/// Timed rather than counted in ticks, so a slower scan interval doesn't stretch it; each scan is a full EnumWindows.
+/// Timed, not counted in ticks, so a slower scan interval doesn't stretch it.
 const FORCED_SCAN_INTERVAL_MS: u64 = 1000;
-/// With no window tracked and the configuration window closed there's nothing to draw, so the tick only keeps up with the scan.
+/// With nothing to draw, the tick only keeps up with the forced scan.
 const IDLE_TICK_INTERVAL_MS: win32.UINT = FORCED_SCAN_INTERVAL_MS;
 const TRAVEL_CHECK_INTERVAL_MS: u64 = 2000;
 const PROFILE_NAME_BUFFER_SIZE = 256;
 
-/// How far a live profile edit moves thumbnails: `spaces` reflows only while a thumbnail space is active, `all` repositions every thumbnail.
+/// How far a live profile edit moves thumbnails; `spaces` reflows only active spaces.
 pub const LiveLayout = enum { none, spaces, all };
 
 /// What restartSubsystems' earlier steps hand to its later ones.
@@ -58,17 +60,19 @@ pub const App = struct {
     global_settings: config.GlobalConfig = undefined,
     character_ids: CharacterIds = undefined,
     scout: scout_mod.Scout = undefined,
-    /// Kept across a Save or profile switch, unlike the hotkey manager that edits them.
+    /// Kept across a Save or profile switch.
     exclusions: exclusions_mod.Exclusions,
-    /// The history, notified queue and History Panel; kept across a thumbnail set rebuild, which would otherwise empty or recreate them.
+    /// Kept across a thumbnail set rebuild.
     notifications: center.NotificationCenter = .{},
     instance: win32.HINSTANCE = undefined,
     /// Kept across a thumbnail set rebuild, and reset when another profile is loaded.
     auto_minimizer: auto_minimize.AutoMinimizer,
     focus: focus_mod.FocusTracker = .{},
     trackers: runtime.Trackers,
-    /// Rebuilt by a profile switch, a Save or a view-mode change, so nothing else keeps it: read it from here each time.
+    /// Rebuilt on reload, so never cached elsewhere: read it from here each time.
     thumbnail_set: ?*ThumbnailSet = null,
+    /// Built and torn down with `thumbnail_set`; non-null only in ClientList mode.
+    list_window: ?list_view.ListWindow = null,
     /// Rebuilt like `thumbnail_set`, and read from here the same way.
     hotkey_manager: ?*HotkeyManager = null,
     /// Rebuilt when a reload changes the log folders.
@@ -76,7 +80,6 @@ pub const App = struct {
     /// The hidden window whose WM_TIMER drives the tick; others post to it.
     timer_hwnd: ?win32.HWND = null,
     tray_icon: ?tray.TrayIcon = null,
-    update_checker: ?update.UpdateChecker = null,
     pending_profile_buf: [PROFILE_NAME_BUFFER_SIZE]u8 = undefined,
     /// Borrows from pending_profile_buf.
     pending_profile: ?[]const u8 = null,
@@ -94,7 +97,7 @@ pub const App = struct {
         };
     }
 
-    /// Switches on the next message-loop turn, not inside the tray menu or hotkey handler that asked and would be torn down under it; copies `profile_name`.
+    /// Deferred to the next message-loop turn, since the switch would tear down the caller; copies `profile_name`.
     pub fn requestProfileSwitch(self: *App, profile_name: []const u8) void {
         if (profile_name.len > self.pending_profile_buf.len) {
             slog.err("Failed to switch to profile '{s}': name too long", .{profile_name});
@@ -106,7 +109,10 @@ pub const App = struct {
         };
         @memcpy(self.pending_profile_buf[0..profile_name.len], profile_name);
         self.pending_profile = self.pending_profile_buf[0..profile_name.len];
-        _ = win32.PostMessageA(timer_hwnd, win32.WM_SWITCH_PROFILE, 0, 0);
+        if (!win32.toBool(win32.PostMessageA(timer_hwnd, win32.WM_SWITCH_PROFILE, 0, 0))) {
+            slog.err("Failed to switch to profile '{s}': the switch couldn't be queued", .{profile_name});
+            self.pending_profile = null;
+        }
     }
 
     pub fn runPendingProfileSwitch(self: *App) void {
@@ -126,13 +132,13 @@ pub const App = struct {
         };
     }
 
-    /// After a Save of the running profile or global settings, restarts what only reads them at setup; `global_draft`, if given, is adopted and left holding the replaced values.
+    /// After a Save, restarts what reads settings only at setup; adopts `global_draft`, leaving it holding the replaced values.
     pub fn applySavedSettings(self: *App, global_draft: ?*config.GlobalConfig) !void {
         const timer_hwnd = self.timer_hwnd orelse return error.MissingTimerWindow;
         try self.restartSubsystems(timer_hwnd, null, global_draft);
     }
 
-    /// The config dialog changed the running profile's unsaved `live` copy; `layout` says whether thumbnails may need to move as well as repaint.
+    /// After a dialog edit to the live profile.
     pub fn onLiveProfileEdited(self: *App, layout: LiveLayout) void {
         self.notifications.panel.sync(self.allocator, &self.store, self.instance);
         const thumbnail_set = self.thumbnail_set orelse return;
@@ -147,9 +153,9 @@ pub const App = struct {
             slog.info("Rebuilt thumbnails for view mode {s}", .{@tagName(self.store.live.display.viewMode)});
             return;
         }
-        thumbnail_set.syncListWindow();
+        if (self.list_window) |*list_window| list_window.sync();
         thumbnail_set.refreshAllThumbnailConfigCaches();
-        // Moved before they're redrawn, so a thumbnail shown again appears in its new place rather than flashing up in its old one.
+        // Moved before redrawing, so a re-shown thumbnail doesn't flash in its old place.
         switch (layout) {
             .none => {},
             .spaces => thumbnail_set.reflowIfSpacesActive(),
@@ -163,13 +169,23 @@ pub const App = struct {
         const tick_start = win32.Ticks.now();
         const force_scan = schedule.nextTickWouldBeLate(tick_start.elapsedSince(self.last_forced_scan), FORCED_SCAN_INTERVAL_MS, self.tick_interval_ms);
         if (force_scan) self.last_forced_scan = tick_start;
+        if (self.tray_icon) |*icon| icon.retryIfMissing(tick_start);
 
         var scout_result = self.scout.update(force_scan);
         defer scout_result.deinit(self.allocator);
         self.clearLoggedOutExclusions(scout_result.name_changes.items);
+        // The Characters tab marks who's logged in, which only a login, logout or closed client changes.
+        if (scout_result.name_changes.items.len > 0 or scout_result.closed_windows.items.len > 0) knots_host.redraw();
+        if (self.hotkey_manager) |manager| manager.syncFocusFilter(scout_result.windows);
+        hook_bindings.logFailedPosts();
 
         if (self.thumbnail_set) |thumbnail_set| {
             thumbnail_set.update(scout_result.windows, scout_result.closed_windows.items, scout_result.name_changes.items);
+            if (self.list_window) |*list_window| {
+                list_window.render(thumbnail_set.thumbnails.items, thumbnail_set.active_source_hwnd) catch |err| {
+                    slog.err("Failed to render list window: {}", .{err});
+                };
+            }
             focus_mod.afterThumbnailSetUpdate(self, thumbnail_set, scout_result.name_changes.items);
             self.auto_minimizer.check(thumbnail_set.config, thumbnail_set.thumbnails.items, thumbnail_set.active_source_hwnd);
 
@@ -205,7 +221,14 @@ pub const App = struct {
         }
     }
 
-    /// The hotkey and tray toggle; temporary, not saved to the profile.
+    /// Windows may end the process as soon as WM_ENDSESSION returns, before any teardown, so what only teardown writes is written now.
+    pub fn saveForSessionEnd(self: *const App) void {
+        slog.info("Windows session ending, saving state", .{});
+        if (self.thumbnail_set) |thumbnail_set| thumbnail_set.auto_colors.flush();
+        log.flush();
+    }
+
+    /// Temporary; not saved to the profile.
     pub fn toggleAutoMinimize(self: *App) void {
         const thumbnail_set = self.thumbnail_set orelse {
             slog.err("Failed to toggle auto-minimize: the thumbnail set isn't ready", .{});
@@ -213,6 +236,22 @@ pub const App = struct {
         };
         const is_enabled = self.auto_minimizer.toggle(thumbnail_set.config);
         thumbnail_set.notifyAll(.{ .notification_type = .AutoMinimizeToggle, .state = if (is_enabled) .on else .off });
+    }
+
+    pub fn toggleDragging(self: *App) void {
+        const is_enabled = !self.store.live.interaction.enableDragging;
+        self.store.update(.{ .interaction = .{ .enableDragging = is_enabled } });
+        slog.info("Thumbnail dragging toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
+    }
+
+    pub fn toggleTravelMode(self: *App) void {
+        const is_enabled = !self.store.live.travel.enabled;
+        self.store.update(.{ .travel = .{ .enabled = is_enabled } });
+        slog.info("Travel Mode toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
+    }
+
+    pub fn toggleNotificationHistory(self: *App) void {
+        self.notifications.panel.toggle(self.allocator, &self.store, self.instance, scout_mod.anyCharacterLoggedIn(self.scout.getWindows()));
     }
 
     fn deliverChatlogFindings(self: *App, findings: *const chatlog.Findings) void {
@@ -261,13 +300,12 @@ pub const App = struct {
         }
     }
 
-    /// The configured scan interval, or IDLE_TICK_INTERVAL_MS while there's nothing to draw.
     pub fn tickIntervalFor(self: *const App, window_count: usize) win32.UINT {
         if (window_count == 0 and !knots_host.isOpen()) return IDLE_TICK_INTERVAL_MS;
         return self.store.saved.timer.scanIntervalMs;
     }
 
-    /// SetTimer replaces the running tick timer in place; false if it couldn't be set.
+    /// Replaces the running timer in place; false on failure.
     pub fn setTickInterval(self: *App, timer_hwnd: win32.HWND, interval_ms: win32.UINT) bool {
         if (win32.SetTimer(timer_hwnd, TICK_TIMER_ID, interval_ms, null) == 0) return false;
         self.tick_interval_ms = interval_ms;
@@ -277,19 +315,32 @@ pub const App = struct {
     pub fn createThumbnailSet(self: *App) !*ThumbnailSet {
         const new_set = try self.allocator.create(ThumbnailSet);
         errdefer self.allocator.destroy(new_set);
-        new_set.* = try ThumbnailSet.init(self.allocator, &self.store, &self.exclusions, &self.notifications);
+        new_set.* = try ThumbnailSet.init(self.allocator, &self.store, &self.exclusions, self.notifications.records(), .{
+            .window_procs = .{ .thumbnail = thumbnail_input.windowProc, .text = thumbnail_input.textWindowProc },
+            .destroy_hook = thumbnail_input.windowDestroyProc,
+        });
         self.thumbnail_set = new_set;
+        if (new_set.view_mode == .ClientList) {
+            self.list_window = list_view.ListWindow.init(self.allocator, &self.store, self.instance) catch |err| blk: {
+                slog.err("Failed to create list window: {}", .{err});
+                break :blk null;
+            };
+        }
         return new_set;
     }
 
     pub fn destroyThumbnailSet(self: *App) void {
+        if (self.list_window) |*list_window| {
+            list_window.deinit();
+            self.list_window = null;
+        }
         const old_set = self.thumbnail_set orelse return;
         self.thumbnail_set = null;
         old_set.deinit();
         self.allocator.destroy(old_set);
     }
 
-    /// Keeps each client's last-known system name for buildThumbnailSet to seed the new thumbnail set with; the caller frees it.
+    /// The caller deinits the returned snapshot.
     fn teardownThumbnailSet(self: *App) set.SystemNameSnapshot {
         var system_names = set.SystemNameSnapshot.init(self.allocator);
         if (self.thumbnail_set) |old_set| system_names.capture(old_set);
@@ -302,12 +353,12 @@ pub const App = struct {
         new_set.populate(windows, .{
             // Clients are already where the user put them; only startup and new arrivals auto-move.
             .should_move_to_saved = false,
-            // Only seeded if monitoring stays on to refresh it, or a stale name would freeze on screen forever.
+            // Only while monitoring stays on, or a stale name would never update.
             .system_names = if (self.store.saved.chatlog.enabled) system_names else null,
         });
     }
 
-    /// Registers its hotkeys once created; a registration failure is logged, not fatal.
+    /// A hotkey registration failure is logged, not fatal.
     pub fn createHotkeyManager(self: *App, timer_hwnd: win32.HWND) !void {
         const manager = try self.allocator.create(HotkeyManager);
         errdefer self.allocator.destroy(manager);
@@ -317,6 +368,7 @@ pub const App = struct {
         manager.registerHotkeys(timer_hwnd) catch |err| {
             slog.warn("Failed to register hotkeys, continuing without hotkey support: {}", .{err});
         };
+        manager.syncFocusFilter(self.scout.getWindows());
     }
 
     pub fn destroyHotkeyManager(self: *App) void {
@@ -338,7 +390,7 @@ pub const App = struct {
         self.allocator.destroy(monitor);
     }
 
-    /// Picks up windows the new profile's filters match and drops those they no longer do; a failed scan keeps the already-tracked windows.
+    /// Applies the new profile's window filters; a failed scan keeps the tracked windows.
     fn rescanWindows(self: *App) []const scout_mod.EveWindow {
         self.scout.scanForEveWindows() catch |err| {
             slog.err("Failed to scan for EVE windows: {}", .{err});
@@ -378,7 +430,7 @@ pub const App = struct {
         slog.info("=== Profile reload complete: {s} ===", .{new_profile_name});
     }
 
-    /// Tears down and rebuilds everything set up from the profile, in control/restart_plan.zig's order; `replacement`, owned from here on, becomes the running store.
+    /// Runs control/restart_plan.zig's steps; takes ownership of `replacement`, which becomes the running store.
     fn restartSubsystems(self: *App, timer_hwnd: win32.HWND, replacement: ?config.ProfileStore, global_draft: ?*config.GlobalConfig) !void {
         var pending = replacement;
         errdefer if (pending) |*store| store.deinit();
@@ -436,7 +488,7 @@ pub const App = struct {
                 self.store.deinit();
                 self.store = store;
                 restart.pending.* = null;
-                // Not dumped as at startup, since the dump stalled every switch with the debug console open.
+                // Not dumped as at startup: it stalled switches with the debug console open.
                 slog.info("Loaded new config: {s}", .{self.store.saved.profile_name});
                 self.notifications.panel.sync(self.allocator, &self.store, self.instance);
             },
@@ -486,7 +538,7 @@ pub const App = struct {
     }
 };
 
-/// The running app, for Win32 callbacks, which Windows hands no context of ours; null outside the run.
+/// For Win32 callbacks, which get no context of ours; null outside the run.
 pub var g_app: ?*App = null;
 
 /// For Win32 callbacks; null outside the run and while a rebuild failed.

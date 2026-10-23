@@ -5,6 +5,8 @@ const spaces_mod = @import("spaces.zig");
 
 const Value = std.json.Value;
 
+/// Profiles from before this saved positions in DPI-unaware pixels.
+pub const DPI_AWARE_VERSION = 2;
 /// Profiles from before thumbnailSpaces kept one fit region and a not-logged-in space as display settings.
 pub const SPACES_VERSION = 3;
 

@@ -28,39 +28,38 @@ pub const ChatlogConfig = struct {
 
     /// Run once a profile is loaded.
     pub fn warnUnreachableDirs(self: *const ChatlogConfig, io: std.Io) void {
-        if (self.enabled) {
-            if (self.chatlogDir.len == 0) {
-                slog.warn("Chatlog monitoring enabled but chatlogDir is empty", .{});
-            } else {
-                std.Io.Dir.cwd().access(io, self.chatlogDir, .{}) catch |err| {
-                    slog.warn("Failed to access chatlog directory '{s}': {}", .{ self.chatlogDir, err });
-                };
-            }
+        if (!self.enabled) return;
+        if (self.chatlogDir.len == 0) {
+            slog.warn("Chatlog monitoring enabled but chatlogDir is empty", .{});
+        } else {
+            std.Io.Dir.cwd().access(io, self.chatlogDir, .{}) catch |err| {
+                slog.warn("Failed to access chatlog directory '{s}': {}", .{ self.chatlogDir, err });
+            };
+        }
 
-            if (self.gamelogDir.len == 0) {
-                slog.warn("Chatlog monitoring enabled but gamelogDir is empty", .{});
-            } else {
-                std.Io.Dir.cwd().access(io, self.gamelogDir, .{}) catch |err| {
-                    slog.warn("Failed to access gamelog directory '{s}': {}", .{ self.gamelogDir, err });
-                };
-            }
+        if (self.gamelogDir.len == 0) {
+            slog.warn("Chatlog monitoring enabled but gamelogDir is empty", .{});
+        } else {
+            std.Io.Dir.cwd().access(io, self.gamelogDir, .{}) catch |err| {
+                slog.warn("Failed to access gamelog directory '{s}': {}", .{ self.gamelogDir, err });
+            };
         }
     }
 
     pub const Wire = wire.Wire(ChatlogConfig);
 
-    /// Expands %VAR% references in the log directories; an empty one gets EVE's default, which depends on the machine so can't be a field default.
+    /// Expands %VAR% in the log directories and gives them Windows separators; an empty one gets EVE's machine-dependent default.
     pub fn fromWire(saved: Wire, allocator: std.mem.Allocator) !ChatlogConfig {
         var config = try wire.fromWire(ChatlogConfig, saved, allocator);
         errdefer wire.deinit(ChatlogConfig, &config, allocator);
-        replaceDir(allocator, &config.chatlogDir, try files.expandEnvironmentVariables(allocator, config.chatlogDir));
-        replaceDir(allocator, &config.gamelogDir, try files.expandEnvironmentVariables(allocator, config.gamelogDir));
+        replaceDir(allocator, &config.chatlogDir, try windowsDir(allocator, config.chatlogDir));
+        replaceDir(allocator, &config.gamelogDir, try windowsDir(allocator, config.gamelogDir));
 
         if (config.chatlogDir.len == 0 or config.gamelogDir.len == 0) {
             const documents_dir = try documentsDir(allocator);
             defer allocator.free(documents_dir);
-            if (config.chatlogDir.len == 0) replaceDir(allocator, &config.chatlogDir, try allocator.print("{s}/EVE/logs/Chatlogs", .{documents_dir}));
-            if (config.gamelogDir.len == 0) replaceDir(allocator, &config.gamelogDir, try allocator.print("{s}/EVE/logs/Gamelogs", .{documents_dir}));
+            if (config.chatlogDir.len == 0) replaceDir(allocator, &config.chatlogDir, try allocator.print("{s}\\EVE\\logs\\Chatlogs", .{documents_dir}));
+            if (config.gamelogDir.len == 0) replaceDir(allocator, &config.gamelogDir, try allocator.print("{s}\\EVE\\logs\\Gamelogs", .{documents_dir}));
         }
         return config;
     }
@@ -71,16 +70,21 @@ pub const ChatlogConfig = struct {
     }
 };
 
-/// Asks the shell rather than assuming %USERPROFILE%/Documents, which OneDrive can redirect; EVE logs to wherever this resolves.
+/// Asks the shell, since OneDrive can redirect Documents; EVE logs wherever this resolves.
 fn documentsDir(allocator: std.mem.Allocator) ![]u8 {
-    const dir = win32.getKnownFolderPath(allocator, win32.FOLDERID_Documents) catch |err| blk: {
-        slog.warn("Failed to resolve the Documents folder, falling back to USERPROFILE/Documents: {}", .{err});
+    return win32.getKnownFolderPath(allocator, win32.FOLDERID_Documents) catch |err| {
+        slog.warn("Failed to resolve the Documents folder, falling back to USERPROFILE\\Documents: {}", .{err});
         const user_profile = files.environmentVariable("USERPROFILE") orelse {
             slog.warn("Failed to read USERPROFILE", .{});
             return error.MissingEnvironmentVariable;
         };
-        break :blk try allocator.print("{s}/Documents", .{user_profile});
+        return allocator.print("{s}\\Documents", .{user_profile});
     };
-    std.mem.replaceScalar(u8, dir, '\\', '/');
-    return dir;
+}
+
+/// Forward slashes, which older profiles saved, become backslashes; caller owns the result.
+fn windowsDir(allocator: std.mem.Allocator, dir: []const u8) ![]u8 {
+    const expanded = try files.expandEnvironmentVariables(allocator, dir);
+    std.mem.replaceScalar(u8, expanded, '/', '\\');
+    return expanded;
 }

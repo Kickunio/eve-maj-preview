@@ -160,12 +160,12 @@ pub fn combineKey(vk_code: u32, modifiers: u32) u32 {
     return (vk_code & VK_MASK) | ((modifiers & MOD_MASK) << MODIFIER_BIT_OFFSET);
 }
 
-/// Whether vk_code is a mouse button or wheel direction, bound via mouse_hook.zig instead of keyboard_hook.zig.
+/// Bound via mouse_hook.zig rather than keyboard_hook.zig.
 pub fn isMouseHookVk(vk_code: u32) bool {
     return vk_code == VK_MBUTTON or vk_code == VK_XBUTTON1 or vk_code == VK_XBUTTON2 or vk_code == VK_WHEELUP or vk_code == VK_WHEELDOWN;
 }
 
-/// Currently-held modifier keys, read via GetAsyncKeyState; shared by mouse_hook.zig and keyboard_hook.zig.
+/// MOD_* flags for the modifiers held now, via GetAsyncKeyState.
 pub fn currentModifiers() u32 {
     var modifiers: u32 = 0;
     if (win32.isCtrlPressed()) modifiers |= MOD_CONTROL;
@@ -258,7 +258,7 @@ fn parseBaseKey(key_text: []const u8) ?u32 {
     }
 
     if (key_text.len == 1) {
-        // '+' itself is never a valid base key here since it's the modifier-combo delimiter; only '=' maps to VK_OEM_PLUS.
+        // '+' is the combo delimiter, so only '=' maps to VK_OEM_PLUS.
         const shifted_vk: ?u32 = switch (key_text[0]) {
             ':' => VK_OEM_1,
             '<' => VK_OEM_COMMA,

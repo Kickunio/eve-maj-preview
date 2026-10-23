@@ -5,8 +5,10 @@ const log = @import("log.zig");
 
 /// Overwritten on every crash, so a crash loop can't fill the disk; the crash line written just before creates its folder.
 const MINIDUMP_FILE_NAME = std.unicode.utf8ToUtf16LeStringLiteral(log.MINIDUMP_FILE_NAME);
+/// Room for a MAX_PATH module path and a 64-bit offset.
+const LOCATION_LEN = 400;
 
-/// dbghelp.dll (MiniDumpWriteDump) isn't thread-safe; this flag serializes writes and resets after each attempt so a later crash can still dump.
+/// MiniDumpWriteDump isn't thread-safe; cleared after each attempt so a later crash can still dump.
 var g_dump_write_in_progress = std.atomic.Value(bool).init(false);
 
 /// Call first thing in main, before anything can fault.
@@ -59,7 +61,7 @@ fn writeMinidump(info: *win32.EXCEPTION_POINTERS) void {
     }
 }
 
-/// Runs before Zig's segfault handler rewrites OS faults into an indistinguishable @breakpoint(); logs only the fault types Zig treats specially, passing everything else through silently.
+/// Runs before Zig's segfault handler, which rewrites these faults into an indistinguishable @breakpoint().
 fn firstChanceExceptionHandler(info: *win32.EXCEPTION_POINTERS) callconv(.c) win32.LONG {
     const record = info.ExceptionRecord orelse return win32.EXCEPTION_CONTINUE_SEARCH;
     switch (record.ExceptionCode) {
@@ -76,8 +78,34 @@ fn firstChanceExceptionHandler(info: *win32.EXCEPTION_POINTERS) callconv(.c) win
     } else {
         log.writeCrashLine("First-chance exception 0x{x} at address 0x{x} (module base 0x{x}, RVA 0x{x})", .{ record.ExceptionCode, address, base, address -% base });
     }
+    logFaultLocation(info, address);
     logReturnRvas(base);
     return win32.EXCEPTION_CONTINUE_SEARCH;
+}
+
+/// Names the modules holding the faulting code and the word on top of its stack, which after a call through a null pointer is the caller's return address.
+fn logFaultLocation(info: *win32.EXCEPTION_POINTERS, code_address: usize) void {
+    var code_buf: [LOCATION_LEN]u8 = undefined;
+    const code = describeAddress(&code_buf, code_address);
+    const context = info.ContextRecord orelse {
+        log.writeCrashLine("  Thread {d}, code {s}, no context record", .{ win32.GetCurrentThreadId(), code });
+        return;
+    };
+    const stack_top: ?*align(1) const usize = @ptrFromInt(context.getRegs().sp);
+    const top_word = if (stack_top) |word| word.* else 0;
+    var top_buf: [LOCATION_LEN]u8 = undefined;
+    log.writeCrashLine("  Thread {d}, code {s}; top of stack 0x{x} {s}", .{ win32.GetCurrentThreadId(), code, top_word, describeAddress(&top_buf, top_word) });
+}
+
+/// The module's path and the offset into it, so code in another DLL, e.g. a Vulkan layer, is named.
+fn describeAddress(buf: *[LOCATION_LEN]u8, address: usize) []const u8 {
+    var module: ?win32.HMODULE = null;
+    const flags = win32.GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | win32.GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+    if (address == 0 or !win32.toBool(win32.GetModuleHandleExA(flags, @ptrFromInt(address), &module))) return "in no module";
+    const handle = module orelse return "in no module";
+    var path_buf: [win32.MAX_PATH:0]u8 = undefined;
+    const path_len = win32.GetModuleFileNameA(handle, &path_buf, path_buf.len);
+    return std.fmt.bufPrint(buf, "in '{s}' +0x{x}", .{ path_buf[0..path_len], address -% @intFromPtr(handle) }) catch unreachable;
 }
 
 /// Unsymbolized, since loading the .pdb mid-fault can fault again; the RVAs are resolved offline against the release build's .pdb.
@@ -91,12 +119,12 @@ fn logReturnRvas(base: usize) void {
     log.writeCrashLine("  Return RVAs:{s}", .{writer.buffered()});
 }
 
-/// Last handler in the chain, after Zig's own panic/segfault handling already ran (if any); returns EXCEPTION_CONTINUE_SEARCH so Windows' normal handling still runs after.
+/// Runs after Zig's own panic and segfault handling; continues the search so Windows' crash handling still runs.
 fn unhandledExceptionFilter(info: *win32.EXCEPTION_POINTERS) callconv(.c) win32.LONG {
     const base: usize = if (win32.GetModuleHandleA(null)) |h| @intFromPtr(h) else 0;
     if (info.ExceptionRecord) |record| {
         const address: usize = if (record.ExceptionAddress) |a| @intFromPtr(a) else 0;
-        // Wrapping sub: a wild jump could fault below the module base and this handler must not itself panic on overflow.
+        // Wrapping, since a wild jump can fault below the module base.
         log.writeCrashLine("Unhandled exception 0x{x} at address 0x{x} (module base 0x{x}, RVA 0x{x})", .{ record.ExceptionCode, address, base, address -% base });
     } else {
         log.writeCrashLine("Unhandled exception (no exception record), module base 0x{x}", .{base});

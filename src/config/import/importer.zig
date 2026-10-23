@@ -70,7 +70,7 @@ pub fn analyze(json_writer: *std.json.Stringify, arena: std.mem.Allocator, text:
     try json_writer.endObject();
 }
 
-/// Edits bringing the `chosen` sections of the file into `doc`. `cycle_group_name` names EVE-O Preview's unnamed groups ("Cycle Group {n}").
+/// `cycle_group_name` names EVE-O Preview's unnamed groups ("Cycle Group {n}").
 pub fn build(arena: std.mem.Allocator, text: []const u8, source_profile: ?[]const u8, chosen: []const []const u8, cycle_group_name: []const u8, doc: *const config.Config) !Built {
     var draft: Draft = .init(arena);
     const source = try detect(arena, text) orelse return error.InvalidSettingsFile;

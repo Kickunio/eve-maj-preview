@@ -1,17 +1,18 @@
 //! Registering hotkeys and dispatching each press to its action.
 const std = @import("std");
 const win32 = @import("../platform/win32.zig");
-const focus_grant = @import("../platform/focus_grant.zig");
 const vk = @import("../platform/virtual_keys.zig");
 const scout = @import("../clients/scout.zig");
 const actions = @import("../clients/actions.zig");
 const exclusions_mod = @import("../clients/exclusions.zig");
 const config_mod = @import("../config.zig");
-const protocol = @import("../protocol.zig");
+const url = @import("../protocol/url.zig");
 const app_mod = @import("../app.zig");
 const alert_effects = @import("../notifications/alert_effects.zig");
+const notified_queue_mod = @import("../notifications/notified_queue.zig");
 const mouse_hook = @import("mouse_hook.zig");
 const keyboard_hook = @import("keyboard_hook.zig");
+const hook_bindings = @import("hook_bindings.zig");
 const bindings = @import("bindings.zig");
 const cycling = @import("cycling.zig");
 const cycle_order = @import("cycle_order.zig");
@@ -35,7 +36,7 @@ const ComboSharers = struct {
 
 pub const HotkeyManager = struct {
     allocator: std.mem.Allocator,
-    /// Outlives the manager; its thumbnail set is read from here each time, since a rebuild replaces it.
+    /// Outlives the manager; for app-level actions, and its thumbnail set, read from here each time since a rebuild replaces it.
     app: *app_mod.App,
     /// The saved copy, for the bindings and the groups and characters their ids index into; other settings read live().
     config: *const config_mod.Config,
@@ -55,6 +56,12 @@ pub const HotkeyManager = struct {
     cycle: cycling.CycleState,
     /// Borrowed from `app`, which keeps them across the Save that recreates the manager.
     exclusions: *exclusions_mod.Exclusions,
+    /// Borrowed from `app`, which keeps it across the Save that recreates the manager.
+    notified_queue: *const notified_queue_mod.NotifiedQueue,
+    /// Borrowed from `app`'s focus tracker, which keeps it across the Save that recreates the manager.
+    last_non_eve_foreground: *?win32.HWND,
+    /// What syncFocusFilter last handed the hook thread; null until it first does, so a recreated manager sends it again.
+    sent_focus_filter: ?hook_bindings.FocusFilter = null,
 
     /// Registers from the profile's saved copy, since bindings only change on Save.
     pub fn init(allocator: std.mem.Allocator, app: *app_mod.App, live_global: *const fn () *const config_mod.GlobalConfig) !HotkeyManager {
@@ -70,6 +77,8 @@ pub const HotkeyManager = struct {
             .hotkey_map = .init(allocator),
             .cycle = try cycling.CycleState.init(allocator, config.hotkeyGroups.items.len),
             .exclusions = &app.exclusions,
+            .notified_queue = &app.notifications.notified_queue,
+            .last_non_eve_foreground = &app.focus.last_non_eve_foreground,
         };
     }
 
@@ -94,8 +103,8 @@ pub const HotkeyManager = struct {
     }
 
     /// Either hook re-posts a match to `hwnd` as WM_HOTKEY.
-    fn hookKey(self: *const HotkeyManager, hwnd: win32.HWND, id: c_int, virtual_key: u32) !void {
-        if (vk.isMouseHookVk(vk.extractVk(virtual_key))) try mouse_hook.register(self.allocator, hwnd, virtual_key, id) else try keyboard_hook.register(self.allocator, hwnd, virtual_key, id);
+    fn hookKey(hwnd: win32.HWND, id: c_int, virtual_key: u32) !void {
+        if (vk.isMouseHookVk(vk.extractVk(virtual_key))) try mouse_hook.register(hwnd, virtual_key, id) else try keyboard_hook.register(hwnd, virtual_key, id);
     }
 
     fn unhookKey(virtual_key: u32) void {
@@ -107,7 +116,7 @@ pub const HotkeyManager = struct {
         var key_name_buf: [KEY_NAME_SIZE]u8 = undefined;
         var registered: KeyList = .empty;
         for (keys.slice()) |virtual_key| {
-            self.hookKey(hwnd, id, virtual_key) catch |err| {
+            hookKey(hwnd, id, virtual_key) catch |err| {
                 slog.err("Failed to register hotkey {s} ({s}): {}", .{ formatKeyName(virtual_key, &key_name_buf), description, err });
                 continue;
             };
@@ -161,6 +170,14 @@ pub const HotkeyManager = struct {
         return failed_count;
     }
 
+    /// Returns how many of the group's `keys` failed to register.
+    fn registerGroupKey(self: *HotkeyManager, hwnd: win32.HWND, base: c_int, group_index: usize, keys: KeyList, action: HotkeyAction, comptime verb: []const u8) usize {
+        if (keys.isEmpty()) return 0;
+        var description_buf: [DESCRIPTION_SIZE]u8 = undefined;
+        const description = formatDescription(&description_buf, "group {} [{s}] " ++ verb, .{ group_index, self.config.hotkeyGroups.items[group_index].name }, "group " ++ verb);
+        return self.registerKeys(hwnd, bindings.bandId(base, group_index), keys, action, description);
+    }
+
     /// Returns how many of the binding's keys failed to register.
     fn registerGlobal(self: *HotkeyManager, hwnd: win32.HWND, comptime binding: bindings.GlobalBinding) usize {
         return self.registerKeys(hwnd, bindings.globalId(binding.action), self.bindingKeys(binding), bindings.actionFor(binding.action), binding.description);
@@ -209,13 +226,18 @@ pub const HotkeyManager = struct {
         var failed_count: usize = 0;
         var description_buf: [DESCRIPTION_SIZE]u8 = undefined;
 
+        // First, since a combo bound twice stays with whoever registers it first, and suspend and exit must keep theirs.
+        inline for (bindings.GLOBAL_BINDINGS) |binding| {
+            failed_count += self.registerGlobal(hwnd, binding);
+        }
+
         failed_count += self.registerGroupChains(hwnd, forward_chains.items, true);
         failed_count += self.registerGroupChains(hwnd, backward_chains.items, false);
 
         for (self.config.hotkeyGroups.items, 0..) |*group, group_index| {
-            if (group.assignKey.isEmpty()) continue;
-            const description = formatDescription(&description_buf, "group {} [{s}] assign", .{ group_index, group.name }, "group assign");
-            failed_count += self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_ASSIGN_GROUP_BASE, group_index), group.assignKey, .{ .assign_group = .{ .group_index = group_index } }, description);
+            failed_count += self.registerGroupKey(hwnd, bindings.HOTKEY_ID_ASSIGN_GROUP_BASE, group_index, group.assignKey, .{ .assign_group = .{ .group_index = group_index } }, "assign");
+            failed_count += self.registerGroupKey(hwnd, bindings.HOTKEY_ID_MINIMIZE_GROUP_BASE, group_index, group.minimizeKey, .{ .minimize_group = .{ .group_index = group_index } }, "minimize");
+            failed_count += self.registerGroupKey(hwnd, bindings.HOTKEY_ID_CLOSE_GROUP_BASE, group_index, group.closeKey, .{ .close_group = .{ .group_index = group_index } }, "close");
         }
 
         for (per_character_groups.items, 0..) |*group, group_index| {
@@ -256,10 +278,6 @@ pub const HotkeyManager = struct {
             failed_count += self.registerKeys(hwnd, bindings.bandId(bindings.HOTKEY_ID_URL_HOTKEY_BASE, index), url_hotkey.hotkey, .{ .open_url = .{ .url_index = index } }, description);
         }
 
-        inline for (bindings.GLOBAL_BINDINGS) |binding| {
-            failed_count += self.registerGlobal(hwnd, binding);
-        }
-
         const success_count: usize = self.hotkey_map.count();
         if (failed_count > 0) {
             if (success_count == 0) {
@@ -289,17 +307,14 @@ pub const HotkeyManager = struct {
         self.hotkey_map.clearRetainingCapacity();
     }
 
-    /// Handles a WM_HOTKEY press; `lParam` is used only to recover the vk code for release-consumption.
+    /// Handles a WM_HOTKEY press; `lParam` says whether it's a held key's auto-repeat.
     pub fn handleHotkeyPress(self: *HotkeyManager, hotkey_id: c_int, lParam: win32.LPARAM) void {
         const action = self.hotkey_map.getPtr(hotkey_id) orelse {
             slog.warn("Received unknown hotkey ID: {}", .{hotkey_id});
             return;
         };
 
-        // Auto-repeat while a key is held isn't filtered by the keyboard hook, so this must run before every early return or held keys would re-fire.
-        const vk_code = win32.hotkeyVkFromLparam(lParam);
-        const is_repeat = !keyboard_hook.trackPress(self.allocator, vk_code);
-        if (is_repeat and !self.live().hotkeys.allowHotkeyAutoRepeat) {
+        if (hook_bindings.isRepeat(lParam) and !self.live().hotkeys.allowHotkeyAutoRepeat) {
             slog.debug("Hotkey {} ignored - key-repeat re-fire while held", .{hotkey_id});
             return;
         }
@@ -319,25 +334,51 @@ pub const HotkeyManager = struct {
             return;
         }
 
+        // Checked again after the hook's check, since focus can move before this message arrives.
         if (self.live().hotkeys.requireEveFocus and self.foregroundEveWindow() == null) {
             slog.debug("Hotkey {} ignored - EVE window not in focus", .{hotkey_id});
             return;
         }
 
-        // Only swallow the key's release if focus actually moved; a cycle with no eligible target never changes foreground.
-        focus_grant.g_focus_switch_requested = false;
-
         self.runAction(action);
+    }
 
-        // Win's release always needs swallowing, focus-change or not - an unmatched keyup still opens the Start Menu.
-        if (focus_grant.g_focus_switch_requested or vk_code == win32.VK_LWIN or vk_code == win32.VK_RWIN) {
-            keyboard_hook.markSwallowRelease(vk_code);
+    /// Per tick: hands the hook thread the windows and setting the require-EVE-focus check needs, whenever they change, so it can let keys through to other apps.
+    pub fn syncFocusFilter(self: *HotkeyManager, windows: []const scout.EveWindow) void {
+        var filter: hook_bindings.FocusFilter = .{
+            .is_required = self.live().hotkeys.requireEveFocus,
+            .exempt_id = bindings.globalId(.suspend_hotkeys),
+        };
+        const is_complete = for (windows) |eve_window| {
+            if (!filter.add(eve_window.hwnd)) break false;
+        } else true;
+        if (self.sent_focus_filter) |*sent| {
+            if (sent.eql(&filter)) return;
         }
+        if (!is_complete) slog.warn("Failed to pass every window to the require-EVE-focus check: over {} tracked, so hotkeys pass through in the rest", .{filter.window_count});
+        if (hook_bindings.setFocusFilter(filter)) self.sent_focus_filter = filter;
     }
 
     /// Runs a global action requested outside a hotkey press (protocol URL, tray menu), bypassing the press-only suspend/focus gating.
-    pub fn runGlobalAction(self: *HotkeyManager, action: protocol.GlobalAction) void {
+    pub fn runGlobalAction(self: *HotkeyManager, action: url.GlobalAction) void {
         var hotkey_action = bindings.fromProtocol(action);
+        self.runAction(&hotkey_action);
+    }
+
+    /// Like runGlobalAction, for the hotkey group named `group_name`; a cycle runs that group alone, even if its key is shared.
+    pub fn runGroupAction(self: *HotkeyManager, action: url.GroupAction, group_name: []const u8) void {
+        const group_index = self.config.hotkeyGroupIndex(group_name) orelse {
+            slog.warn("Failed to run group '{s}': no hotkey group named '{s}'", .{ @tagName(action), group_name });
+            return;
+        };
+        const group_indices = [_]usize{group_index};
+        var hotkey_action: HotkeyAction = switch (action) {
+            .next => .{ .cycle_group = .{ .group_indices = &group_indices, .is_forward = true } },
+            .previous => .{ .cycle_group = .{ .group_indices = &group_indices, .is_forward = false } },
+            .assign => .{ .assign_group = .{ .group_index = group_index } },
+            .minimize => .{ .minimize_group = .{ .group_index = group_index } },
+            .close => .{ .close_group = .{ .group_index = group_index } },
+        };
         self.runAction(&hotkey_action);
     }
 
@@ -347,6 +388,14 @@ pub const HotkeyManager = struct {
             .cycle_group => |chain| cycling.cycleGroups(self, chain.group_indices, chain.is_forward),
             .activate_character => |*character_group| cycling.activatePerCharacterGroup(self, character_group),
             .assign_group => |assign| membership.assignHoveredToGroup(self, assign.group_index),
+            .minimize_group => |minimize| {
+                slog.info("Minimize group hotkey pressed", .{});
+                actions.applyToGroup(self.scout.getWindows(), self.live(), self.config.hotkeyGroups.items, minimize.group_index, .minimize);
+            },
+            .close_group => |close| {
+                slog.info("Close group hotkey pressed", .{});
+                actions.applyToGroup(self.scout.getWindows(), self.live(), self.config.hotkeyGroups.items, close.group_index, .close);
+            },
             .minimize_all => {
                 slog.info("Minimize all hotkey pressed", .{});
                 actions.minimizeAllClients(self.scout.getWindows(), self.live());
@@ -382,7 +431,7 @@ pub const HotkeyManager = struct {
                 const thumbnail_set = self.app.thumbnail_set orelse return;
                 actions.moveAllClientsToSavedPositions(self.scout.getWindows(), self.live(), thumbnail_set);
             },
-            .return_to_last_app => launch.returnToLastApp(&self.app.focus.last_non_eve_foreground),
+            .return_to_last_app => launch.returnToLastApp(self.last_non_eve_foreground),
             .next_app => launch.cycleApps(self.global_settings, true),
             .previous_app => launch.cycleApps(self.global_settings, false),
             .exit_app => {
@@ -390,8 +439,15 @@ pub const HotkeyManager = struct {
                 app_mod.requestExit();
             },
             .close_active => self.closeForegroundClient(),
+            .toggle_dragging => self.app.toggleDragging(),
+            .toggle_travel_mode => self.app.toggleTravelMode(),
+            .toggle_notification_history => self.app.toggleNotificationHistory(),
+            .clear_notification_history => {
+                slog.info("Clear notification history hotkey pressed", .{});
+                self.app.notifications.history.clear();
+            },
             .activate_app => |activate| launch.activateApp(self.global_settings, activate.app_index),
-            .open_url => |open_url| launch.openUrl(self.allocator, self.app.io, self.global_settings, open_url.url_index),
+            .open_url => |open_url| launch.openUrl(self.allocator, self.global_settings, open_url.url_index),
         }
     }
 
@@ -423,9 +479,7 @@ pub const HotkeyManager = struct {
             return;
         }
         slog.info("Close active hotkey pressed for: {s}", .{eve_window.character_name});
-        if (!win32.toBool(win32.PostMessageA(eve_window.hwnd, win32.WM_CLOSE, 0, 0))) {
-            slog.warn("Failed to send close to '{s}'", .{eve_window.character_name});
-        }
+        _ = actions.closeClient(eve_window);
     }
 
     fn toggleSuspend(self: *HotkeyManager) void {
@@ -435,7 +489,7 @@ pub const HotkeyManager = struct {
 
         if (self.app.timer_hwnd) |hwnd| {
             if (self.are_hotkeys_suspended) {
-                // The low-level hooks intercept system-wide, so leaving bindings registered while "suspended" would still block other apps from seeing those keys.
+                // Unbound, since the hooks would otherwise keep swallowing these keys system-wide.
                 self.unregisterAll();
                 // Pressing it again must still be able to resume everything else.
                 _ = self.registerGlobal(hwnd, bindings.SUSPEND_BINDING);
@@ -444,7 +498,9 @@ pub const HotkeyManager = struct {
                     slog.err("Failed to re-register hotkeys after resuming: {}", .{err});
                 };
             }
-            _ = win32.PostMessageA(hwnd, win32.WM_HOTKEYS_STATE_CHANGED, 0, 0);
+            if (!win32.toBool(win32.PostMessageA(hwnd, win32.WM_HOTKEYS_STATE_CHANGED, 0, 0))) {
+                slog.warn("Failed to show that hotkeys were {s}: error {d}", .{ state, win32.GetLastError() });
+            }
         }
     }
 
@@ -452,13 +508,13 @@ pub const HotkeyManager = struct {
         return self.are_hotkeys_suspended;
     }
 
-    /// Unregisters every live hotkey (not just gates dispatch) since the low-level hooks swallow matched keys system-wide, so a gate alone would never let the dialog see the keypress.
+    /// Unbinds rather than gates, since the hooks would otherwise swallow the key the dialog is recording.
     pub fn dialogSuspendHotkeys(self: *HotkeyManager) void {
         if (self.is_dialog_suspended) return;
         slog.debug("Config dialog is recording a hotkey - unregistering live hotkeys", .{});
         self.is_dialog_suspended = true;
         self.unregisterAll();
-        keyboard_hook.armWinKeyCapture();
+        if (self.app.timer_hwnd) |hwnd| keyboard_hook.armWinKeyCapture(hwnd);
     }
 
     /// Re-registers from the same in-memory config unregisterAll left untouched, so this restores exactly what was live before.

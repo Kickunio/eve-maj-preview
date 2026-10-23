@@ -3,7 +3,7 @@ const std = @import("std");
 const ui = @import("ui");
 const config = @import("../../../config.zig");
 const types = @import("../../../config/types.zig");
-const list_look = @import("../../../thumbnail/list_look.zig");
+const list_look = @import("../../../panels/list_look.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
 const style = @import("../style.zig");
@@ -113,7 +113,7 @@ const Look = struct {
     }
 };
 
-/// One rate's rows: the overlay switch it shares with the thumbnails, then the list's own show, prefix and colour, each named by its DisplayConfig field.
+/// The overlay switch shared with the thumbnails, then the list's own show, prefix and colour fields.
 const StatRows = struct {
     overlay_label: []const u8,
     show_field: []const u8,
@@ -134,7 +134,7 @@ pub fn reset() void {
 }
 
 pub fn show(context: *ui.Frame, display: DisplayRef) !void {
-    const section = try widgets.openSection(context, "Client List", "A compact panel listing each client by name; click a name to bring that client to the front. Click a part of the preview to change it.", &style.section);
+    const section = try widgets.openSection(context, "Client List", "A compact panel of client names. Click a part of the preview to change it.", &style.section);
     const ui_state = context.ui();
     _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, STAGE_KEY.hash());
     const available_width = widgets.measuredBox(ui_state, STAGE_KEY).w();
@@ -149,16 +149,16 @@ pub fn show(context: *ui.Frame, display: DisplayRef) !void {
     try section.close(context);
 
     try layout(context, display);
-    try appearance(context, display);
+    try fontSection(context, display);
     try visibility(context, display);
     try popover(context, display);
 }
 
 fn layout(context: *ui.Frame, display: DisplayRef) !void {
     const section = try widgets.openSection(context, "Layout", "How the list orders and arranges its clients.", &style.section);
-    try bind.choice(context, display, "listViewOrder", "Order");
+    try bind.segmented(context, display, "listViewOrder", "Order", &.{ "Tracked", "Alphabetical", "Configured" });
     try widgets.hintText(context, .src(@src()), "Configured follows the Characters tab; Tracked is the order clients were found.");
-    try bind.number(context, display, "listViewColumns", "Columns", .{});
+    try bind.number(context, display, "listViewColumns", "Columns", .{ .unit = "columns", .singular_unit = "column" });
     try widgets.hintText(context, .src(@src()), "Splits the list into this many columns.");
     try bind.number(context, display, "listViewColumnWidth", "Column Width", .{ .unit = "px" });
     try widgets.hintText(context, .src(@src()), "Long names are cut short to fit.");
@@ -167,8 +167,8 @@ fn layout(context: *ui.Frame, display: DisplayRef) !void {
     try section.close(context);
 }
 
-fn appearance(context: *ui.Frame, display: DisplayRef) !void {
-    const section = try widgets.openSection(context, "Appearance", "The list's font.", &style.section);
+fn fontSection(context: *ui.Frame, display: DisplayRef) !void {
+    const section = try widgets.openSection(context, "Font", "The typeface, size and weight the list's text uses.", &style.section);
     const font = try widgets.openBinding(context, .src(@src()), "Font");
     try bind.fontBox(context, display, "listViewFontName");
     try bind.unitNumberBox(context, display, "listViewFontSize", "px", .{});
@@ -179,7 +179,7 @@ fn appearance(context: *ui.Frame, display: DisplayRef) !void {
 }
 
 fn visibility(context: *ui.Frame, display: DisplayRef) !void {
-    const section = try widgets.openSection(context, "Position and Visibility", "Where the list opens, how see-through it is, and when it's hidden automatically.", &style.section);
+    const section = try widgets.openSection(context, "Position and Visibility", "Where the list opens, how see-through it is, and when it hides.", &style.section);
     try bind.toggle(context, display, "rememberListViewPosition", "Remember Position");
     try widgets.hintText(context, .src(@src()), "Opens the list where you last left it.");
     try bind.slider(context, display, "listViewOpacity", "Opacity", .{ .display = .percent_of_255 });
@@ -438,6 +438,8 @@ fn settings(context: *ui.Frame, display: DisplayRef, part: Part) !bool {
 
     const was_aligned = widgets.useAlignedRows(true);
     defer _ = widgets.useAlignedRows(was_aligned);
+    const was_compact = widgets.useCompactRows(true);
+    defer _ = widgets.useCompactRows(was_compact);
     switch (part) {
         .active => {
             try bind.toggle(context, display, "listViewUseUniqueActiveColors", "Unique Character Active Colors");
@@ -527,7 +529,7 @@ fn requirementNotices(context: *ui.Frame, part: Part) !void {
     if (part == .notifications and !profile.thumbnail.notifications.enabled) try widgets.notice(context, .src(@src()), "Requires Notification System switched on in the Notifications tab.");
 }
 
-/// `overlay` is the session.Ref of the rate's overlay settings, e.g. combat's; its `enabled` is shared with the thumbnails' text, and the list shows the rate only while it's on.
+/// `overlay` is the rate's overlay session.Ref; its `enabled`, shared with the thumbnails, gates the list's rate.
 fn statSettings(context: *ui.Frame, display: DisplayRef, overlay: anytype, comptime rows: StatRows) !void {
     try bind.toggle(context, overlay, "enabled", rows.overlay_label);
     try widgets.hintText(context, .str("knots.client_list.overlay.hint:" ++ rows.show_field), "Also turns it on for thumbnails.");

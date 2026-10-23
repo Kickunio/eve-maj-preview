@@ -13,15 +13,8 @@ const OVERRIDES = std.StaticStringMap([]const u8).initComptime(.{
     .{ "RegionFitDirection.ColumnFirst_BTT_LTR", "Columns \u{2191} \u{2192}" },
     .{ "RegionFitDirection.ColumnFirst_BTT_RTL", "Columns \u{2191} \u{2190}" },
     .{ "BorderStyle.DashDot", "Dash-Dot" },
-    .{ "ListViewOrder.Tracked", "Tracked Order" },
-    .{ "ListViewOrder.ConfiguredCharacters", "Configured Character Order" },
-    .{ "ClickTrigger.MouseDown", "Mouse Down (Instant)" },
-    .{ "ClickTrigger.MouseUp", "Mouse Up (On Release)" },
+    .{ "ExclusionOverlayStyle.X", "Cross" },
     .{ "HoverCursor.Default", "Default (Arrow)" },
-    .{ "TravelThresholdMode.percent", "Percentage of characters" },
-    .{ "TravelThresholdMode.count", "Fixed number of characters" },
-    .{ "IskRateUnit.minute", "Per Minute" },
-    .{ "IskRateUnit.hour", "Per Hour" },
     .{ "LogLevel.warn", "Warning" },
     .{ "LogLevel.err", "Error" },
     // Each language in its own words, so it can be found whatever the window is showing.
@@ -33,6 +26,51 @@ const OVERRIDES = std.StaticStringMap([]const u8).initComptime(.{
     .{ "Language.pt", "Português" },
     .{ "Language.ru", "Русский" },
 });
+
+/// The Hotkeys tab's row label for each fixed binding, keyed by setting name; a back/forward pair's halves share their row's.
+const HOTKEY_LABELS = std.StaticStringMap(HotkeyLabel).initComptime(.{
+    .{ "hotkeyCloseAll", HotkeyLabel{ .text = "Close All Clients" } },
+    .{ "hotkeyCloseActive", HotkeyLabel{ .text = "Close Active Client" } },
+    .{ "hotkeyMinimizeAll", HotkeyLabel{ .text = "Minimize All Clients" } },
+    .{ "hotkeyToggleVisibility", HotkeyLabel{ .text = "Toggle Thumbnail Visibility" } },
+    .{ "hotkeyToggleAutoMinimize", HotkeyLabel{ .text = "Toggle Auto-Minimize" } },
+    .{ "hotkeyMoveToSavedPositions", HotkeyLabel{ .text = "Move Windows to Saved Positions" } },
+    .{ "hotkeyToggleDragging", HotkeyLabel{ .text = "Toggle Thumbnail Dragging" } },
+    .{ "hotkeyToggleTravelMode", HotkeyLabel{ .text = "Toggle Travel Mode" } },
+    .{ "hotkeyToggleNotificationHistory", HotkeyLabel{ .text = "Toggle Notification History" } },
+    .{ "hotkeyClearNotificationHistory", HotkeyLabel{ .text = "Clear Notification History" } },
+    .{ "hotkeyPreviousExcluded", HotkeyLabel{ .text = "Excluded Characters", .half = .back } },
+    .{ "hotkeyNextExcluded", HotkeyLabel{ .text = "Excluded Characters", .half = .forward } },
+    .{ "hotkeyPreviousNotified", HotkeyLabel{ .text = "Notified Characters", .half = .back } },
+    .{ "hotkeyCycleNotified", HotkeyLabel{ .text = "Notified Characters", .half = .forward } },
+    .{ "hotkeyToggleExclusion", HotkeyLabel{ .text = "Toggle Character Exclusion" } },
+    .{ "hotkeySuspend", HotkeyLabel{ .text = "Toggle Suspend Hotkeys" } },
+    .{ "hotkeyToggleAlertMute", HotkeyLabel{ .text = "Mute Audio Alerts" } },
+    .{ "hotkeyExitApp", HotkeyLabel{ .text = "Exit App" } },
+    .{ "hotkeyCycleAllClientsBackward", HotkeyLabel{ .text = "Logged-In Clients", .half = .back } },
+    .{ "hotkeyCycleAllClientsForward", HotkeyLabel{ .text = "Logged-In Clients", .half = .forward } },
+    .{ "hotkeyCycleNotLoggedInBackward", HotkeyLabel{ .text = "Logged-Out Clients", .half = .back } },
+    .{ "hotkeyCycleNotLoggedInForward", HotkeyLabel{ .text = "Logged-Out Clients", .half = .forward } },
+    .{ "hotkeyPreviousProfile", HotkeyLabel{ .text = "Profile", .half = .back } },
+    .{ "hotkeyNextProfile", HotkeyLabel{ .text = "Profile", .half = .forward } },
+    .{ "hotkeyReturnToLastApp", HotkeyLabel{ .text = "Return to Last App" } },
+    .{ "hotkeyCycleAppsBackward", HotkeyLabel{ .text = "Cycle Apps", .half = .back } },
+    .{ "hotkeyCycleAppsForward", HotkeyLabel{ .text = "Cycle Apps", .half = .forward } },
+});
+
+/// Which half of a back/forward row a hotkey is, or `none` for a row of its own.
+pub const Half = enum { none, back, forward };
+
+pub const HotkeyLabel = struct {
+    /// English, translated where shown.
+    text: []const u8,
+    half: Half = .none,
+};
+
+/// A compile error for a fixed hotkey setting with no label, so a new one can't be left out.
+pub fn hotkeyLabel(comptime field: []const u8) HotkeyLabel {
+    return comptime HOTKEY_LABELS.get(field) orelse @compileError("no label for hotkey setting " ++ field);
+}
 
 /// An enum's tags as words, in declaration order: "TopLeft" reads "Top Left", unless OVERRIDES has better.
 pub fn enumLabels(comptime E: type) [std.enums.values(E).len][]const u8 {
@@ -84,10 +122,10 @@ test "spellOut keeps a run of capitals together" {
 }
 
 test "enumLabels takes an override by the enum's own name" {
-    const IskRateUnit = enum { minute, hour };
-    const labels = comptime enumLabels(IskRateUnit);
-    try std.testing.expectEqualStrings("Per Minute", labels[0]);
-    try std.testing.expectEqualStrings("Per Hour", labels[1]);
+    const HoverCursor = enum { Default, Hand };
+    const labels = comptime enumLabels(HoverCursor);
+    try std.testing.expectEqualStrings("Default (Arrow)", labels[0]);
+    try std.testing.expectEqualStrings("Hand", labels[1]);
 }
 
 test "enumLabels follows the enum's declaration order" {

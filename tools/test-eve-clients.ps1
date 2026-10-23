@@ -16,7 +16,7 @@
   in) under your control.
 
   It also writes real-format chatlog/gamelog fixture files (UTF-16LE
-  chatlogs, UTF-8-BOM gamelogs) that you can append simulated events to
+  chatlogs, UTF-8-BOM gamelogs, stamped in UTC like EVE's) that you can append simulated events to
   (bounty payouts, mining, combat, jumps) while the app is watching them.
 
   Everything is confined to -WorkDir. Nothing under the real
@@ -39,8 +39,30 @@
   default (Minimized) rather than Hidden, since a hidden process running
   under a renamed system binary is the kind of pattern AV/EDR flags.
 
+.PARAMETER Actions
+  Steps to run instead of the menu, in order, as "verb|arg|..."; the script
+  then stops every client and exits, unless -KeepOpen. Verbs:
+    wait|seconds
+    start|char            kill|char
+    login|char            logout|char
+    jump|char|system                  gamelog and Local, like [j]
+    gamejump|char|system[|age]        gamelog jump line only
+    local|char|system[|age]           Local change only, like [l]
+    event|char|kind                   one Add-GamelogEvent kind, e.g. FleetInvite
+    burst|char|kind[|seconds]         bounty, mining, combatIn, combatOut, miss, combatMixed
+    status
+  An age (seconds) stamps the line that far in the past, as a log read late
+  would be, and leaves the character where it was.
+
+.PARAMETER KeepOpen
+  After -Actions, show the menu instead of exiting.
+
 .EXAMPLE
   .\test-eve-clients.ps1 -CharacterNames 'Aria Kestrel','Dax Solano'
+
+.EXAMPLE
+  .\test-eve-clients.ps1 -CharacterNames 'Test Client 1' -Actions 'wait|10', 'gamejump|Test Client 1|Amarr', 'wait|2', 'local|Test Client 1|Rens|5', 'wait|3'
+  Writes a Local change stamped 5s before the gamelog jump already read, which the app should ignore as stale.
 #>
 [CmdletBinding()]
 param(
@@ -53,7 +75,9 @@ param(
     [string]$WindowStyle = 'Minimized',
     # Stretched to fill each simulated window so it looks like the game, not a blank box.
     [string]$BackgroundImageUrl = 'http://i.mjst.cc/wZvLshTidi.png',
-    [switch]$NoBackgroundImage
+    [switch]$NoBackgroundImage,
+    [string[]]$Actions = @(),
+    [switch]$KeepOpen
 )
 
 $ErrorActionPreference = 'Stop'
@@ -355,7 +379,7 @@ function New-GamelogFile {
 function Add-GamelogEvent {
     param([string]$Path, [string]$Kind, [string]$Destination = 'Jita')
 
-    $ts = (Get-Date).ToString('yyyy.MM.dd HH:mm:ss')
+    $ts = [DateTime]::UtcNow.ToString('yyyy.MM.dd HH:mm:ss')
     $line = switch ($Kind) {
         'bounty' {
             $amount = Get-Random -Minimum 1000 -Maximum 500000
@@ -497,14 +521,14 @@ $script:BurstScriptBlock = {
             $parts = $entry.Split([char]'|', 2)
             $wait = ($start.AddSeconds([int]$parts[0]) - (Get-Date)).TotalMilliseconds
             if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }
-            $ts = (Get-Date).ToString('yyyy.MM.dd HH:mm:ss')
+            $ts = [DateTime]::UtcNow.ToString('yyyy.MM.dd HH:mm:ss')
             [System.IO.File]::AppendAllText($Path, "[ $ts ] $($parts[1])`r`n", [System.Text.Encoding]::UTF8)
         }
         return
     }
     $end = (Get-Date).AddSeconds($DurationSeconds)
     while ((Get-Date) -lt $end) {
-        $ts = (Get-Date).ToString('yyyy.MM.dd HH:mm:ss')
+        $ts = [DateTime]::UtcNow.ToString('yyyy.MM.dd HH:mm:ss')
         $tickKind = if ($Kind -eq 'combatMixed') {
             Get-Random -InputObject @('combatIn', 'combatOut', 'miss')
         } else {
@@ -611,7 +635,7 @@ $script:JumpScriptBlock = {
     $current = $FromSystem
     for ($i = 0; $i -lt $Systems.Count; $i++) {
         $dest = $Systems[$i]
-        $ts = (Get-Date).ToString('yyyy.MM.dd HH:mm:ss')
+        $ts = [DateTime]::UtcNow.ToString('yyyy.MM.dd HH:mm:ss')
         $gameLine = "[ $ts ] Jumping from $current to $dest`r`n"
         [System.IO.File]::AppendAllText($GamelogPath, $gameLine, [System.Text.Encoding]::UTF8)
         $chatLine = "$bomChar[ $ts ] EVE System > Channel changed to Local : $dest`r`n"
@@ -629,18 +653,18 @@ function Start-JumpSequence {
 }
 
 function Add-ChatlogJump {
-    param([string]$Path, [string]$System)
+    param([string]$Path, [string]$System, [int]$AgeSeconds = 0)
 
-    $ts = (Get-Date).ToString('yyyy.MM.dd HH:mm:ss')
+    $ts = [DateTime]::UtcNow.AddSeconds(-$AgeSeconds).ToString('yyyy.MM.dd HH:mm:ss')
     $line = Format-ChatlogLine -Ts $ts -Text "EVE System > Channel changed to Local : $System"
     [System.IO.File]::AppendAllText($Path, $line, [System.Text.Encoding]::Unicode)
     return $line
 }
 
 function Add-GamelogJump {
-    param([string]$Path, [string]$From, [string]$To)
+    param([string]$Path, [string]$From, [string]$To, [int]$AgeSeconds = 0)
 
-    $ts = (Get-Date).ToString('yyyy.MM.dd HH:mm:ss')
+    $ts = [DateTime]::UtcNow.AddSeconds(-$AgeSeconds).ToString('yyyy.MM.dd HH:mm:ss')
     $line = "[ $ts ] Jumping from $From to $To`r`n"
     [System.IO.File]::AppendAllText($Path, $line, [System.Text.Encoding]::UTF8)
     return $line
@@ -665,7 +689,7 @@ function Start-SimClient {
     # Like a real client launch: fresh session logs dated now, so they're among the newest EMP scans; only the last system carries over.
     $existingState = Get-CharacterState -CharName $CharName
     $startSystem = if ($existingState) { $existingState.System } else { 'Jita' }
-    $now = Get-Date
+    $now = [DateTime]::UtcNow
     $chatlogPath = New-ChatlogFile -CharName $CharName -CharId $charId -Dir $ChatlogDir -Started $now -System $startSystem
     $gamelogPath = New-GamelogFile -CharName $CharName -CharId $charId -Dir $GamelogDir -Started $now
     Save-CharacterState -CharName $CharName -ChatlogPath $chatlogPath -GamelogPath $gamelogPath -System $startSystem
@@ -918,6 +942,74 @@ function Start-TravelModeTest {
     Write-Host "Then use 'j' to jump $StragglerName to $dest and confirm the alert clears." -ForegroundColor DarkYellow
 }
 
+# -Via local is a pod or filament move, with no gamelog jump line; an -AgeSeconds line is stale, so the character stays put.
+function Move-Character {
+    param([string]$CharName, [string]$System, [ValidateSet('both', 'gamelog', 'local')][string]$Via = 'both', [int]$AgeSeconds = 0)
+
+    $c = $clients[$CharName]
+    if ($Via -ne 'local') {
+        Add-GamelogJump -Path $c.Gamelog -From $c.System -To $System -AgeSeconds $AgeSeconds | Write-Host
+    }
+    if ($Via -ne 'gamelog') {
+        $chatLine = Add-ChatlogJump -Path $c.Chatlog -System $System -AgeSeconds $AgeSeconds
+        if ($Via -eq 'local') { Write-Host $chatLine }
+    }
+    if ($AgeSeconds -gt 0) { return }
+    $c.System = $System
+    Save-CharacterState -CharName $CharName -ChatlogPath $c.Chatlog -GamelogPath $c.Gamelog -System $c.System
+}
+
+function Set-CharacterLogin {
+    param([string]$CharName, [switch]$Out)
+
+    $c = $clients[$CharName]
+    if ($Out) {
+        Set-Content -Path $c.ControlFile -Value 'logout' -NoNewline
+        $c.LoggedIn = $false
+        Write-Host "$CharName is now logged out (title -> `"EVE`")"
+        return
+    }
+    Set-Content -Path $c.ControlFile -Value 'login' -NoNewline
+    $c.LoggedIn = $true
+    # Real EVE starts a fresh Chatlog/Gamelog file per login session; mirror that here.
+    $now = [DateTime]::UtcNow
+    $c.Chatlog = New-ChatlogFile -CharName $CharName -CharId $c.CharId -Dir $ChatlogDir -Started $now -System $c.System
+    $c.Gamelog = New-GamelogFile -CharName $CharName -CharId $c.CharId -Dir $GamelogDir -Started $now
+    Save-CharacterState -CharName $CharName -ChatlogPath $c.Chatlog -GamelogPath $c.Gamelog -System $c.System
+    Write-Host "$CharName is now logged in (new session log files created)"
+}
+
+# One -Actions step; a bad one throws, so a scripted run stops rather than testing something else.
+function Invoke-Action {
+    param([string]$Spec)
+
+    $parts = @($Spec.Split('|') | ForEach-Object { $_.Trim() })
+    $verb = $parts[0].ToLower()
+    $name = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+    $needsClient = $verb -notin @('wait', 'start', 'status')
+    if ($needsClient -and -not $clients.Contains($name)) { throw "Unknown character '$name' in action '$Spec'" }
+    $age = if ($parts.Count -gt 3) { [int]$parts[3] } else { 0 }
+
+    Write-Host "> $Spec" -ForegroundColor DarkCyan
+    switch ($verb) {
+        'wait' { Start-Sleep -Milliseconds ([int]([double]$parts[1] * 1000)) }
+        'start' { Start-SimClient -CharName $name }
+        'kill' { Stop-SimClient -CharName $name -Kill }
+        'login' { Set-CharacterLogin -CharName $name }
+        'logout' { Set-CharacterLogin -CharName $name -Out }
+        'jump' { Move-Character -CharName $name -System $parts[2] }
+        'gamejump' { Move-Character -CharName $name -System $parts[2] -Via gamelog -AgeSeconds $age }
+        'local' { Move-Character -CharName $name -System $parts[2] -Via local -AgeSeconds $age }
+        'event' { Write-Host (Add-GamelogEvent -Path $clients[$name].Gamelog -Kind $parts[2]) }
+        'burst' {
+            $seconds = if ($parts.Count -gt 3) { [int]$parts[3] } else { 60 }
+            Start-CharacterBurst -CharName $name -Kind $parts[2] -DurationSeconds $seconds
+        }
+        'status' { Show-Status }
+        default { throw "Unknown verb '$verb' in action '$Spec'" }
+    }
+}
+
 Write-Host ''
 Write-Host '=== EVE-Zig Preview client simulator ===' -ForegroundColor Cyan
 Write-Host "Chatlog dir: $ChatlogDir"
@@ -946,6 +1038,8 @@ $menu = @'
 # try/finally makes cleanup Ctrl+C-safe: Ctrl+C raises a pipeline-stop that unwinds through finally.
 try {
     foreach ($name in $CharacterNames) { Start-SimClient -CharName $name }
+    foreach ($action in $Actions) { Invoke-Action -Spec $action }
+    if ($Actions.Count -gt 0 -and -not $KeepOpen) { return }
 
 :mainLoop while ($true) {
     Write-Host $menu -ForegroundColor DarkGray
@@ -958,25 +1052,11 @@ try {
         }
         'o' {
             $name = Select-Character
-            if ($name) {
-                Set-Content -Path $clients[$name].ControlFile -Value 'logout' -NoNewline
-                $clients[$name].LoggedIn = $false
-                Write-Host "$name is now logged out (title -> `"EVE`")"
-            }
+            if ($name) { Set-CharacterLogin -CharName $name -Out }
         }
         'i' {
             $name = Select-Character
-            if ($name) {
-                $c = $clients[$name]
-                Set-Content -Path $c.ControlFile -Value 'login' -NoNewline
-                $c.LoggedIn = $true
-                # Real EVE starts a fresh Chatlog/Gamelog file per login session; mirror that here.
-                $now = Get-Date
-                $c.Chatlog = New-ChatlogFile -CharName $name -CharId $c.CharId -Dir $ChatlogDir -Started $now -System $c.System
-                $c.Gamelog = New-GamelogFile -CharName $name -CharId $c.CharId -Dir $GamelogDir -Started $now
-                Save-CharacterState -CharName $name -ChatlogPath $c.Chatlog -GamelogPath $c.Gamelog -System $c.System
-                Write-Host "$name is now logged in (new session log files created)"
-            }
+            if ($name) { Set-CharacterLogin -CharName $name }
         }
         'k' {
             $name = Select-Character
@@ -1002,25 +1082,14 @@ try {
             $name = Select-Character
             if ($name) {
                 $newSystem = Read-Host 'Jump to system'
-                if ($newSystem) {
-                    $c = $clients[$name]
-                    Add-GamelogJump -Path $c.Gamelog -From $c.System -To $newSystem | Write-Host
-                    Add-ChatlogJump -Path $c.Chatlog -System $newSystem | Out-Null
-                    $c.System = $newSystem
-                    Save-CharacterState -CharName $name -ChatlogPath $c.Chatlog -GamelogPath $c.Gamelog -System $c.System
-                }
+                if ($newSystem) { Move-Character -CharName $name -System $newSystem }
             }
         }
         'l' {
             $name = Select-Character
             if ($name) {
                 $newSystem = Read-Host 'Move to system'
-                if ($newSystem) {
-                    $c = $clients[$name]
-                    Add-ChatlogJump -Path $c.Chatlog -System $newSystem | Write-Host
-                    $c.System = $newSystem
-                    Save-CharacterState -CharName $name -ChatlogPath $c.Chatlog -GamelogPath $c.Gamelog -System $c.System
-                }
+                if ($newSystem) { Move-Character -CharName $name -System $newSystem -Via local }
             }
         }
         'r' {

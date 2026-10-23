@@ -8,7 +8,7 @@ const NotificationConfig = notifications_mod.NotificationConfig;
 
 const BORDER_WIDTH = .{ 1, 50 };
 
-/// Which of the per-state visuals a thumbnail draws with; decided live by ThumbnailWindow.effectiveRenderState, never saved.
+/// Decided live by ThumbnailWindow.effectiveRenderState, never saved.
 pub const ThumbnailState = enum {
     inactive,
     active,
@@ -38,8 +38,8 @@ pub const StateVisualConfig = struct {
 };
 
 pub const ThumbnailConfig = struct {
-    width: i32 = 200,
-    height: i32 = 112,
+    width: i32 = 282,
+    height: i32 = 158,
 
     showBorderWhenFocused: bool = true,
     borderWidth: u8 = 2,
@@ -98,7 +98,7 @@ pub const ThumbnailConfig = struct {
     hideWhenNoEveFocus: bool = false,
     hideDebounceMs: u32 = 500,
 
-    /// Defaults set here (not at declaration alone) so null on `active` means "use activeThumbnailHidden" instead of a fixed true/false.
+    /// Only `active` leaves showThumbnail null, meaning "use activeThumbnailHidden".
     active: StateVisualConfig = .{ .showThumbnail = null },
     inactive: StateVisualConfig = .{ .showThumbnail = true },
     alert: StateVisualConfig = .{ .showThumbnail = true },

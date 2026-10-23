@@ -16,9 +16,9 @@ pub const SpaceCounts = [MAX_SPACES]usize;
 
 /// Each thumbnail's space and cell for one layout pass.
 pub const Assignment = struct {
-    /// Per name: index into thumbnailSpaces, or null when it's placed by hand or its thumbnail is hidden. Owned; freed in deinit.
+    /// Per name: index into thumbnailSpaces, or null when it's placed by hand or its thumbnail is hidden; owned, freed in deinit.
     space_indices: []?usize,
-    /// Per name: its cell within its space; unused when placed by hand. Owned; freed in deinit.
+    /// Per name: its cell within its space; unused when placed by hand; owned, freed in deinit.
     rank: []usize,
     counts: SpaceCounts = @splat(0),
 

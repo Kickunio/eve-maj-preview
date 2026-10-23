@@ -7,7 +7,7 @@ Every setting EVE-Maj Preview reads, by file and JSON key. The config dialog wri
 - [Files](#files)
 - [Loading rules](#loading-rules)
 - [Value formats](#value-formats)
-- [Profile](#profile): [top level](#top-level) · [thumbnail](#thumbnail) · [thumbnail.notifications](#thumbnailnotifications) · [timer](#timer) · [display](#display) · [thumbnailSpaces](#thumbnailspaces) · [snapping](#snapping) · [interaction](#interaction) · [exclusion](#exclusion) · [autoMinimize](#autominimize) · [autoMovePosition](#automoveposition) · [closeAll](#closeall) · [chatlog](#chatlog) · [combat](#combat) · [mining](#mining) · [bounty](#bounty) · [resources](#resources) · [travel](#travel) · [hotkeys](#hotkeys) · [hotkeyGroups](#hotkeygroups) · [characters](#characters) · [systemColors](#systemcolors) · [windowFilters](#windowfilters)
+- [Profile](#profile): [top level](#top-level) · [thumbnail](#thumbnail) · [thumbnail.notifications](#thumbnailnotifications) · [timer](#timer) · [display](#display) · [thumbnailSpaces](#thumbnailspaces) · [snapping](#snapping) · [interaction](#interaction) · [exclusion](#exclusion) · [autoMinimize](#autominimize) · [autoMovePosition](#automoveposition) · [closeAll](#closeall) · [chatlog](#chatlog) · [combat](#combat) · [mining](#mining) · [bounty](#bounty) · [resources](#resources) · [ping](#ping) · [travel](#travel) · [hotkeys](#hotkeys) · [hotkeyGroups](#hotkeygroups) · [characters](#characters) · [systemColors](#systemcolors) · [windowFilters](#windowfilters)
 - [Global settings](#global-settings)
 - [Command line and protocol](#command-line-and-protocol)
 
@@ -19,8 +19,8 @@ Paths are relative to the executable's folder.
 |---|---|
 | `profiles\<name>.json` | A profile. `default.json` is created on first run and can't be deleted. |
 | `profiles\global.settings.json` | [Global settings](#global-settings), shared by all profiles. |
-| `profiles\backup\<unix time>_<name>.json` | Deleted profiles, and profiles that failed to parse. Listed in the dialog's Backups tab. |
-| `profiles\global.settings.json.bak` | Global settings file that failed to parse. |
+| `profiles\backup\<unix time>_<name>.json` | Profiles deleted, reset, imported over or backed up by hand, and profiles that failed to parse. Listed in the dialog's Backups tab. |
+| `profiles\global.settings.json.bak` | Global settings file that failed to read or parse. |
 | `data\colors.json` | Generated unique system/character colours (64 most recent of each). Written when the last client closes or on exit. Delete to reassign. |
 | `data\character_ids.json` | Character IDs read from log file names. Rebuilt from logs if deleted. |
 | `data\portraits\<id>.jpg` | Character portraits, downloaded once. Delete one to refetch it. |
@@ -45,7 +45,7 @@ Profile file names: `<name>.json` with no path separators or `:*?"<>|`, not star
 | Format | Syntax |
 |---|---|
 | **colour** | `"0xAARRGGBB"`. Also accepted: `0X`, `#`, or no prefix. Six digits read as alpha `00`. Text colours ignore alpha (always opaque); borders, backgrounds and the exclusion overlay use it, so a 6-digit colour there is invisible. |
-| **keys** | A key name (`"F9"`), a combo (`"Ctrl+Alt+F9"`), a hex code (`"0x278"`), an array of up to 4 of these (any one triggers), or `null`/omitted for unbound. Saved back as hex: low byte = virtual key, bits 8–11 = modifiers (Alt `0x1`, Ctrl `0x2`, Shift `0x4`, Win `0x8`). Unreadable keys are skipped with a warning; extra keys past 4 and duplicates are dropped. |
+| **keys** | A key name (`"F9"`), a combo (`"Ctrl+Alt+F9"`), a hex code (`"0x278"`), an array of up to 3 of these (any one triggers), or `null`/omitted for unbound. Saved back as hex: low byte = virtual key, bits 8–11 = modifiers (Alt `0x1`, Ctrl `0x2`, Shift `0x4`, Win `0x8`). Unreadable keys are skipped with a warning; extra keys past 3 and duplicates are dropped. |
 | **position** | `TopLeft` `TopCenter` `TopRight` `LeftCenter` `Center` `RightCenter` `BottomLeft` `BottomCenter` `BottomRight` |
 | **weight** | `Regular` `Bold` `Italic` `BoldItalic` |
 | **font size** | 6–72 |
@@ -67,7 +67,7 @@ Profile file names: `<name>.json` with no path separators or `:*?"<>|`, not star
 | `formatVersion` | int | `3` | Read only to migrate; rewritten on save. |
 | `accentColor` | colour | `0xFFD9A441` | Config dialog accent for this profile. No effect on overlays. |
 
-Sections: `thumbnail`, `timer`, `display`, `snapping`, `interaction`, `autoMinimize`, `autoMovePosition`, `exclusion`, `closeAll`, `chatlog`, `combat`, `mining`, `bounty`, `resources`, `travel`, `hotkeys` (objects); `windowFilters`, `characters`, `systemColors`, `hotkeyGroups`, `thumbnailSpaces` (arrays).
+Sections: `thumbnail`, `timer`, `display`, `snapping`, `interaction`, `autoMinimize`, `autoMovePosition`, `exclusion`, `closeAll`, `chatlog`, `combat`, `mining`, `bounty`, `resources`, `ping`, `travel`, `hotkeys` (objects); `windowFilters`, `characters`, `systemColors`, `hotkeyGroups`, `thumbnailSpaces` (arrays).
 
 ### thumbnail
 
@@ -75,8 +75,8 @@ Sections: `thumbnail`, `timer`, `display`, `snapping`, `interaction`, `autoMinim
 
 | Key | Type | Default | Range / values | Notes |
 |---|---|---|---|---|
-| `width` | int | `200` | 50–3840 | |
-| `height` | int | `112` | 50–2160 | |
+| `width` | int | `282` | 50–3840 | |
+| `height` | int | `158` | 50–2160 | |
 | `thumbnailOpacity` | int | `255` | opacity | Overridden per character by `characters[].opacity`. |
 | `applyOpacityToOverlayTexts` | bool | `true` | | Opacity also applies to texts, text backgrounds and borders. |
 | `activeThumbnailHidden` | bool | `false` | | Hide the focused client's thumbnail. |
@@ -191,6 +191,7 @@ Event popups on thumbnails, from game and chat logs (needs [chatlog](#chatlog)) 
 | `tts_rate` | int | `0` | −10–10 | SAPI rate. |
 | `tts_speak_character_name` | bool | `true` | | Prefix speech with `"<character>, "`. |
 | `tts_use_display_name` | bool | `false` | | Speak `displayName` instead, when set. |
+| `tts_max_waiting` | int | `3` | 1–10 | Spoken alerts waiting behind the one speaking; past it the oldest waiting one is dropped. |
 | `notified_cycle_retention_seconds` | int | `30` | 5–600 | How long a notified character stays in the `hotkeyCycleNotified` queue; renotifying resets it. |
 | `type_configs` | object | | | One object per type name below. |
 
@@ -434,7 +435,7 @@ Reads EVE's chat and game logs on a worker thread. Required by system names, not
 | Key | Type | Default | Range | Notes |
 |---|---|---|---|---|
 | `enabled` | bool | `false` | | |
-| `chatlogDir` | string | `""` | | `""` = `<Documents>\EVE\logs\Chatlogs` (follows OneDrive redirection). `%VAR%` expanded; unknown variables kept literally. |
+| `chatlogDir` | string | `""` | | `""` = `<Documents>\EVE\logs\Chatlogs` (follows OneDrive redirection). `%VAR%` expanded; unknown variables kept literally. `/` is read as `\`. |
 | `gamelogDir` | string | `""` | | As above, `Gamelogs`. |
 | `pollIntervalMs` | int | `500` | 100–5000 | |
 | `idlePollThreshold` | int | `600` | 1–1000 | Idle polls before a file's poll interval doubles. |
@@ -457,8 +458,9 @@ Incoming/outgoing DPS labels from gamelog `(combat)` lines. Lines with `" from "
 | `incoming_font_size`, `outgoing_font_size` | int | `12` | font size | |
 | `incoming_font_weight`, `outgoing_font_weight` | enum | `Regular` | weight | |
 | `incoming_position` | enum | `TopCenter` | position | |
-| `outgoing_position` | enum | `BottomCenter` | position | |
-| `incoming_offset_x`, `incoming_offset_y`, `outgoing_offset_x`, `outgoing_offset_y` | int | `0` | offset | |
+| `outgoing_position` | enum | `TopCenter` | position | |
+| `incoming_offset_x`, `incoming_offset_y`, `outgoing_offset_x` | int | `0` | offset | |
+| `outgoing_offset_y` | int | `24` | offset | Below Incoming DPS. |
 | `incoming_show_prefix`, `outgoing_show_prefix` | bool | `true` | | |
 | `damage_alert_excluded_weapons` | string | `""` | | Comma-separated, case-insensitive weapon-name substrings that count toward DPS but don't raise `TakingDamage`. |
 
@@ -525,6 +527,22 @@ Per-client CPU / RAM / VRAM label, sampled from the OS (no logs needed).
 | `position` | enum | `LeftCenter` | position | |
 | `offset_x`, `offset_y` | int | `0` | offset | |
 
+### ping
+
+Per-client round trip to its game server: an ICMP echo to the address of the client's connection on port 26000. Shows `?? ms` until the first reply and after a timeout (1 s); hidden while the client has no server connection. Tranquility connects through Cloudflare, so this is the time to the nearest Cloudflare edge, not to CCP's servers.
+
+| Key | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `enabled` | bool | `false` | | |
+| `update_interval_ms` | int | `10000` | 1000–60000 | |
+| `color` | colour | `0xFFFFFFFF` | | |
+| `bg_color` | colour | `0xE6000000` | | |
+| `font_name` | string | `"Segoe UI"` | | |
+| `font_size` | int | `12` | font size | |
+| `font_weight` | enum | `Regular` | weight | |
+| `position` | enum | `RightCenter` | position | |
+| `offset_x`, `offset_y` | int | `0`, `24` | offset | |
+
 ### travel
 
 Fires `TravelLeftBehind` when a character isn't in the group's system. Checked about every 2 s.
@@ -545,7 +563,7 @@ All values are **keys**.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `requireEveFocus` | bool | `false` | Hotkeys only fire while an EVE client has focus. |
+| `requireEveFocus` | bool | `false` | Hotkeys only fire while an EVE client has focus; elsewhere their keys reach the focused app as normal. Suspend works anywhere. |
 | `resetGroupIndexOnNonGroupFocus` | bool | `false` | Reset a group's cycle position when focus leaves the group. |
 | `allowHotkeyAutoRepeat` | bool | `false` | Holding a keyboard hotkey repeats it. |
 | `exactHotkeyModifiers` | bool | `false` | `false`: an unbound combo falls back to its bare key's binding (`Alt+1` fires `1`). `true`: modifiers must match exactly; unbound combos pass to the game. |
@@ -561,6 +579,10 @@ All values are **keys**.
 | `hotkeyExitApp` | keys | | Exit the app (clients stay open). |
 | `hotkeyCycleNotified`, `hotkeyPreviousNotified` | keys | | Cycle recently notified characters, oldest first, one shared cursor. |
 | `hotkeyMoveToSavedPositions` | keys | | Move clients to `windowPosition`, honouring `excludeFromAutoMove`. |
+| `hotkeyToggleDragging` | keys | | Toggle `interaction.enableDragging`. |
+| `hotkeyToggleTravelMode` | keys | | Toggle `travel.enabled`. |
+| `hotkeyToggleNotificationHistory` | keys | | Show/hide the notification history panel. |
+| `hotkeyClearNotificationHistory` | keys | | Clear the notification history. |
 
 ### hotkeyGroups
 
@@ -570,6 +592,8 @@ All values are **keys**.
 | `characters` | string[] | `[]` | Cycle order. |
 | `forwardKey`, `backwardKey` | keys | | Cycle. Both optional. |
 | `assignKey` | keys | | Toggle the hovered thumbnail's character in/out of the group. Can't be shared. |
+| `minimizeKey` | keys | | Minimize every running member of the group. Can't be shared. |
+| `closeKey` | keys | | Close every running member of the group, ignoring Close All exclusions. Can't be shared. |
 | `temporaryMembership` | bool | `false` | Members aren't saved; the group starts empty each launch. |
 | `showBadge` | bool | `false` | Show the group on members' [group badge](#thumbnail). |
 | `includeNotLoggedIn` | bool | `false` | Append login-screen clients, oldest logout first. |
@@ -663,13 +687,22 @@ A window must pass both lists; a filter with both empty matches nothing. Non-EVE
 | `--config` | Open the config dialog. Any second launch forwards this to the running instance. |
 | `--protocol <url>` | Forward a protocol URL to the running instance and exit. |
 
-`evemajpreview://` URLs are forwarded to the running instance and dropped if none is running. Registered under `HKCU\Software\Classes\evemajpreview` (no admin) with the current executable's path; re-register after moving the exe.
+`evemajpreview://` URLs are forwarded to the running instance and dropped if none is running. Registered under `HKCU\Software\Classes\evemajpreview` (no admin) with the current executable's path; re-registered at startup if the exe has moved. Names are percent-encoded (`%20` for a space); `+` is kept as written.
 
 | URL | Effect |
 |---|---|
-| `evemajpreview://switch/<character>` | Activate that character. URL-encoded. |
+| `evemajpreview://switch/<character>` | Activate that character. |
 | `evemajpreview://profile/<file>` | Load `<file>` (e.g. `pvp.json`, case-insensitive). Invalid or missing → `default.json`. |
 | `evemajpreview://hotkey/<action>` | Run a global hotkey action. |
+| `evemajpreview://group/<action>/<group>` | Run a [hotkey group](#hotkeygroups) action on the group with that name (case-insensitive). |
+| `evemajpreview://config` | Open the config dialog. |
+
+| Group action | Same as |
+|---|---|
+| `next`, `previous` | `forwardKey`, `backwardKey`, cycling this group alone even if its key is shared |
+| `assign` | `assignKey` |
+| `minimize` | `minimizeKey` |
+| `close` | `closeKey` |
 
 | Action | Same as |
 |---|---|
@@ -690,3 +723,7 @@ A window must pass both lists; a filter with both empty matches nothing. Non-EVE
 | `next_not_logged_in`, `previous_not_logged_in` | `hotkeyCycleNotLoggedInForward`, `…Backward` |
 | `return_to_last_app` | `hotkeyReturnToLastApp` |
 | `next_app`, `previous_app` | `hotkeyCycleAppsForward`, `…Backward` |
+| `toggle_dragging` | `hotkeyToggleDragging` |
+| `toggle_travel_mode` | `hotkeyToggleTravelMode` |
+| `toggle_notification_history` | `hotkeyToggleNotificationHistory` |
+| `clear_notification_history` | `hotkeyClearNotificationHistory` |

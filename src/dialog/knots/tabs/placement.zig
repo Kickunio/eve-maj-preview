@@ -84,7 +84,7 @@ pub fn show(context: *ui.Frame) !void {
     const shows_manual = mode == .Manual or search.isActive();
     const shows_spaces = mode == .ThumbnailSpaces or search.isActive();
 
-    const section = try widgets.openSection(context, "Thumbnail Placement", "Manual lets you drag each thumbnail where you want it. Thumbnail Spaces fills screen areas you draw with chosen hotkey groups.", &style.section);
+    const section = try widgets.openSection(context, "Thumbnail Placement", "Drag thumbnails where you want them, or let Thumbnail Spaces arrange them.", &style.section);
     try bind.segmented(context, display, "placementMode", "Placement Mode", &.{ "Manual", "Thumbnail Spaces" });
     try widgets.hintText(context, .src(@src()), "Thumbnail Spaces arranges thumbnails for you in areas you draw.");
     if (shows_manual) try savedPositionMap(context, profile);
@@ -102,7 +102,7 @@ pub fn show(context: *ui.Frame) !void {
         try manual_section.close(context);
     }
     if (shows_spaces) {
-        const spaces_section = try widgets.openSection(context, "Thumbnail Spaces", "A space can hold several hotkey groups. If two spaces hold a character's group, the higher one wins; drag to reorder.", if (fillsWindow()) &style.fill_section else &style.section);
+        const spaces_section = try widgets.openSection(context, "Thumbnail Spaces", "Screen areas that arrange hotkey groups. Drag to reorder; the higher one wins.", if (fillsWindow()) &style.fill_section else &style.section);
         try spacesMode(context);
         try spaces_section.close(context);
     }
@@ -124,7 +124,7 @@ fn manual(context: *ui.Frame, display: DisplayRef) !void {
     const drag = try widgets.openGroup(context, .src(@src()), !interaction.get("clickThrough"));
     try bind.toggle(context, interaction, "enableDragging", "Enable Dragging");
     try drag.close(context);
-    try widgets.hintText(context, .src(@src()), "Stays off while Click Through Thumbnails is on in the Behavior tab.");
+    try widgets.hintText(context, .src(@src()), "Stays off while Click Through is on in the Behavior tab.");
     try bind.toggle(context, display, "honorSavedPositions", "Restore Saved Positions");
     try widgets.hintText(context, .src(@src()), "When off, thumbnails always start at the Start Position.");
     try dragging.close(context);
@@ -154,9 +154,9 @@ fn manual(context: *ui.Frame, display: DisplayRef) !void {
     const unplaced = try widgets.openFieldGroup(context, .str("knots.manual.new"), "Unplaced");
     const start = try widgets.openBinding(context, .src(@src()), "Start Position");
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "X", .style = &style.muted_text });
-    try bind.numberBox(context, display, "startX", .{});
+    try bind.unitNumberBox(context, display, "startX", "px", .{});
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = "Y", .style = &style.muted_text });
-    try bind.numberBox(context, display, "startY", .{});
+    try bind.unitNumberBox(context, display, "startY", "px", .{});
     try start.close(context);
     try widgets.hintText(context, .src(@src()), "Characters with no saved position line up from here, left to right.");
     try bind.number(context, display, "newThumbnailSpacing", "Spacing", .{ .unit = "px" });
@@ -233,7 +233,7 @@ fn spaceName(context: *ui.Frame, space: *const config.ThumbnailSpace, index: usi
     return if (name.len > 0) name else lang.text("Unnamed Space");
 }
 
-/// Login Screen or Unassigned Characters: always listed and never renamed, so their saved English names are shown translated.
+/// Always listed and never renamed, so their saved English names show translated.
 fn isBuiltIn(space: *const config.ThumbnailSpace) bool {
     return space.holdsLoginScreen or space.holdsUnassigned;
 }
@@ -343,7 +343,7 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     }
     try held.close(context);
 
-    // The Login Screen space taking unassigned characters would mix them in with logins, so it only shows that to switch it off.
+    // Login Screen taking unassigned characters would mix them with logins, so it's shown only to switch off.
     const shows_unassigned = !is_unassigned and (!is_login_screen or space.get("takesUnassigned")) and showsTake(items, space.ptr, .unassigned);
     const shows_login_screen = !is_login_screen and showsTake(items, space.ptr, .login_screen);
     if (shows_unassigned or shows_login_screen) {
@@ -376,7 +376,7 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     try settings.close(context);
 }
 
-/// A take toggle is moot while its built-in space places everyone, so it's only shown then if it's on, to switch off.
+/// Moot while its built-in space places everyone, so then shown only if on, to switch off.
 fn showsTake(items: []const config.ThumbnailSpace, space: *const config.ThumbnailSpace, kind: Destination) bool {
     if (kind.isTakenBy(space)) return true;
     const winner = kind.spaceIn(items) orelse return true;
@@ -396,7 +396,7 @@ fn destination(context: *ui.Frame, items: []const config.ThumbnailSpace, winner:
     try widgets.boxedText(context, .str("knots.space.destination"), content, &style.hint_box, &style.hint);
 }
 
-/// A pill per hotkey group, filled while this space holds it; a name no group has any more stays until it's clicked off.
+/// A pill per hotkey group, filled while held; a name no group has stays until clicked off.
 fn holds(context: *ui.Frame, profile: ProfileRef, space: SpaceRef) !void {
     const groups = profile.ptr.hotkeyGroups.items;
     if (groups.len == 0) {
@@ -451,7 +451,7 @@ fn holds(context: *ui.Frame, profile: ProfileRef, space: SpaceRef) !void {
     }
 }
 
-/// Spaces hold groups by name, so an unnamed group takes the name its chip shows, or the next free number if another group has it.
+/// Spaces hold groups by name, so an unnamed group takes its chip's name, or the next free number.
 fn nameUnnamedGroup(arena: std.mem.Allocator, profile: ProfileRef, group_index: usize) ![]const u8 {
     var number = group_index + 1;
     const name = while (true) : (number += 1) {
@@ -499,7 +499,7 @@ fn regionRow(context: *ui.Frame, space_id: u32) !void {
     try row.close(context);
 }
 
-/// Every monitor in miniature with every space's region, the selected one drawn last, filled stronger and outlined thicker; clicking a region selects its space.
+/// The selected region is drawn last, stronger and thicker; clicking a region selects its space.
 fn regionMap(context: *ui.Frame, items: []const config.ThumbnailSpace, initial_selected: ?usize) !void {
     var map = try ScreenMap.init(context, .str("knots.space.map"));
     const ui_state = context.ui();
@@ -555,7 +555,7 @@ fn savedPositionMap(context: *ui.Frame, profile: ProfileRef) !void {
     try map.show(context, false);
 }
 
-/// Null for a switched-off Login Screen or Unassigned Characters space, which the map leaves out rather than fades.
+/// Null for a switched-off built-in space, which the map leaves out rather than fades.
 fn regionBox(map: *const ScreenMap, space: *const config.ThumbnailSpace) ?screen_math.Box {
     if (!space.enabled and isBuiltIn(space)) return null;
     return map.frame.visibleBox(spaces.rect(space) orelse return null);

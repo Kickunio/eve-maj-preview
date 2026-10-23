@@ -5,9 +5,9 @@ const log = @import("../log.zig");
 
 const slog = log.Scoped("config");
 
-pub const MAX_KEYS = 4;
+pub const MAX_KEYS = 3;
 
-/// Each key is a combined value (see vk.combineKey), with no pointers, so it copies and clones as a plain value.
+/// Each key is a combined value (see vk.combineKey), so it copies as a plain value.
 pub const KeyList = struct {
     keys: [MAX_KEYS]u32 = @splat(0),
     len: u8 = 0,
@@ -36,6 +36,22 @@ pub const KeyList = struct {
         self.len += 1;
         return true;
     }
+
+    /// `index` must be below len; later keys move up one.
+    pub fn remove(self: *KeyList, index: usize) void {
+        std.mem.copyForwards(u32, self.keys[index .. self.len - 1], self.keys[index + 1 .. self.len]);
+        self.len -= 1;
+        self.keys[self.len] = 0;
+    }
+
+    /// `index` must be below len; a key already elsewhere in the list removes this one instead, so keys stay unique.
+    pub fn replace(self: *KeyList, index: usize, combined: u32) void {
+        if (std.mem.findScalar(u32, self.slice(), combined)) |existing| {
+            if (existing != index) self.remove(index);
+            return;
+        }
+        self.keys[index] = combined;
+    }
 };
 
 /// One "0x0278" string, as profiles saved before alternates, or an array of them; loading also takes hand-edited combos like "Ctrl+F9".
@@ -55,7 +71,7 @@ pub const KeyListWire = struct {
         return item == .string and (item.string.len == 0 or vk.parseVirtualKey(item.string) != null);
     }
 
-    /// A key that can't be read is skipped with a warning rather than failing, which would load the whole profile as defaults.
+    /// Skips an unreadable key with a warning, rather than failing the whole profile to defaults.
     pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) !KeyListWire {
         var list: KeyList = .empty;
         switch (source) {
@@ -119,7 +135,7 @@ test "an empty string or array loads as no keys" {
 
 test "duplicate keys collapse and keys past MAX_KEYS are dropped" {
     const list = try parseJson("[\"F1\", \"F1\", \"F2\", \"F3\", \"F4\", \"F5\"]");
-    try testing.expectEqualSlices(u32, &.{ vk.VK_F1, vk.VK_F1 + 1, vk.VK_F1 + 2, vk.VK_F1 + 3 }, list.slice());
+    try testing.expectEqualSlices(u32, &.{ vk.VK_F1, vk.VK_F1 + 1, vk.VK_F1 + 2 }, list.slice());
 }
 
 test "an unknown key or a non-string entry is skipped, keeping the rest" {
@@ -132,6 +148,32 @@ test "one key saves as a plain string so older profiles stay readable" {
     const json = try stringify(.one(0x0278));
     defer testing.allocator.free(json);
     try testing.expectEqualStrings("\"0x278\"", json);
+}
+
+test "removing a key closes the gap and keeps the rest in order" {
+    var list: KeyList = .empty;
+    for ([_]u32{ vk.VK_F1, vk.VK_F1 + 1, vk.VK_F1 + 2 }) |key| _ = list.append(key);
+    list.remove(1);
+    try testing.expectEqualSlices(u32, &.{ vk.VK_F1, vk.VK_F1 + 2 }, list.slice());
+    list.remove(1);
+    list.remove(0);
+    try testing.expect(list.isEmpty());
+}
+
+test "replacing a key swaps it in place" {
+    var list: KeyList = .empty;
+    for ([_]u32{ vk.VK_F1, vk.VK_F1 + 1 }) |key| _ = list.append(key);
+    list.replace(0, vk.VK_F1 + 5);
+    try testing.expectEqualSlices(u32, &.{ vk.VK_F1 + 5, vk.VK_F1 + 1 }, list.slice());
+}
+
+test "replacing a key with one already in the list drops the duplicate" {
+    var list: KeyList = .empty;
+    for ([_]u32{ vk.VK_F1, vk.VK_F1 + 1 }) |key| _ = list.append(key);
+    list.replace(0, vk.VK_F1 + 1);
+    try testing.expectEqualSlices(u32, &.{vk.VK_F1 + 1}, list.slice());
+    list.replace(0, vk.VK_F1 + 1);
+    try testing.expectEqualSlices(u32, &.{vk.VK_F1 + 1}, list.slice());
 }
 
 test "several keys save as an array that loads back the same" {

@@ -1,4 +1,4 @@
-//! A screen preview: every monitor in miniature and numbered, with the caller's boxes drawn over them; main thread only.
+//! A screen preview: every monitor in miniature, numbered and sized, with the caller's boxes drawn over them; main thread only.
 const std = @import("std");
 const ui = @import("ui");
 const win32 = @import("../../platform/win32.zig");
@@ -6,6 +6,8 @@ const monitors = @import("../../layout/monitors.zig");
 const screen_math = @import("screen_math.zig");
 const style = @import("style.zig");
 const glyphs = @import("glyphs.zig");
+const widgets = @import("widgets.zig");
+const lang = @import("../../lang/lang.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -17,6 +19,12 @@ const MAX_WIDTH = 560;
 const MAX_HEIGHT = 120;
 const MAX_MONITORS = 16;
 const SAVED_POSITION_FILL_ALPHA = 0.25;
+/// Kept between a monitor's details and its box's sides, so a detail that won't fit is left out rather than touching them.
+const DETAIL_MARGIN = 4;
+/// The number's line, gap included.
+const NUMBER_LINE_HEIGHT = 16;
+/// A detail's line, gap included.
+const DETAIL_LINE_HEIGHT = 13;
 
 /// Built and shown within one frame; its slices live in the frame arena, so there's nothing to free.
 pub const ScreenMap = struct {
@@ -27,6 +35,8 @@ pub const ScreenMap = struct {
     commands: std.ArrayList(DrawCmd) = .empty,
     /// Each monitor's box, primary first; borrows from the frame arena.
     screen_boxes: []const Box,
+    /// Each monitor's size in desktop pixels, in screen_boxes' order; borrows from the frame arena.
+    screen_sizes: []const [2]i32,
 
     /// Draws the monitors, shrunk to fit their section; boxes added afterwards go over them.
     pub fn init(context: *ui.Frame, key: ui.Key) !ScreenMap {
@@ -37,6 +47,7 @@ pub const ScreenMap = struct {
             .frame = .fit(desktop, try availableWidth(context, key), MAX_HEIGHT),
             .snap = try glyphs.snapOffset(context, key),
             .screen_boxes = &.{},
+            .screen_sizes = &.{},
         };
         var monitor_buffer: [MAX_MONITORS]win32.RECT = undefined;
         var screens = monitors.monitorRects(&monitor_buffer);
@@ -45,11 +56,14 @@ pub const ScreenMap = struct {
             screens = monitor_buffer[0..1];
         }
         const screen_boxes = try arena.alloc(Box, screens.len);
-        for (screens, screen_boxes) |screen, *screen_box| {
+        const screen_sizes = try arena.alloc([2]i32, screens.len);
+        for (screens, screen_boxes, screen_sizes) |screen, *screen_box, *size| {
             screen_box.* = map.frame.box(screen);
+            size.* = .{ win32.rectWidth(screen), win32.rectHeight(screen) };
             try map.addBox(arena, screen_box.*, style.BG.value, style.BORDER.value);
         }
         map.screen_boxes = screen_boxes;
+        map.screen_sizes = screen_sizes;
         return map;
     }
 
@@ -82,7 +96,7 @@ pub const ScreenMap = struct {
         return .{ @as(f32, @floatCast(mouse[0])) - measured.box.x(), @as(f32, @floatCast(mouse[1])) - measured.box.y() };
     }
 
-    /// Centred in its section, with each monitor's number over its middle; `is_interactive` lets the caller read clicks on `key`.
+    /// Centred in its section; `is_interactive` lets the caller read clicks on `key`.
     pub fn show(self: *const ScreenMap, context: *ui.Frame, is_interactive: bool) !void {
         const arena = context.arena();
         const map_style = try arena.create(ui.Style);
@@ -103,10 +117,25 @@ pub const ScreenMap = struct {
                 .content = try std.fmt.allocPrint(arena, "{d}", .{screen_index + 1}),
                 .style = &style.monitor_label_text,
             });
+            const size = self.screen_sizes[screen_index];
+            var room = box[3] - NUMBER_LINE_HEIGHT;
+            const size_text = try std.fmt.allocPrint(arena, "{d}\u{00D7}{d}", .{ size[0], size[1] });
+            if (try detail(context, label_base.indexed(screen_index).indexed(2), size_text, box, &room)) {
+                if (screen_index == 0 and self.screen_boxes.len > 1) _ = try detail(context, label_base.indexed(screen_index).indexed(3), lang.text("Primary"), box, &room);
+            }
             try label.close(context);
         }
         try canvas.close(context);
         try centered.close(context);
+    }
+
+    /// Draws `text` under the number if it fits `box` and the `room` left below, so a small box shows only what fits; returns whether it did.
+    fn detail(context: *ui.Frame, key: ui.Key, text: []const u8, box: Box, room: *f32) !bool {
+        if (room.* < DETAIL_LINE_HEIGHT) return false;
+        if (try widgets.textWidth(context, text, &style.monitor_detail_text) > box[2] - 2 * DETAIL_MARGIN) return false;
+        room.* -= DETAIL_LINE_HEIGHT;
+        try context.e(Text{ .selectable = false, .key = key, .content = text, .style = &style.monitor_detail_text });
+        return true;
     }
 
     /// Its row's width, measured last frame, up to MAX_WIDTH; MAX_WIDTH until the row has been laid out once.

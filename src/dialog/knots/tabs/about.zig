@@ -2,6 +2,9 @@
 const ui = @import("ui");
 const build_options = @import("build_options");
 const win32 = @import("../../../platform/win32.zig");
+const update = @import("../../../update.zig");
+const session = @import("../session.zig");
+const update_notice = @import("../update_notice.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
 const images = @import("../images.zig");
@@ -18,6 +21,10 @@ const DISCORD_URL = "https://discord.com/users/159459744170508288";
 
 const THANKS = [_][]const u8{ "Aulis", "Cy", "Amaliana", "Technoprobe", "Yabu Kusanagi", "Sevey", "GlassBlunt", "The Llama", "khivus" };
 const THANKS_COLUMNS = 3;
+/// Holds a release's tag, e.g. "v1.0.9".
+const VERSION_TEXT_MAX = 64;
+/// A bold label then its value, inset like a row.
+const FACT_ROW: ui.Style = .{ .direction = .row, .@"align" = .center, .gap = 6, .padding = .xy(style.ROW_INSET, 0) };
 
 pub fn show(context: *ui.Frame) !void {
     try brand(context);
@@ -36,7 +43,7 @@ fn brand(context: *ui.Frame) !void {
         try centre.close(context);
     }
     try widgets.paragraph(context, .str("knots.about.description"), "A modern, lightweight window preview tool for EVE Online, built with Zig.");
-    try fact(context, "Version:", build_options.version, null);
+    try versionFact(context);
     try fact(context, "Repository:", "github.com/mrmjstc/eve-maj-preview", REPOSITORY_URL);
     try fact(context, "Discord:", "mjstc", DISCORD_URL);
     try section.close(context);
@@ -44,7 +51,7 @@ fn brand(context: *ui.Frame) !void {
 
 /// A bold label and its value, which opens `url` in the browser when given.
 fn fact(context: *ui.Frame, comptime label: []const u8, value: []const u8, url: ?[]const u8) !void {
-    const row = Rect{ .key = .str("knots.about.fact:" ++ label), .style = &.{ .direction = .row, .@"align" = .center, .gap = 6, .padding = .xy(style.ROW_INSET, 0) } };
+    const row = Rect{ .key = .str("knots.about.fact:" ++ label), .style = &FACT_ROW };
     _ = try row.open(context);
     try context.e(Text{ .selectable = false, .key = .str("knots.about.fact.label:" ++ label), .content = lang.text(label), .style = &style.fact_label });
     const target = url orelse {
@@ -54,6 +61,23 @@ fn fact(context: *ui.Frame, comptime label: []const u8, value: []const u8, url: 
     };
     if ((try context.interact(Button{ .key = .str("knots.about.fact.link:" ++ label), .label = value, .style = &style.link })).clicked) {
         if (!win32.shellOpenUrl(target)) slog.warn("Failed to open '{s}' in the browser", .{target});
+    }
+    try row.close(context);
+}
+
+/// The version, then a link to a newer release once a check has found one.
+fn versionFact(context: *ui.Frame) !void {
+    const row = Rect{ .key = .src(@src()), .style = &FACT_ROW };
+    _ = try row.open(context);
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("Version:"), .style = &style.fact_label });
+    try context.e(Text{ .selectable = false, .key = .src(@src()), .content = build_options.version, .style = &style.hint_plain });
+    var buf: [VERSION_TEXT_MAX]u8 = undefined;
+    if (update.g_update_status.copyVersionZ(session.runningApp().io, &buf)) |version| {
+        const label = try lang.format(context.arena(), "{version} available", .{ .version = version });
+        if ((try context.interact(Button{ .key = .src(@src()), .label = label, .style = &style.link })).clicked) {
+            update_notice.openIfAvailable();
+            context.requestRedraw();
+        }
     }
     try row.close(context);
 }

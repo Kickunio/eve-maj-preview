@@ -1,15 +1,19 @@
 //! Root of `zig build test`: the modules with unit tests, which can run without the app or Windows UI.
 test {
     _ = @import("activity/lines.zig");
+    _ = @import("activity/ping.zig");
     _ = @import("activity/resources.zig");
     _ = @import("activity/tracker.zig");
     _ = @import("arguments.zig");
     _ = @import("chatlog/lines.zig");
+    _ = @import("chatlog/queue.zig");
     _ = @import("chatlog/utf16.zig");
     _ = @import("clients/exclusions.zig");
     _ = @import("clients/scout.zig");
+    _ = @import("config.zig");
     _ = @import("config/characters.zig");
     _ = @import("config/global.zig");
+    _ = @import("config/hotkeys.zig");
     _ = @import("config/import/draft.zig");
     _ = @import("config/import/values.zig");
     _ = @import("config/key_list.zig");
@@ -25,6 +29,7 @@ test {
     _ = @import("control/minimize_rules.zig");
     _ = @import("control/restart_plan.zig");
     _ = @import("dialog/knots/color_convert.zig");
+    _ = @import("dialog/knots/field_strings.zig");
     _ = @import("dialog/knots/labels.zig");
     _ = @import("dialog/knots/screen_math.zig");
     _ = @import("dialog/tools/region_math.zig");
@@ -33,20 +38,23 @@ test {
     _ = @import("drag/snap_math.zig");
     _ = @import("hotkeys/bindings.zig");
     _ = @import("hotkeys/cycle_order.zig");
+    _ = @import("hotkeys/paste_upload.zig");
     _ = @import("lang/wording.zig");
     _ = @import("layout/region_grid.zig");
     _ = @import("layout/spaces.zig");
     _ = @import("layout/zoom.zig");
     _ = @import("notifications/gamelog_events.zig");
-    _ = @import("notifications/history_look.zig");
     _ = @import("notifications/notification.zig");
     _ = @import("notifications/rules.zig");
     _ = @import("notifications/stack.zig");
     _ = @import("notifications/template.zig");
+    _ = @import("notifications/worker.zig");
+    _ = @import("panels/history_look.zig");
+    _ = @import("panels/list_look.zig");
     _ = @import("platform/virtual_keys.zig");
-    _ = @import("protocol.zig");
+    _ = @import("protocol/url.zig");
     _ = @import("thumbnail/draw.zig");
-    _ = @import("thumbnail/list_look.zig");
+    _ = @import("thumbnail/state.zig");
     _ = @import("travel/stragglers.zig");
     _ = @import("util/color.zig");
     _ = @import("util/format.zig");

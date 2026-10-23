@@ -14,7 +14,7 @@ const log = @import("../../log.zig");
 const slog = log.Scoped("dialog_knots");
 
 var g_allocator: std.mem.Allocator = undefined;
-/// The id of the space a running selection fills, so a reorder or removal meanwhile can't redirect it; null when none is running.
+/// By id, so a reorder or removal mid-selection can't redirect it; null when none is running.
 var g_target_space_id: ?u32 = null;
 /// The thumbnail windows a selection hid, to show again once it ends.
 var g_hidden: std.ArrayList(win32.HWND) = .empty;
@@ -23,7 +23,7 @@ pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
 }
 
-/// Starts the overlay for the space with id `space_id`; `is_editing` adjusts its current rectangle instead of dragging a new one.
+/// `is_editing` adjusts the space's current rectangle instead of dragging a new one.
 pub fn start(space_id: u32, is_editing: bool) void {
     const thumbnail_set = session.runningApp().thumbnail_set orelse return;
     const current = rect(space_id);
@@ -113,10 +113,7 @@ fn find(space_id: u32) ?session.Ref(config.ThumbnailSpace) {
 
 fn setRect(space_id: u32, x: ?i32, y: ?i32, width: ?i32, height: ?i32) void {
     const space = find(space_id) orelse return;
-    space.set("x", x);
-    space.set("y", y);
-    space.set("width", width);
-    space.set("height", height);
+    space.setFields(.{ .x = x, .y = y, .width = width, .height = height });
 }
 
 fn onFinished() void {

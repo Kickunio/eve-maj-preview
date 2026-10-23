@@ -8,13 +8,14 @@ const bind = @import("../../bind.zig");
 const style = @import("../../style.zig");
 const widgets = @import("../../widgets.zig");
 const overlay_text = @import("../overlay_text.zig");
+const lang = @import("../../../../lang/lang.zig");
 
 const Fields = overlay_text.Fields;
 
 const STYLE_ROWS = [_]PopoverField{ .font, .background };
 const WINDOW_HINT = "The rate is averaged over this time.";
 const UPDATE_INTERVAL = PopoverField{ .number = .{ .field = "update_interval_ms", .label = "Update Interval", .unit = "s", .shows_seconds = true, .hint = "How often the number on the thumbnail changes." } };
-const RATE_WINDOW = PopoverField{ .number = .{ .field = "window_seconds", .label = "Window", .unit = "s", .hint = WINDOW_HINT } };
+const RATE_WINDOW = PopoverField{ .number = .{ .field = "window_seconds", .label = "Averaging Window", .unit = "s", .hint = WINDOW_HINT } };
 const NEEDS_LOGS = "Requires Log Monitoring to be enabled.";
 const ALERTS_NEED_LOGS = "Without Log Monitoring, only alerts for your own actions, like Profile Switch, are shown.";
 
@@ -30,7 +31,6 @@ pub const CHIPS = [_]Chip{
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "showCharacterName", .label = "Show Character Name", .hint = "Uses the Display Name when a character has one." } },
             .{ .toggle = .{ .field = "useUniqueCharacterNameColors", .label = "Unique Character Name Colors", .disables_color = true, .hint = "Each character's name gets its own color." } },
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
@@ -45,7 +45,6 @@ pub const CHIPS = [_]Chip{
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "showSystemName", .label = "Show System Name", .hint = "Needs Log Monitoring to know where each character is." } },
             .{ .toggle = .{ .field = "useUniqueSystemColors", .label = "Unique System Colors", .disables_color = true, .hint = "Each system gets its own color; System Colors overrides it." } },
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
@@ -57,7 +56,6 @@ pub const CHIPS = [_]Chip{
         .needs_show_text = true,
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "showQuickGroupBadge", .label = "Show Group Badge", .hint = "Shows the hotkey group a character is in." } },
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
@@ -69,7 +67,6 @@ pub const CHIPS = [_]Chip{
         .needs_show_text = true,
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "showSessionTimer", .label = "Show Session Timer", .hint = "How long the character has been logged in." } },
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
@@ -82,7 +79,6 @@ pub const CHIPS = [_]Chip{
         .chatlog_notice = ALERTS_NEED_LOGS,
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "enabled", .label = "Show Notifications", .hint = "Shows alert text, like Fleet Invite, on the thumbnail." } },
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
@@ -106,7 +102,6 @@ pub const CHIPS = [_]Chip{
                 .placeholder = "e.g. Smartbomb, Warp Scrambler",
                 .hint = "Weapon names to ignore, separated by commas. Stops only the Taking Damage alert; the damage still counts.",
             } },
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
@@ -124,12 +119,11 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "outgoing_show_prefix", .label = "Show OUT: Prefix", .hint = "Puts OUT: before the number so it's easy to tell apart." } },
             RATE_WINDOW,
             UPDATE_INTERVAL,
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
         .label = "Mining Rate",
-        .sample = "M: 21.4 m3/s",
+        .sample = "M: 21.4 m3/min",
         .section = .mining,
         .fields = .snakeCase("", true),
         .show_field = "enabled",
@@ -138,7 +132,6 @@ pub const CHIPS = [_]Chip{
         .popover = &([_]PopoverField{
             .{ .toggle = .{ .field = "enabled", .label = "Show Mining Rate", .hint = "How much the character mines per minute." } },
             .{ .toggle = .{ .field = "show_prefix", .label = "Show M: Prefix", .hint = "Puts M: before the rate so it's easy to tell apart." } },
-            .color,
         } ++ STYLE_ROWS),
     },
     .{
@@ -154,8 +147,7 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "show_prefix", .label = "Show ISK: Prefix", .hint = "Puts ISK: before the rate so it's easy to tell apart." } },
             RATE_WINDOW,
             UPDATE_INTERVAL,
-            .{ .choice = .{ .field = "isk_rate_unit", .label = "ISK Rate Unit", .hint = "Shows ISK earned per minute or per hour." } },
-            .color,
+            .{ .segmented = .{ .field = "isk_rate_unit", .label = "ISK Rate Unit", .options = &.{ "Per Minute", "Per Hour" }, .hint = "Shows ISK earned per minute or per hour." } },
         } ++ STYLE_ROWS),
     },
     .{
@@ -171,26 +163,36 @@ pub const CHIPS = [_]Chip{
             .{ .toggle = .{ .field = "show_ram", .label = "Show RAM", .hint = "Just that client's memory, not the whole PC's." } },
             .{ .toggle = .{ .field = "show_vram", .label = "Show VRAM", .hint = "Just that client's video memory, not the whole graphics card's." } },
             UPDATE_INTERVAL,
-            .color,
+        } ++ STYLE_ROWS),
+    },
+    .{
+        .label = "Ping",
+        .sample = "38 ms",
+        .section = .ping,
+        .fields = .snakeCase("", true),
+        .show_field = "enabled",
+        .needs_show_text = true,
+        .popover = &([_]PopoverField{
+            .{ .toggle = .{ .field = "enabled", .label = "Show Ping", .hint = "Round trip from each client to the server it's connected to." } },
+            UPDATE_INTERVAL,
         } ++ STYLE_ROWS),
     },
 };
 
 /// The settings struct a chip's fields live in.
-pub const Section = enum { thumbnail, notifications, combat, mining, bounty, resources };
+pub const Section = enum { thumbnail, notifications, combat, mining, bounty, resources, ping };
 
-/// One row of a chip's popover; number, choice and text rows show only in Advanced Mode, like the tabs they came from, and a `hint` is a tooltip on the row's label.
+/// Number, segmented and text rows show only in Advanced Mode; a `hint` is a tooltip on the label.
 pub const PopoverField = union(enum) {
-    /// A setting of the chip's section; `disables_color` greys out the text colour while it's on.
+    /// A setting of the chip's section; `disables_color` greys out the font row's colour while it's on.
     toggle: struct { field: []const u8, label: []const u8, disables_color: bool = false, hint: ?[]const u8 = null },
     number: struct { field: []const u8, label: []const u8, unit: []const u8, shows_seconds: bool = false, hint: ?[]const u8 = null },
-    choice: struct { field: []const u8, label: []const u8, hint: ?[]const u8 = null },
+    /// `options` names each tag in declaration order.
+    segmented: struct { field: []const u8, label: []const u8, options: []const []const u8, hint: ?[]const u8 = null },
     text: struct { field: []const u8, label: []const u8, placeholder: []const u8, hint: ?[]const u8 = null },
-    /// The chip's text colour.
-    color,
-    /// Name, size and weight on one row.
+    /// Name, size, weight and text colour on one row.
     font,
-    /// Colour, with an opacity slider row beneath it.
+    /// Opacity and colour on one row.
     background,
 };
 
@@ -201,7 +203,7 @@ pub const Chip = struct {
     section: Section,
     fields: Fields,
     show_field: []const u8,
-    /// The Text Overlays section's switch has to be on too.
+    /// Enable Text Overlays has to be on too.
     needs_show_text: bool,
     /// Its section's master switch, e.g. Combat's `enabled`, which has to be on too.
     enabled_field: ?[]const u8 = null,
@@ -220,7 +222,8 @@ pub const Look = struct {
     font_weight: types.FontWeight,
     color: u32,
     background_color: u32,
-    is_shown: bool,
+    /// The switch that has to be turned on for it to show, in English; null while it's shown.
+    off_switch: ?[]const u8,
 };
 
 /// The Text Overlays section's Sync Fonts and Backgrounds; not saved.
@@ -232,6 +235,15 @@ pub fn look(comptime chip: Chip) Look {
     const fields = chip.fields;
     const is_unique = if (chip.unique_field) |field| ref.get(field) else false;
     const is_enabled = if (chip.enabled_field) |field| ref.get(field) else true;
+    const enabled_label: ?[]const u8 = comptime if (chip.enabled_field) |field| toggleLabel(chip, field) else null;
+    const off_switch: ?[]const u8 = if (chip.needs_show_text and !thumbnail.showText)
+        "Enable Text Overlays"
+    else if (!is_enabled)
+        enabled_label
+    else if (!ref.get(chip.show_field))
+        comptime toggleLabel(chip, chip.show_field)
+    else
+        null;
     return .{
         .position = ref.get(fields.position),
         .offset_x = ref.get(fields.offset_x),
@@ -241,8 +253,16 @@ pub fn look(comptime chip: Chip) Look {
         // Unique colours vary per character, so a sample stands in.
         .color = if (is_unique) style.UNIQUE_SAMPLE else if (fields.color) |field| ref.get(field) else 0xFFFFFFFF,
         .background_color = ref.get(fields.bg_color),
-        .is_shown = ref.get(chip.show_field) and is_enabled and (!chip.needs_show_text or thumbnail.showText),
+        .off_switch = off_switch,
     };
+}
+
+/// What hovering a chip on the stage says, made in `arena`.
+pub fn tipText(arena: std.mem.Allocator, off_switch: ?[]const u8) ![]const u8 {
+    const how = lang.text("Drag to move, or click to edit.");
+    const name = off_switch orelse return how;
+    const off = try lang.format(arena, "Off: turn on {name}.", .{ .name = lang.text(name) });
+    return std.mem.join(arena, " ", &.{ off, how });
 }
 
 /// Saves a drag's result; `offset_x`/`offset_y` are already clamped to the field's range.
@@ -275,6 +295,8 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
 
     const was_aligned = widgets.useAlignedRows(true);
     defer _ = widgets.useAlignedRows(was_aligned);
+    const was_compact = widgets.useCompactRows(true);
+    defer _ = widgets.useCompactRows(was_compact);
     const is_advanced = session.global().get("advancedMode");
     var is_color_disabled = false;
     // Every row after the section's master switch, or the chip's show switch, waits on it.
@@ -295,34 +317,32 @@ pub fn showSettings(context: *ui.Frame, comptime chip: Chip, comptime index: usi
                 try bind.number(context, ref, number.field, number.label, .{ .unit = number.unit, .shows_seconds = number.shows_seconds });
                 if (number.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ number.field), hint);
             },
-            .choice => |choice| if (is_advanced) {
-                try bind.choice(context, ref, choice.field, choice.label);
-                if (choice.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ choice.field), hint);
+            .segmented => |segmented| if (is_advanced) {
+                try bind.segmented(context, ref, segmented.field, segmented.label, segmented.options);
+                if (segmented.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ segmented.field), hint);
             },
             .text => |text| if (is_advanced) {
                 try bind.text(context, ref, text.field, text.label, text.placeholder);
                 if (text.hint) |hint| try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":" ++ text.field), hint);
-            },
-            .color => {
-                const color = try widgets.openGroup(context, .str("knots.chip.color:" ++ chip.label), !is_color_disabled);
-                // Comptime: a chip listing .color without a colour field fails to compile.
-                try bind.rgb(context, ref, fields.color.?, "Text Color");
-                try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":color"), if (chip.unique_field != null) "Used while unique colors are off." else "The color of this text.");
-                try color.close(context);
             },
             .font => {
                 const font = try widgets.openBinding(context, .str("knots.chip.font:" ++ chip.label), "Font");
                 try bind.fontBox(context, ref, fields.font_name);
                 try bind.unitNumberBox(context, ref, fields.font_size, "px", .{});
                 try bind.choiceBox(context, ref, fields.font_weight);
+                const color = try widgets.openInlineGroup(context, .str("knots.chip.color:" ++ chip.label), !is_color_disabled);
+                // Comptime: a chip listing .font without a colour field fails to compile.
+                try bind.rgbBox(context, ref, fields.color.?);
+                try color.close(context);
                 try font.close(context);
-                try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":font"), "With Sync Fonts and Backgrounds on, this changes every text.");
+                try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":font"), if (chip.unique_field != null)
+                    "The color is used while unique colors are off; with Sync Fonts and Backgrounds on, the font changes every text."
+                else
+                    "With Sync Fonts and Backgrounds on, the font changes every text.");
             },
             .background => {
-                try bind.rgb(context, ref, fields.bg_color, "Background");
-                try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":background"), "A box behind the text, so it reads on busy scenes.");
-                try bind.alphaSlider(context, ref, fields.bg_color, "Background Opacity");
-                try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":background_opacity"), "0% hides the box.");
+                try bind.rgbAlpha(context, ref, fields.bg_color, "Background");
+                try widgets.hintText(context, .str("knots.chip.hint:" ++ chip.label ++ ":background"), "A box behind the text, so it reads on busy scenes; 0% hides it.");
             },
         }
     }
@@ -350,6 +370,7 @@ fn SectionType(comptime section: Section) type {
         .mining => config.MiningConfig,
         .bounty => config.BountyConfig,
         .resources => config.ResourcesConfig,
+        .ping => config.PingConfig,
     };
 }
 
@@ -362,6 +383,7 @@ fn refFor(comptime section: Section) session.Ref(SectionType(section)) {
         .mining => profile.child("mining"),
         .bounty => profile.child("bounty"),
         .resources => profile.child("resources"),
+        .ping => profile.child("ping"),
     };
 }
 
@@ -377,6 +399,15 @@ fn copyStyleToOthers(comptime source_index: usize) void {
             to.set(chip.fields.bg_color, from.get(source.fields.bg_color));
         }
     }
+}
+
+/// The popover label of the chip's toggle for `field`.
+fn toggleLabel(comptime chip: Chip, comptime field: []const u8) []const u8 {
+    for (chip.popover) |row| switch (row) {
+        .toggle => |toggle| if (std.mem.eql(u8, toggle.field, field)) return toggle.label,
+        .number, .segmented, .text, .font, .background => {},
+    };
+    @compileError(chip.label ++ " has no toggle for " ++ field);
 }
 
 fn isGate(comptime chip: Chip, comptime field: []const u8) bool {

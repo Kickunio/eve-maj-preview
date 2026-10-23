@@ -1,15 +1,18 @@
-//! What the knots configuration window edits: the running profile's `live` copy and a draft of the global settings, changed only through `Ref.set`; main thread only.
+//! What the knots configuration window edits: the running profile's `live` copy and a draft of the global settings, changed only through `Ref`'s setters; main thread only.
 const std = @import("std");
 const config = @import("../../config.zig");
-const protocol = @import("../../protocol.zig");
+const registry = @import("../../protocol/registry.zig");
 const app_mod = @import("../../app.zig");
 const patch = @import("../../config/patch.zig");
 const run_on_startup = @import("../run_on_startup.zig");
+const field_strings = @import("field_strings.zig");
 const log = @import("../../log.zig");
 
 const App = app_mod.App;
 const Config = config.Config;
 const GlobalConfig = config.GlobalConfig;
+const ListItem = field_strings.ListItem;
+const fieldDefault = field_strings.fieldDefault;
 const slog = log.Scoped("dialog_knots");
 
 pub const Doc = enum { profile, global };
@@ -21,7 +24,7 @@ var g_app: ?*App = null;
 var g_allocator: std.mem.Allocator = undefined;
 /// Set while the window is open, from begin to end.
 var g_global_draft: ?GlobalConfig = null;
-/// Replaced strings, freed at the start of the next frame since this one may still be drawing them. Owned.
+/// Replaced strings, freed at the start of the next frame since this one may still be drawing them; owned.
 var g_retired: std.ArrayList(Retired) = .empty;
 var g_is_dirty_stale: bool = true;
 var g_is_profile_dirty: bool = false;
@@ -45,7 +48,7 @@ pub fn Ref(comptime T: type) type {
             return @field(self.ptr, field);
         }
 
-        /// The only way the window changes a setting: stores `value` (copying strings), clamps the document and previews it.
+        /// Stores `value` (copying strings), clamps the document and previews it.
         pub fn set(self: Self, comptime field: []const u8, value: @FieldType(T, field)) void {
             const F = @FieldType(T, field);
             const slot = &@field(self.ptr, field);
@@ -69,6 +72,24 @@ pub fn Ref(comptime T: type) type {
             edited(self.doc, comptime layoutFor(T, field, .none), self.layout);
         }
 
+        /// `set` for several non-string fields, previewed once so thumbnails never lay out a half-applied change; `values` is e.g. `.{ .width = w, .height = h }`.
+        pub fn setFields(self: Self, values: anytype) void {
+            var layout: app_mod.LiveLayout = .none;
+            var is_changed = false;
+            inline for (@typeInfo(@TypeOf(values)).@"struct".field_names) |field| {
+                const F = @FieldType(T, field);
+                if (F == []const u8 or F == ?[]const u8) @compileError("setFields doesn't copy strings; use set for '" ++ field ++ "'");
+                const value: F = @field(values, field);
+                const slot = &@field(self.ptr, field);
+                if (!std.meta.eql(slot.*, value)) {
+                    slot.* = value;
+                    is_changed = true;
+                    layout = wider(layout, comptime layoutFor(T, field, .none));
+                }
+            }
+            if (is_changed) edited(self.doc, layout, self.layout);
+        }
+
         /// A nested section, e.g. `profile().child("thumbnail")`.
         pub fn child(self: Self, comptime field: []const u8) Ref(@FieldType(T, field)) {
             return .{ .doc = self.doc, .ptr = &@field(self.ptr, field), .layout = comptime layoutFor(T, field, .none), .index = self.index };
@@ -79,19 +100,19 @@ pub fn Ref(comptime T: type) type {
             return .{ .doc = self.doc, .ptr = &@field(self.ptr, field).items[index], .layout = comptime layoutFor(T, field, .none), .index = index };
         }
 
-        /// Adds a copy of `value` to the end of the list field `field`; returns the new item, or null once it has logged a failure.
+        /// Appends a copy of `value`; null once it has logged a failure.
         pub fn append(self: Self, comptime field: []const u8, value: ListItem(@FieldType(T, field))) ?Ref(ListItem(@FieldType(T, field))) {
             const allocator = documentAllocator(self.doc);
             const list = &@field(self.ptr, field);
             var entry = value;
             // Copied, since a later set frees the string it replaces.
-            ownStrings(@TypeOf(entry), allocator, &entry) catch |err| {
+            field_strings.ownStrings(@TypeOf(entry), allocator, &entry) catch |err| {
                 slog.err("Failed to add to '{s}': {}", .{ field, err });
                 return null;
             };
             list.append(allocator, entry) catch |err| {
                 slog.err("Failed to add to '{s}': {}", .{ field, err });
-                freeOwnedStrings(@TypeOf(entry), allocator, &entry);
+                field_strings.freeOwnedStrings(@TypeOf(entry), allocator, &entry);
                 return null;
             };
             // Characters and hotkey groups are tracked by id, e.g. to keep a selection across a reorder.
@@ -253,9 +274,19 @@ pub fn liveGlobal() *const GlobalConfig {
     return &runningApp().global_settings;
 }
 
-/// Only while the window is open.
+/// Only while the window is open, between begin and end.
 pub fn global() Ref(GlobalConfig) {
-    return .{ .doc = .global, .ptr = &g_global_draft.?, .layout = .none };
+    if (g_global_draft) |*draft| return .{ .doc = .global, .ptr = draft, .layout = .none };
+    unreachable;
+}
+
+/// After profile `old_name` was renamed `new_name`: the draft's switch hotkeys follow it, as the running settings' did.
+pub fn retargetProfileSwitches(old_name: []const u8, new_name: []const u8) void {
+    if (g_global_draft == null) return;
+    const settings = global();
+    for (settings.ptr.profileSwitchHotkeys.items, 0..) |entry, index| {
+        if (std.mem.eql(u8, entry.targetProfile, old_name)) settings.item("profileSwitchHotkeys", index).set("targetProfile", new_name);
+    }
 }
 
 pub fn isDirty() bool {
@@ -267,7 +298,7 @@ pub fn isDirty() bool {
 pub fn save() !void {
     refreshDirty();
     slog.info("Saving configuration (profile dirty: {}, global dirty: {})", .{ g_is_profile_dirty, g_is_global_dirty });
-    const global_draft: ?*GlobalConfig = if (g_is_global_dirty) &g_global_draft.? else null;
+    const global_draft: ?*GlobalConfig = if (!g_is_global_dirty) null else if (g_global_draft) |*draft| draft else null;
     if (g_is_profile_dirty) try runningApp().store.commit();
     if (g_is_profile_dirty or global_draft != null) try runningApp().applySavedSettings(global_draft);
     if (global_draft != null) {
@@ -277,7 +308,7 @@ pub fn save() !void {
         log.setLevel(settings.logLevel);
         if (settings.logLevel == .debug) log.openDebugConsole() else log.closeDebugConsole();
         run_on_startup.apply(settings.runOnStartup);
-        if (settings.autoRegisterProtocol) protocol.ensureRegistered(g_allocator);
+        if (settings.autoRegisterProtocol) registry.ensureRegistered();
     }
     g_is_dirty_stale = true;
 }
@@ -290,7 +321,7 @@ pub fn discard() !void {
     g_is_dirty_stale = true;
 }
 
-/// Edit ops (see config/patch.zig) on the profile being edited, e.g. an import's; `arena` holds what they allocate along the way.
+/// Patch ops on the edited profile, e.g. an import's; `arena` holds what they allocate.
 pub fn applyOps(arena: std.mem.Allocator, ops: []const patch.Op) !void {
     const target = profile().ptr;
     const patch_context: patch.Context = .{ .arena = arena, .allocator = target.allocator };
@@ -318,7 +349,10 @@ fn edited(doc: Doc, field_layout: app_mod.LiveLayout, ref_layout: app_mod.LiveLa
             runningApp().onLiveProfileEdited(wider(field_layout, ref_layout));
         },
         .global => {
-            const draft = &g_global_draft.?;
+            const draft = if (g_global_draft) |*open| open else {
+                slog.err("Failed to apply a global setting: the configuration window isn't open", .{});
+                return;
+            };
             draft.validate();
             log.setLevel(draft.logLevel);
         },
@@ -378,50 +412,13 @@ fn cloneGlobal(allocator: std.mem.Allocator, settings: *GlobalConfig) !GlobalCon
 fn documentAllocator(doc: Doc) std.mem.Allocator {
     return switch (doc) {
         .profile => profile().ptr.allocator,
-        .global => g_global_draft.?.allocator,
+        // cloneGlobal builds the draft with it.
+        .global => g_allocator,
     };
 }
 
-/// Replaces each string field of `item` that isn't its default with a copy owned by `allocator`.
-fn ownStrings(comptime Item: type, allocator: std.mem.Allocator, item: *Item) !void {
-    if (@typeInfo(Item) != .@"struct") return;
-    const info = @typeInfo(Item).@"struct";
-    // Every field is reset before any is copied, so a failed copy frees only copies.
-    var texts: [info.field_names.len][]const u8 = undefined;
-    inline for (info.field_names, info.field_types, 0..) |name, F, i| {
-        if (F == []const u8) {
-            texts[i] = @field(item, name);
-            @field(item, name) = fieldDefault(Item, name);
-        }
-    }
-    errdefer freeOwnedStrings(Item, allocator, item);
-    inline for (info.field_names, info.field_types, 0..) |name, F, i| {
-        if (F == []const u8) {
-            const text = texts[i];
-            if (isOwned(text, fieldDefault(Item, name))) @field(item, name) = try allocator.dupe(u8, text);
-        }
-    }
-}
-
-fn freeOwnedStrings(comptime Item: type, allocator: std.mem.Allocator, item: *Item) void {
-    if (@typeInfo(Item) != .@"struct") return;
-    const info = @typeInfo(Item).@"struct";
-    inline for (info.field_names, info.field_types) |name, F| {
-        if (F == []const u8) {
-            const text = @field(item, name);
-            if (isOwned(text, fieldDefault(Item, name))) allocator.free(text);
-            @field(item, name) = fieldDefault(Item, name);
-        }
-    }
-}
-
-/// A field still holding its default points at a string literal.
-fn isOwned(bytes: []const u8, default: []const u8) bool {
-    return bytes.len > 0 and bytes.ptr != default.ptr;
-}
-
 fn retireString(allocator: std.mem.Allocator, bytes: []const u8, default: []const u8) void {
-    if (!isOwned(bytes, default)) return;
+    if (!field_strings.isOwned(bytes, default)) return;
     g_retired.append(g_allocator, .{ .allocator = allocator, .bytes = bytes }) catch |err| {
         slog.warn("Failed to queue a replaced setting for freeing, leaking it: {}", .{err});
     };
@@ -430,17 +427,6 @@ fn retireString(allocator: std.mem.Allocator, bytes: []const u8, default: []cons
 fn freeRetired() void {
     for (g_retired.items) |retired| retired.allocator.free(retired.bytes);
     g_retired.clearRetainingCapacity();
-}
-
-fn fieldDefault(comptime T: type, comptime field: []const u8) []const u8 {
-    const F = @FieldType(T, field);
-    const index = std.meta.fieldIndex(T, field).?;
-    const default = @typeInfo(T).@"struct".field_attrs[index].defaultValue(F) orelse return "";
-    return if (F == ?[]const u8) default orelse "" else default;
-}
-
-fn ListItem(comptime List: type) type {
-    return @typeInfo(@FieldType(List, "items")).pointer.child;
 }
 
 /// What an edit to `field` re-lays out: display and spaces everything; thumbnail size and member lists the spaces.

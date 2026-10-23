@@ -19,7 +19,7 @@ pub const DEFAULT_ACCENT = blk: {
     const index = std.meta.fieldIndex(config.Config, "accentColor").?;
     break :blk @typeInfo(config.Config).@"struct".field_attrs[index].defaultValue(u32).?;
 };
-/// What a profile name may hold, for the prompts that ask for one; part of en.json's keys, so a new length limit needs them updated.
+/// For the name prompts; part of en.json's keys, so changing the limit means updating them.
 pub const NAME_RULES = std.fmt.comptimePrint("letters, digits, spaces, '-' and '_', up to {d} characters", .{profile_files.MAX_NAME_LENGTH});
 
 comptime {
@@ -27,20 +27,27 @@ comptime {
 }
 
 pub const Action = enum {
-    /// The app switches to the profile.
     switch_to,
     create,
     /// A copy of the running profile.
     copy,
+    /// The running profile, given the name; its switch hotkeys follow it.
+    rename,
     /// Moved to a backup, not deleted.
     delete,
     reset,
-    /// A backup restored under the profile's name; the pending backup says which.
+    /// Of the saved file, so unsaved edits aren't in it.
+    back_up,
+    /// Under the profile's name; the pending backup says which.
     restore,
-    /// A backup removed for good; the name is the backup's file name.
+    /// Over the existing profile, after backing it up; the pending backup says which.
+    replace_with_backup,
+    /// For good; the name is the backup's file name.
     delete_backup,
-    /// A new profile with the Import dialog's chosen sections applied to it, unsaved.
+    /// A new profile from the Import dialog's chosen sections.
     import_new,
+    /// The Import dialog's chosen sections, applied after backing the running profile up.
+    import_running,
 };
 
 /// What happens to unsaved changes before an action that switches profiles.
@@ -52,10 +59,10 @@ pub const Schedule = *const fn () void;
 var g_allocator: std.mem.Allocator = undefined;
 var g_schedule: Schedule = undefined;
 var g_action: ?Action = null;
-/// The profile file name the pending action is about. Owned; freed by runPending or clearPending.
+/// The profile file name the pending action is about; owned, freed by runPending or clearPending.
 var g_name: ?[]u8 = null;
 var g_accent: ?u32 = null;
-/// The backup file a pending restore reads. Owned; freed by runPending or clearPending.
+/// The backup file a pending restore reads; owned, taken by the restore actions, or freed by clearPending.
 var g_backup: ?[]u8 = null;
 /// Set while the pending action waits on the unsaved-changes prompt, whose modal clears it to cancel.
 var g_is_awaiting_choice: bool = false;
@@ -63,7 +70,7 @@ var g_is_awaiting_choice: bool = false;
 var g_unsaved: ?Unsaved = null;
 /// Bumped each time the profile list is re-read, i.e. after every action.
 var g_revision: u32 = 0;
-/// Profile file names, sorted. Owned; refreshed after every action.
+/// Profile file names, sorted; owned, refreshed after every action.
 var g_profiles: std.ArrayList([]const u8) = .empty;
 /// Each profile's saved accent colour, in g_profiles' order.
 var g_accents: std.ArrayList(u32) = .empty;
@@ -105,21 +112,26 @@ pub fn request(action: Action, name: []const u8, accent: ?u32) void {
     g_schedule();
 }
 
-/// Restores `backup` (a backup file name) as the profile `name`.
-pub fn requestRestore(name: []const u8, backup: []const u8, accent: ?u32) void {
+/// Restores `backup` (a backup file name) as the profile `name`; `action` is .restore or .replace_with_backup.
+pub fn requestRestore(action: Action, name: []const u8, backup: []const u8, accent: ?u32) void {
     const owned = g_allocator.dupe(u8, backup) catch |err| {
         slog.err("Failed to queue restoring backup '{s}': {}", .{ backup, err });
         return;
     };
     if (g_backup) |old| g_allocator.free(old);
     g_backup = owned;
-    request(.restore, name, accent);
+    request(action, name, accent);
 }
 
-/// The profile a pending action would switch to, while it waits on the unsaved-changes prompt. Borrows from this module.
+/// The profile a pending action would switch to, while it waits on the unsaved-changes prompt; borrows from this module.
 pub fn awaitedName() ?[]const u8 {
     if (!g_is_awaiting_choice) return null;
     return displayName(g_name orelse return null);
+}
+
+/// Whether the action waiting on the unsaved-changes prompt is a rename, which the prompt words apart from a switch.
+pub fn isAwaitingRename() bool {
+    return g_is_awaiting_choice and g_action == .rename;
 }
 
 /// The unsaved-changes prompt's open flag.
@@ -152,9 +164,13 @@ pub fn runPending() void {
     g_name = null;
     g_unsaved = null;
     defer g_allocator.free(name);
-    run(action, name, g_accent, unsaved) catch |err| {
-        slog.err("Failed to run profile action '{t}' on '{s}': {}", .{ action, name, err });
-        status.show(.failure, failureText(action), .{ .name = shownName(action, name), .err = err });
+    run(action, name, g_accent, unsaved) catch |err| switch (err) {
+        // saveChanges has logged it and shown which hotkeys to fix.
+        error.ConflictingHotkeys => {},
+        else => {
+            slog.err("Failed to run profile action '{t}' on '{s}': {}", .{ action, name, err });
+            status.show(.failure, failureText(action), .{ .name = shownName(action, name), .err = err });
+        },
     };
     session.profileReplaced();
     refresh();
@@ -170,13 +186,31 @@ pub fn nameProblem(arena: std.mem.Allocator, typed: []const u8) ?[]const u8 {
             return null;
         },
     };
+    if (listedName(file_name) != null) return "A profile with this name already exists.";
+    return null;
+}
+
+/// The listed profile file name `typed` names, ignoring case; borrows from the profile list.
+pub fn existingProfile(arena: std.mem.Allocator, typed: []const u8) ?[]const u8 {
+    const file_name = config.profileFileName(arena, typed) catch |err| switch (err) {
+        error.InvalidProfileName => return null,
+        else => {
+            slog.warn("Failed to check profile name '{s}': {}", .{ typed, err });
+            return null;
+        },
+    };
+    return listedName(file_name);
+}
+
+/// The listed profile file name matching `file_name`, ignoring case; borrows from the profile list.
+pub fn listedName(file_name: []const u8) ?[]const u8 {
     for (g_profiles.items) |name| {
-        if (std.ascii.eqlIgnoreCase(name, file_name)) return "A profile with this name already exists.";
+        if (std.ascii.eqlIgnoreCase(name, file_name)) return name;
     }
     return null;
 }
 
-/// Changes after every profile action, so a list built from the profile folder, e.g. the backups, can tell to read it again.
+/// Changes after every profile action, so lists built from the profile folder know to reread it.
 pub fn revision() u32 {
     return g_revision;
 }
@@ -184,7 +218,7 @@ pub fn revision() u32 {
 fn run(action: Action, name: []const u8, accent: ?u32, unsaved: ?Unsaved) !void {
     const app = session.runningApp();
     if (unsaved) |choice| switch (choice) {
-        .save => try session.save(),
+        .save => try host.saveChanges(),
         .discard => try host.discardChanges(),
     };
     switch (action) {
@@ -202,6 +236,18 @@ fn run(action: Action, name: []const u8, accent: ?u32, unsaved: ?Unsaved) !void 
             app.switchProfile(name);
             status.show(.success, "Copied to profile '{name}'", .{ .name = displayName(name) });
         },
+        .rename => {
+            // Copied, since the switch below frees the running profile's name.
+            const old_name = try g_allocator.dupe(u8, app.store.live.profile_name);
+            defer g_allocator.free(old_name);
+            try config.renameProfile(g_allocator, app.io, old_name, name);
+            app.global_settings.retargetProfileSwitches(app.io, old_name, name) catch |err| {
+                slog.warn("Failed to point the switch hotkeys of '{s}' at '{s}': {}", .{ old_name, name, err });
+            };
+            session.retargetProfileSwitches(old_name, name);
+            app.switchProfile(name);
+            status.show(.success, "Renamed profile to '{name}'", .{ .name = displayName(name) });
+        },
         .delete => {
             // Checked before any switch, which a refused delete mustn't cause.
             try config.checkProfileDeletable(name);
@@ -210,14 +256,18 @@ fn run(action: Action, name: []const u8, accent: ?u32, unsaved: ?Unsaved) !void 
             status.show(.success, "Deleted profile '{name}' (kept as a backup)", .{ .name = displayName(name) });
         },
         .restore => {
-            const backup = g_backup orelse return error.MissingBackup;
-            defer {
-                g_allocator.free(backup);
-                g_backup = null;
-            }
+            const backup = try takeBackup();
+            defer g_allocator.free(backup);
             try config.restoreProfileBackup(g_allocator, app.io, backup, name, accent);
             app.switchProfile(name);
             status.show(.success, "Restored profile '{name}'", .{ .name = displayName(name) });
+        },
+        .replace_with_backup => {
+            const backup = try takeBackup();
+            defer g_allocator.free(backup);
+            try config.replaceProfileWithBackup(g_allocator, app.io, backup, name, accent);
+            app.switchProfile(name);
+            status.show(.success, "Replaced profile '{name}' with the backup", .{ .name = displayName(name) });
         },
         .delete_backup => {
             try config.deleteProfileBackup(g_allocator, app.io, name);
@@ -226,22 +276,35 @@ fn run(action: Action, name: []const u8, accent: ?u32, unsaved: ?Unsaved) !void 
         .import_new => {
             try config.createProfile(g_allocator, app.io, name, accent);
             app.switchProfile(name);
-            import_dialog.applyImport();
-            status.show(.info, "Imported into new profile '{name}'; review it, then Save", .{ .name = displayName(name) });
+            try import_dialog.applyImport();
+            try host.saveChanges();
+            status.show(.success, "Imported into new profile '{name}'", .{ .name = displayName(name) });
+        },
+        .import_running => {
+            try config.backUpProfile(g_allocator, app.io, name);
+            try import_dialog.applyImport();
+            // Also saves any edits made before the import; the backup predates them.
+            try host.saveChanges();
+            status.show(.success, "Imported into profile '{name}'", .{ .name = displayName(name) });
+        },
+        .back_up => {
+            try config.backUpProfile(g_allocator, app.io, name);
+            status.show(.success, "Backed up profile '{name}'", .{ .name = displayName(name) });
         },
         .reset => {
+            try config.backUpProfile(g_allocator, app.io, name);
             try config.writeDefaultProfile(g_allocator, app.io, name, null);
             if (std.mem.eql(u8, name, app.store.live.profile_name)) app.switchProfile(name);
-            status.show(.success, "Reset profile '{name}' to defaults", .{ .name = displayName(name) });
+            status.show(.success, "Reset profile '{name}' to defaults (kept as a backup)", .{ .name = displayName(name) });
         },
     }
 }
 
-/// Whether `action` replaces the running profile with another, dropping unsaved changes unless the prompt saves them.
+/// A switch drops unsaved changes unless the prompt saves them.
 fn switchesProfile(action: Action) bool {
     return switch (action) {
-        .switch_to, .create, .copy, .restore, .import_new => true,
-        .delete, .reset, .delete_backup => false,
+        .switch_to, .create, .copy, .rename, .restore, .replace_with_backup, .import_new => true,
+        .delete, .reset, .back_up, .delete_backup, .import_running => false,
     };
 }
 
@@ -251,11 +314,14 @@ fn failureText(action: Action) []const u8 {
         .switch_to => "Failed to switch to profile '{name}': {err}",
         .create => "Failed to create profile '{name}': {err}",
         .copy => "Failed to copy to profile '{name}': {err}",
+        .rename => "Failed to rename profile to '{name}': {err}",
         .delete => "Failed to delete profile '{name}': {err}",
         .reset => "Failed to reset profile '{name}': {err}",
+        .back_up => "Failed to back up profile '{name}': {err}",
         .restore => "Failed to restore profile '{name}': {err}",
+        .replace_with_backup => "Failed to replace profile '{name}' with the backup: {err}",
         .delete_backup => "Failed to delete the backup of profile '{name}': {err}",
-        .import_new => "Failed to import into profile '{name}': {err}",
+        .import_new, .import_running => "Failed to import into profile '{name}': {err}",
     };
 }
 
@@ -263,8 +329,15 @@ fn failureText(action: Action) []const u8 {
 fn shownName(action: Action, name: []const u8) []const u8 {
     return switch (action) {
         .delete_backup => config.parseBackupName(name).name,
-        .switch_to, .create, .copy, .delete, .reset, .restore, .import_new => displayName(name),
+        .switch_to, .create, .copy, .rename, .delete, .reset, .back_up, .restore, .replace_with_backup, .import_new, .import_running => displayName(name),
     };
+}
+
+/// The pending restore's backup file name; owned by the caller.
+fn takeBackup() ![]u8 {
+    const backup = g_backup orelse return error.MissingBackup;
+    g_backup = null;
+    return backup;
 }
 
 fn clearPending() void {

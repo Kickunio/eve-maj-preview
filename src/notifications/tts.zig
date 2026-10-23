@@ -25,7 +25,7 @@ const S_FALSE: c_long = 0x1;
 const COINIT_APARTMENTTHREADED: u32 = 0x2;
 const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
 const CLSCTX_INPROC_SERVER: u32 = 0x1;
-// Not the real LOCALE_USER_DEFAULT (0x0400); SpVoice's member names aren't localized so any valid LCID works, and en-US is a safe choice.
+// SpVoice's member names aren't localized, so any valid LCID works.
 const LCID_EN_US: u32 = 0x0409;
 
 const DISPATCH_METHOD: u16 = 0x1;
@@ -106,7 +106,7 @@ const IDispatch = extern struct {
             .cArgs = @intCast(args.len),
             .cNamedArgs = 0,
         };
-        // SAPI's SpVoice rejects a bare DISPATCH_METHOD flag; combine with DISPATCH_PROPERTYGET so Invoke can disambiguate a method call from an array-element get.
+        // SpVoice rejects DISPATCH_METHOD on its own.
         const hr = self.vtable.Invoke(self, dispid, &IID_NULL, LCID_EN_US, DISPATCH_METHOD | DISPATCH_PROPERTYGET, &params, null, null, null);
         if (hr < 0) return error.InvokeFailed;
     }
@@ -125,7 +125,7 @@ const IDispatch = extern struct {
     }
 };
 
-/// COM objects are apartment-affine, so every method here (not just speak) must run on the same STA thread that created dispatch.
+/// Worker thread only, every method: COM objects belong to the STA thread that created them.
 const TtsEngine = struct {
     dispatch: *IDispatch,
     speak_dispid: i32,
@@ -221,6 +221,14 @@ const Command = union(enum) {
     pub fn deinit(self: Command) void {
         if (self == .speak) std.heap.page_allocator.free(self.speak);
     }
+
+    /// Voice settings are never dropped, or later alerts would speak with stale ones.
+    pub fn isAlert(self: Command) bool {
+        return switch (self) {
+            .speak => true,
+            .set_volume_percent, .set_rate => false,
+        };
+    }
 };
 
 var g_worker: worker.Worker(Command, TtsEngine, "tts", "text-to-speech") = .{};
@@ -237,14 +245,14 @@ pub fn setVoiceSettings(volume_percent: u8, rate: i8) void {
     g_worker.push(.{ .set_rate = rate });
 }
 
-/// Returns at once; alerts are spoken in order, and not at all if SAPI is unavailable.
-pub fn speakAlert(text: []const u8) void {
+/// Returns at once; alerts are spoken in order, past `max_waiting` the oldest waiting one is dropped, and none are if SAPI is unavailable.
+pub fn speakAlert(text: []const u8, max_waiting: usize) void {
     if (!g_worker.start()) return;
     const copy = std.heap.page_allocator.dupe(u8, text) catch |err| {
         slog.warn("Failed to queue TTS alert: {}", .{err});
         return;
     };
-    g_worker.push(.{ .speak = copy });
+    g_worker.pushAlert(.{ .speak = copy }, max_waiting);
 }
 
 /// Call once during app shutdown.

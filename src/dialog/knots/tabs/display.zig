@@ -10,10 +10,12 @@ const widgets = @import("../widgets.zig");
 const client_list = @import("client_list.zig");
 const text_overlays = @import("text_overlays.zig");
 const system_colors = @import("system_colors.zig");
+const log = @import("../../../log.zig");
 
 const Text = ui.component.Text;
 const ThumbnailRef = session.Ref(config.ThumbnailConfig);
 const DisplayRef = session.Ref(config.DisplayConfig);
+const slog = log.Scoped("dialog_knots");
 
 /// The boxes can go up to the setting's own maximum.
 const MAX_SIZE_SLIDER = 1280;
@@ -47,6 +49,11 @@ const BorderFields = struct {
     color_field: []const u8,
 };
 
+const SliderShape = struct { width: i32, height: i32, ratio: f32 };
+
+/// The exact ratio the size slider last applied, reused while the size is still what it set, so rounding can't drift the shape.
+var g_slider_shape: ?SliderShape = null;
+
 pub fn show(context: *ui.Frame) !void {
     const thumbnail = session.profile().child("thumbnail");
     const display = session.profile().child("display");
@@ -71,15 +78,18 @@ fn dimensions(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     const section = try widgets.openSection(context, "Dimensions", "The pixel size each thumbnail is rendered at.", &style.section);
     try aspectRatio(context, thumbnail);
 
-    const row = try widgets.openBinding(context, .str("knots.thumbnails.size"), "Size");
+    const row = try widgets.openBinding(context, .str("knots.thumbnails.size"), "Thumbnail Size");
     var width: f32 = @floatFromInt(thumbnail.get("width"));
-    const ratio = width / @as(f32, @floatFromInt(@max(thumbnail.get("height"), 1)));
+    const ratio = sliderRatio(thumbnail);
     // Stops where either side hits its bound, or saving clamps that side alone and breaks the ratio.
     const min_width = @max(@as(f32, config.ThumbnailConfig.WIDTH[0]), @as(f32, config.ThumbnailConfig.HEIGHT[0]) * ratio);
     const max_width = @max(min_width, @min(@as(f32, MAX_SIZE_SLIDER), @as(f32, config.ThumbnailConfig.HEIGHT[1]) * ratio));
     if (try widgets.slider(context, .str("knots.thumbnails.size.slider"), &width, min_width, max_width, 1)) {
-        thumbnail.set("width", @intFromFloat(@round(width)));
-        thumbnail.set("height", @intFromFloat(@round(width / ratio)));
+        const new_width: i32 = @intFromFloat(@round(width));
+        const new_height: i32 = @intFromFloat(@round(width / ratio));
+        thumbnail.setFields(.{ .width = new_width, .height = new_height });
+        // Read back, since validation may have clamped either side.
+        g_slider_shape = .{ .width = thumbnail.get("width"), .height = thumbnail.get("height"), .ratio = ratio };
     }
     try bind.unitNumberBox(context, thumbnail, "width", "px", .{});
     try context.e(Text{ .selectable = false, .key = .str("knots.thumbnails.size.x"), .content = "\u{00D7}", .style = &style.muted_text });
@@ -87,6 +97,16 @@ fn dimensions(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     try row.close(context);
     try widgets.hintText(context, .src(@src()), "The slider keeps the shape; type in the boxes for any size.");
     try section.close(context);
+}
+
+/// The slider's last ratio while the size is still what it set, else the size's own.
+fn sliderRatio(thumbnail: ThumbnailRef) f32 {
+    const width = thumbnail.get("width");
+    const height = thumbnail.get("height");
+    if (g_slider_shape) |shape| {
+        if (shape.width == width and shape.height == height) return shape.ratio;
+    }
+    return @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(@max(height, 1)));
 }
 
 /// Picking a ratio keeps the width and fits the height to it; Custom leaves the size as typed.
@@ -122,7 +142,10 @@ fn clientRatio() ?f32 {
         // A minimized window's client area reads as 0x0.
         if (!window.is_eve_client or win32.isWindowIconic(window.hwnd)) continue;
         var rect: win32.RECT = undefined;
-        if (!win32.toBool(win32.GetClientRect(window.hwnd, &rect))) continue;
+        if (!win32.toBool(win32.GetClientRect(window.hwnd, &rect))) {
+            slog.debug("Failed to read a client's size to match its shape: error {d}", .{win32.GetLastError()});
+            continue;
+        }
         const width = rect.right - rect.left;
         const height = rect.bottom - rect.top;
         if (width > 0 and height > 0) return @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
@@ -156,7 +179,7 @@ fn borders(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
     try section.close(context);
 }
 
-/// The state's width, style and colour, then its checkbox last so it lines up with the other rows' checkboxes.
+/// The state's width, style and colour, then its switch last so it lines up with the other rows' switches.
 fn borderRow(context: *ui.Frame, thumbnail: ThumbnailRef, comptime fields: BorderFields, is_color_overridden: bool) !void {
     const row = try widgets.openBinding(context, .str("knots.border.row:" ++ fields.label), fields.label);
     const settings = try widgets.openInlineGroup(context, .str("knots.border.settings:" ++ fields.label), thumbnail.get(fields.show_field));
@@ -191,7 +214,7 @@ fn visibility(context: *ui.Frame, thumbnail: ThumbnailRef) !void {
 
 /// Picks which of the tab's other sections are drawn, and whether the Placement tab is offered.
 fn displayMode(context: *ui.Frame, display: DisplayRef) !void {
-    const section = try widgets.openSection(context, "Display Mode", "Thumbnails shows a live preview of each client. Client List is a compact text panel that uses fewer resources, ideal with many clients. None shows nothing; hotkeys and notifications keep working.", &style.section);
+    const section = try widgets.openSection(context, "Display Mode", "How clients are shown. With None, hotkeys and alerts keep working.", &style.section);
     try bind.segmented(context, display, "viewMode", "Show Clients As", &.{ "Thumbnails", "Client List", "None" });
     try widgets.hintText(context, .src(@src()), "Client List is lighter on your PC than Thumbnails.");
     try section.close(context);

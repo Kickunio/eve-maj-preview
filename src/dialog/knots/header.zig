@@ -22,6 +22,7 @@ const Text = ui.component.Text;
 const Button = ui.component.Button;
 const Canvas = ui.component.Canvas;
 const TextInput = ui.component.TextInput;
+const Tooltip = ui.component.Tooltip;
 const Color = ui.Color;
 const slog = log.Scoped("dialog_knots");
 
@@ -31,11 +32,13 @@ const SUGGESTION_LENGTH = profile_files.MAX_NAME_LENGTH + 64;
 const PROFILE_BUTTON_KEY: ui.Key = .str("knots.header.profile");
 const MENU_KEY: ui.Key = .str("knots.header.menu");
 const SEARCH_KEY: ui.Key = .str("knots.search");
+const NAME_INPUT_KEY: ui.Key = .str("knots.header.name");
 
 /// The profile menu's entries after the profiles themselves.
 const MenuItem = enum {
     new,
     duplicate,
+    rename,
     import,
     reset,
     delete,
@@ -44,6 +47,7 @@ const MenuItem = enum {
         return switch (self) {
             .new => .add,
             .duplicate => .copy,
+            .rename => .pencil,
             .import => .import,
             .reset => .reset,
             .delete => .delete,
@@ -51,7 +55,7 @@ const MenuItem = enum {
     }
 };
 
-const NamePrompt = enum { new, restore };
+const NamePrompt = enum { new, rename, restore };
 
 /// What a new profile starts as; Duplicate is New starting from a copy.
 const StartFrom = enum { defaults, copy };
@@ -62,14 +66,17 @@ var g_allocator: std.mem.Allocator = undefined;
 var g_is_menu_open: bool = false;
 var g_name_prompt: ?NamePrompt = null;
 var g_is_name_open: bool = false;
+/// Set as the name prompt opens, so its first frame focuses the name field.
+var g_should_focus_name: bool = false;
 var g_start_from: StartFrom = .defaults;
 /// The rainbow picker chose the accent, so it's the one ringed even when the colour matches a preset.
 var g_is_custom_accent: bool = false;
-/// The name being typed. Owned; freed in deinit.
+/// The name being typed; owned, freed in deinit.
 var g_name_text: std.ArrayList(u8) = .empty;
 var g_name_color: Color = undefined;
-/// The backup a restore prompt is for, and its name to show. Owned; freed when another prompt opens or in deinit.
+/// The backup a restore prompt is for; owned, freed when another prompt opens or in deinit.
 var g_restore_backup: ?[]u8 = null;
+/// The restored profile's name in the prompt's heading; owned, freed with g_restore_backup.
 var g_restore_label: ?[]u8 = null;
 var g_confirm: ?Confirm = null;
 var g_is_confirm_open: bool = false;
@@ -122,7 +129,11 @@ pub fn openRestorePrompt(backup: []const u8, display_name: []const u8) void {
         clearRestore();
         return;
     };
-    openNamePrompt(.restore, display_name, profiles.DEFAULT_ACCENT);
+    const accent = config.readProfileBackupAccent(g_allocator, session.runningApp().io, backup) catch |err| blk: {
+        slog.warn("Failed to read the colour of backup '{s}': {}", .{ backup, err });
+        break :blk null;
+    };
+    openNamePrompt(.restore, display_name, accent orelse profiles.DEFAULT_ACCENT);
 }
 
 fn brand(context: *ui.Frame) !void {
@@ -154,7 +165,7 @@ fn profileButton(context: *ui.Frame) !void {
     const running = session.profile().ptr;
     try swatch(context, PROFILE_BUTTON_KEY.indexed(1), running.accentColor);
     try context.e(Text{ .selectable = false, .key = PROFILE_BUTTON_KEY.indexed(2), .content = profiles.displayName(running.profile_name), .style = &style.profile_name });
-    try glyph(context, PROFILE_BUTTON_KEY.indexed(3), .chevron, style.MUTED);
+    try context.e(Canvas{ .key = PROFILE_BUTTON_KEY.indexed(3), .commands = try selectChevron(context.arena(), g_is_menu_open), .style = &style.select_chevron });
     try button.close(context);
     if (response.clicked) {
         g_is_menu_open = true;
@@ -183,11 +194,22 @@ fn profileMenu(context: *ui.Frame) !void {
     const name = profiles.displayName(running.profile_name);
     if (try menuItem(context, .new, lang.text("New Profile"), false)) openNewPrompt(.defaults);
     if (try menuItem(context, .duplicate, try lang.format(arena, "Duplicate '{name}'", .{ .name = name }), false)) openNewPrompt(.copy);
+    const is_default = std.mem.eql(u8, running.profile_name, config.DEFAULT_PROFILE);
+    const rename_label = try lang.format(arena, "Rename '{name}'", .{ .name = name });
+    if (is_default) {
+        try unavailableMenuItem(context, .rename, rename_label, "The default profile can't be renamed.");
+    } else if (try menuItem(context, .rename, rename_label, false)) {
+        openNamePrompt(.rename, name, running.accentColor);
+    }
     if (try menuItem(context, .import, lang.text("Import Settings"), false)) import_dialog.open();
     try divider(context, MENU_KEY.indexed(13));
     if (try menuItem(context, .reset, try lang.format(arena, "Reset '{name}' to Defaults", .{ .name = name }), false)) openConfirm(.reset);
-    const is_default = std.mem.eql(u8, running.profile_name, config.DEFAULT_PROFILE);
-    if (try menuItem(context, .delete, try lang.format(arena, "Delete '{name}'", .{ .name = name }), is_default)) openConfirm(.delete);
+    const delete_label = try lang.format(arena, "Delete '{name}'", .{ .name = name });
+    if (is_default) {
+        try unavailableMenuItem(context, .delete, delete_label, "The default profile can't be deleted.");
+    } else if (try menuItem(context, .delete, delete_label, false)) {
+        openConfirm(.delete);
+    }
     try dialog.close(context);
 }
 
@@ -221,6 +243,14 @@ fn menuItem(context: *ui.Frame, item: MenuItem, label: []const u8, is_disabled: 
     return closesMenu(context, response.clicked and !is_disabled);
 }
 
+/// A disabled menuItem, saying why on hover.
+fn unavailableMenuItem(context: *ui.Frame, item: MenuItem, label: []const u8, reason: []const u8) !void {
+    const tip = Tooltip{ .key = ui.Key.str("knots.header.menu.reason").indexed(@backingInt(item)), .content = lang.text(reason), .style = &style.menu_item_tip };
+    _ = try tip.open(context);
+    _ = try menuItem(context, item, label, true);
+    try tip.close(context);
+}
+
 fn closesMenu(context: *ui.Frame, is_clicked: bool) bool {
     if (is_clicked) {
         g_is_menu_open = false;
@@ -242,6 +272,19 @@ fn swatch(context: *ui.Frame, key: ui.Key, argb: u32) !void {
     try context.e(Rect{ .key = key, .style = swatch_style });
 }
 
+/// Drawn as knots' select draws its own, so the profile button reads as one of the dropdowns.
+fn selectChevron(arena: std.mem.Allocator, is_open: bool) ![]const Canvas.DrawCmd {
+    const size: f32 = style.SELECT_CHEVRON_SIZE;
+    const mid = size * 0.5;
+    const edge_y = size * @as(f32, if (is_open) 0.62 else 0.38);
+    const tip_y = size * @as(f32, if (is_open) 0.34 else 0.66);
+    const thickness = 1.75;
+    const commands = try arena.alloc(Canvas.DrawCmd, 2);
+    commands[0] = .{ .line = .{ .from = .{ size * 0.2, edge_y }, .to = .{ mid, tip_y }, .color = style.TEXT.value, .thickness = thickness } };
+    commands[1] = .{ .line = .{ .from = .{ mid, tip_y }, .to = .{ size * 0.8, edge_y }, .color = style.TEXT.value, .thickness = thickness } };
+    return commands;
+}
+
 fn glyph(context: *ui.Frame, key: ui.Key, which: glyphs.Glyph, tint: Color) !void {
     try context.e(Canvas{
         .key = key,
@@ -259,7 +302,7 @@ fn openNewPrompt(start_from: StartFrom) void {
     });
 }
 
-/// The name a new profile is offered: none from defaults, "Main - Copy" for a copy of Main. Borrows from `buf` or the running profile.
+/// None from defaults, "Main - Copy" for a copy of Main; borrows from `buf` or the running profile.
 fn suggestedName(buf: *[SUGGESTION_LENGTH]u8, start_from: StartFrom) []const u8 {
     const name = profiles.displayName(session.profile().ptr.profile_name);
     return switch (start_from) {
@@ -289,6 +332,7 @@ fn openNamePrompt(prompt: NamePrompt, initial: []const u8, accent: u32) void {
     g_is_custom_accent = !widgets.isPresetAccent(accent);
     g_name_prompt = prompt;
     g_is_name_open = true;
+    g_should_focus_name = true;
 }
 
 /// Returns false once it has logged a failure.
@@ -315,18 +359,32 @@ fn namePrompt(context: *ui.Frame) !void {
         .key = .src(@src()),
         .content = switch (prompt) {
             .new => lang.text("New Profile"),
+            .rename => lang.text("Rename Profile"),
             .restore => try lang.format(arena, "Restore Backup: {name}", .{ .name = g_restore_label orelse "" }),
         },
         .style = &style.heading,
     });
 
     const name_row = try widgets.openModalRow(context, .src(@src()), "Name");
-    try context.e(TextInput{ .key = .src(@src()), .buf = &g_name_text, .placeholder = lang.text("Profile name"), .style = &style.text_input_aligned });
+    if (g_should_focus_name) {
+        try widgets.focusTextInput(context, NAME_INPUT_KEY, g_name_text.items.len);
+        g_should_focus_name = false;
+    }
+    try context.e(TextInput{ .key = NAME_INPUT_KEY, .buf = &g_name_text, .placeholder = lang.text("Profile name"), .style = &style.text_input_aligned });
     try name_row.close(context);
     try widgets.hintText(context, .src(@src()), "Use " ++ profiles.NAME_RULES ++ ".");
     const typed = std.mem.trim(u8, g_name_text.items, " ");
-    const problem = profiles.nameProblem(arena, typed);
-    if (problem) |message| try widgets.boxedText(context, .src(@src()), message, &style.hint_box, &style.field_error);
+    // A restore may go over an existing profile, which is backed up first.
+    const replaced = if (prompt == .restore) profiles.existingProfile(arena, typed) else null;
+    const running_name = session.profile().ptr.profile_name;
+    // A rename may change only the case, which still names the profile being renamed.
+    const is_own_name = prompt == .rename and std.ascii.eqlIgnoreCase(profiles.existingProfile(arena, typed) orelse "", running_name);
+    const problem = if (replaced != null or is_own_name) null else profiles.nameProblem(arena, typed);
+    if (problem) |message| try widgets.boxedText(context, .src(@src()), message, &style.modal_hint_box, &style.field_error);
+    if (replaced) |file_name| {
+        const note = try lang.format(arena, "Replaces the current '{name}'; it's backed up first.", .{ .name = profiles.displayName(file_name) });
+        try widgets.boxedText(context, .src(@src()), note, &style.modal_hint_box, &style.hint);
+    }
 
     switch (prompt) {
         .new => {
@@ -339,23 +397,28 @@ fn namePrompt(context: *ui.Frame) !void {
             try start_row.close(context);
             try widgets.hintText(context, .src(@src()), "Defaults starts fresh; a copy takes every setting from the current profile.");
         },
-        .restore => {},
+        .rename, .restore => {},
     }
 
-    const color_row = try widgets.openModalRow(context, .src(@src()), "Color");
-    try widgets.accentChoices(context, .src(@src()), &g_name_color, &g_is_custom_accent);
-    try color_row.close(context);
-    try widgets.hintText(context, .src(@src()), "Marks it in the profile menu and tints this window.");
+    // A rename keeps the profile's colour, which its own settings already hold.
+    if (prompt != .rename) {
+        const color_row = try widgets.openModalRow(context, .src(@src()), "Color");
+        try widgets.accentChoices(context, .src(@src()), &g_name_color, &g_is_custom_accent);
+        try color_row.close(context);
+        try widgets.hintText(context, .src(@src()), "Marks it in the profile menu and tints this window.");
+    }
 
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
     _ = try actions.open(context);
     if (try modalButton(context, .src(@src()), "Cancel", &style.plain_button)) g_is_name_open = false;
     const submit_label = switch (prompt) {
         .new => "Create",
-        .restore => "Restore",
+        .rename => "Rename",
+        .restore => if (replaced != null) "Replace" else "Restore",
     };
-    const can_submit = typed.len > 0 and problem == null;
-    const submit = Button{ .key = .src(@src()), .label = lang.text(submit_label), .disabled = !can_submit, .style = if (can_submit) &style.primary_button else &style.disabled_primary_button };
+    const is_unchanged = prompt == .rename and std.mem.eql(u8, typed, profiles.displayName(running_name));
+    const can_submit = typed.len > 0 and problem == null and !is_unchanged;
+    const submit = Button{ .key = .src(@src()), .label = lang.text(submit_label), .disabled = !can_submit, .style = if (can_submit) &style.primary_button else &style.disabled_button };
     if ((try context.interact(submit)).clicked and can_submit) {
         submitName(prompt);
         context.requestRedraw();
@@ -378,7 +441,14 @@ fn submitName(prompt: NamePrompt) void {
             .defaults => .create,
             .copy => .copy,
         }, file_name, accent),
-        .restore => if (g_restore_backup) |backup| profiles.requestRestore(file_name, backup, accent),
+        .rename => profiles.request(.rename, file_name, null),
+        .restore => if (g_restore_backup) |backup| {
+            if (profiles.listedName(file_name)) |existing| {
+                profiles.requestRestore(.replace_with_backup, existing, backup, accent);
+            } else {
+                profiles.requestRestore(.restore, file_name, backup, accent);
+            }
+        },
     }
     g_is_name_open = false;
 }
@@ -413,7 +483,7 @@ fn confirmPrompt(context: *ui.Frame) !void {
         .key = .src(@src()),
         .content = switch (confirm) {
             .delete => try lang.format(context.arena(), "'{name}' is moved to a backup, which the Backups tab can restore.", .{ .name = profiles.displayName(name) }),
-            .reset => try lang.format(context.arena(), "Every setting in '{name}' goes back to its default. This can't be undone.", .{ .name = profiles.displayName(name) }),
+            .reset => try lang.format(context.arena(), "Every setting in '{name}' goes back to its default. A backup is kept, which the Backups tab can restore.", .{ .name = profiles.displayName(name) }),
         },
         .style = &style.modal_text,
     });

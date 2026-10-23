@@ -139,7 +139,7 @@ pub fn cycleGroups(manager: *HotkeyManager, group_indices: []const usize, is_for
 
 /// In the order the characters were excluded.
 pub fn cycleExcluded(manager: *HotkeyManager, is_forward: bool) void {
-    slog.info("{s} excluded character hotkey pressed", .{if (is_forward) "Next" else "Previous"});
+    slog.info("Cycle excluded character hotkey pressed ({s})", .{directionName(is_forward)});
     const excluded_names = manager.exclusions.names.items;
 
     const excluded_count = excluded_names.len;
@@ -164,12 +164,12 @@ pub fn cycleExcluded(manager: *HotkeyManager, is_forward: bool) void {
     slog.info("No excluded character is running", .{});
 }
 
-/// Cycles to the most-recently-notified character (FIFO).
+/// Forward visits the oldest notification first (FIFO).
 pub fn cycleNotified(manager: *HotkeyManager, is_forward: bool) void {
     slog.info("Cycle notified character hotkey pressed ({s})", .{directionName(is_forward)});
     const retention_ms: u64 = @as(u64, manager.live().thumbnail.notifications.notified_cycle_retention_seconds) * std.time.ms_per_s;
 
-    var names = manager.app.notifications.notified_queue.namesWithin(manager.allocator, retention_ms) catch |err| {
+    var names = manager.notified_queue.namesWithin(manager.allocator, retention_ms) catch |err| {
         slog.err("Failed to build notified-character list: {}", .{err});
         return;
     };
@@ -273,13 +273,13 @@ pub fn cycleNotLoggedIn(manager: *HotkeyManager, is_forward: bool) void {
 
 /// Moves every cycle cursor onto a manually focused character, so the next cycle press continues from it.
 pub fn syncToFocusedCharacter(manager: *HotkeyManager, character_name: []const u8, hwnd: win32.HWND) void {
-    // Verify the window actually has focus first, to avoid stale updates during rapid cycling.
+    // Focus events can arrive late during rapid cycling.
     if (hwnd != win32.GetForegroundWindow()) {
         slog.debug("Ignoring focus sync for {s} - not the foreground window", .{character_name});
         return;
     }
 
-    // Every not-logged-in window shares the name "EVE", so hwnd (not name) is the cursor; skip the by-name syncing below, which doesn't apply.
+    // Every login-screen window is named "EVE", so its cursor is the hwnd rather than a name.
     if (scout.isGenericCharacterName(character_name)) {
         manager.cycle.last_not_logged_in_hwnd = hwnd;
         return;

@@ -8,7 +8,7 @@ const log = @import("../log.zig");
 const slog = log.Scoped("font_cache");
 
 /// `combat` is incoming DPS's slot; outgoing DPS has its own.
-pub const FontSlot = enum(u4) { main, combat, mining, bounty, system_name, group_badge, notification, combat_outgoing, resources, session_timer };
+pub const FontSlot = enum(u4) { main, combat, mining, bounty, system_name, group_badge, notification, combat_outgoing, resources, session_timer, ping };
 
 const Entry = struct {
     font: ?win32.HFONT = null,
@@ -18,7 +18,7 @@ const Entry = struct {
     weight: types.FontWeight = .Regular,
 };
 
-/// GDI fonts keyed by (FontSlot, DPI), so different-DPI monitors don't evict each other's fonts every render.
+/// Keyed by slot and DPI, so monitors at different DPIs don't evict each other's fonts.
 pub const FontCache = struct {
     allocator: std.mem.Allocator,
     entries: std.AutoHashMap(u32, Entry),
@@ -36,23 +36,23 @@ pub const FontCache = struct {
         self.entries.deinit();
     }
 
-    /// The thumbnail character-name font at `dpi`, for overlays not tied to one thumbnail window (ghost outlines, hint box, region-select label).
+    /// For overlays not tied to one thumbnail window: ghost outlines, hint box, region-select label.
     pub fn characterNameFont(self: *FontCache, thumbnail_config: *const config.ThumbnailConfig, dpi: u32) !win32.HFONT {
         return self.get(.main, dpi, thumbnail_config.characterNameFontName, win32.scalePixels(thumbnail_config.characterNameFontSize, win32.dpiToScale(dpi)), thumbnail_config.characterNameFontWeight);
     }
 
     /// Recreated only when its settings change; the cache owns the returned font.
     pub fn get(self: *FontCache, slot: FontSlot, dpi: u32, font_name: []const u8, font_size: i32, font_weight: types.FontWeight) !win32.HFONT {
-        const gop = try self.entries.getOrPut(cacheKey(slot, dpi));
-        if (!gop.found_existing) gop.value_ptr.* = .{};
-        const entry = gop.value_ptr;
+        const lookup = try self.entries.getOrPut(cacheKey(slot, dpi));
+        if (!lookup.found_existing) lookup.value_ptr.* = .{};
+        const entry = lookup.value_ptr;
 
-        const cache_valid = entry.font != null and
+        const is_cached = entry.font != null and
             std.mem.eql(u8, entry.name, font_name) and
             entry.size == font_size and
             entry.weight == font_weight;
 
-        if (cache_valid) {
+        if (is_cached) {
             return entry.font.?;
         }
 
@@ -65,7 +65,7 @@ pub const FontCache = struct {
         const font_name_z = try self.allocator.dupeSentinel(u8, font_name, 0);
         defer self.allocator.free(font_name_z);
 
-        // Owns a copy rather than borrowing font_name, which may be freed/replaced out from under a cached entry.
+        // Copied, since font_name may be freed under a cached entry.
         const name_copy = try self.allocator.dupe(u8, font_name);
         errdefer self.allocator.free(name_copy);
 
@@ -98,7 +98,7 @@ pub const FontCache = struct {
     }
 };
 
-/// dpi realistically never exceeds ~480 (5x scale), well under the 16 bits reserved here.
+/// dpi stays far below the 16 bits reserved for it.
 fn cacheKey(slot: FontSlot, dpi: u32) u32 {
     return (@as(u32, @backingInt(slot)) << 16) | (dpi & 0xFFFF);
 }

@@ -4,8 +4,8 @@ const ui = @import("ui");
 const style = @import("style.zig");
 const glyphs = @import("glyphs.zig");
 const search = @import("search.zig");
-const lang = @import("../../lang/lang.zig");
 const color_convert = @import("color_convert.zig");
+const lang = @import("../../lang/lang.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -39,17 +39,25 @@ pub const DRAG_THRESHOLD = 8;
 const CONFIRM_TIMEOUT_MS = 2000;
 /// A row's divider wrapper is keyed as the row's own key indexed by this.
 const ROW_DIVIDER_INDEX = 10;
-/// Past any roster's height; layout clamps a scroll offset to the content, so this lands on the last row.
+/// Scroll panes that can wait to scroll to their end at once, e.g. a roster and the tab it's on.
+const MAX_PENDING_SCROLLS = 4;
+/// Past any pane's height; layout clamps a scroll offset to the content, so this lands at its end.
 const SCROLL_TO_END: f32 = 1e9;
-/// A dropdown hugs its longest option up to this, so a long profile or client name is clipped rather than stretching its row.
+/// A dropdown's widest; longer names are clipped rather than stretching the row.
 const SELECT_MAX_WIDTH: f32 = 300;
-/// rowSelect's floor: as wide as the widest single-row dropdown's options need, "Mouse Down (Instant)".
+/// rowSelect's floor, so a section's dropdowns line up.
 const SELECT_MIN_WIDTH: f32 = 170;
 /// Space between a dropdown's longest option and its arrow.
 const SELECT_ARROW_GAP: f32 = 12;
 
+/// The open tab's scrolling content, which form draws each tab in.
+pub const TAB_CONTENT_KEY: ui.Key = .str("knots.content");
+
 /// A laid-out element's rectangle, in window coordinates.
 pub const Box = @FieldType(ui.State.Measured, "box");
+
+/// A tab a notice's button opens, named here since the tabs can't reach form's Tab.
+pub const NoticeTarget = enum { notifications, log_monitoring };
 
 /// Hints by the hash of the row they explain; searched linearly, since a tab has only a few dozen.
 const RowHints = struct {
@@ -73,7 +81,7 @@ const RowHints = struct {
     }
 };
 
-/// What openGroup returns; a disabled group's controls are inert, and closing it veils them so they read as off.
+/// A disabled group's controls are inert; closing it veils them so they read as off.
 pub const Group = struct {
     key: ui.Key,
     rect: Rect,
@@ -99,7 +107,7 @@ pub const Group = struct {
     }
 };
 
-/// A settings row from openBinding, openRow or openModalRow, lit while the cursor is over it; closing it ends the row.
+/// A settings row is lit while hovered; closing it ends the row.
 pub const Row = struct {
     rect: Rect,
     /// Holds the divider above the row, so the row's highlight doesn't take in the gap.
@@ -108,21 +116,23 @@ pub const Row = struct {
     is_clicked: bool,
 
     pub fn close(self: Row, context: *ui.Frame) !void {
+        g_is_row_lit = false;
+        g_is_row_click_pending = false;
         try self.rect.close(context);
         if (self.divider) |divider| try divider.close(context);
     }
 };
 
-/// What openSection and openSwitchedSection return; the caller closes it.
+/// What openSection returns; the caller closes it.
 pub const Section = struct {
-    rect: Rect,
-    /// The header's switch was flipped this frame.
-    is_flipped: bool = false,
+    block: Rect,
+    card: Rect,
 
     pub fn close(self: Section, context: *ui.Frame) !void {
         g_open_section = null;
         g_last_labelled_row = null;
-        try self.rect.close(context);
+        try self.card.close(context);
+        try self.block.close(context);
     }
 };
 
@@ -190,11 +200,8 @@ pub const Roster = struct {
         if (footer.has_open_clients and try addOpenClientsButton(context, self.key.indexed(4), &style.icon_button)) action = .add_open_clients;
         try bar.close(context);
         try self.frame.close(context);
-        // Added rows go last; scrolled to on the next frame, once they're drawn.
-        if (action != .none) {
-            g_scroll_to_end = self.paneKey().hash();
-            context.requestRedraw();
-        }
+        // Added rows go last.
+        if (action != .none) scrollToEnd(context, self.paneKey());
         return action;
     }
 };
@@ -208,12 +215,6 @@ pub const RosterFooter = struct {
 
 pub const RosterAction = enum { none, add, add_open_clients };
 
-/// openSearchedRoster's search box.
-const RosterSearch = struct { query: *std.ArrayList(u8), placeholder: []const u8 };
-
-/// A section's on/off switch, in its header; an unavailable one is drawn inert.
-pub const SectionSwitch = struct { is_on: *bool, is_available: bool = true };
-
 /// What useDetailRows replaced.
 pub const RowSettings = struct { is_aligned: bool, label_style: *const ui.Style };
 
@@ -225,6 +226,9 @@ pub const ColorChange = union(enum) { cleared, set: u32 };
 
 /// A finished drag: item `from` now goes before what was item `before`.
 pub const Move = struct { from: usize, before: usize };
+
+/// A settings row is inset for its hover highlight; a modal's sits flush with the text and buttons around it.
+const RowLook = enum { settings, modal };
 
 /// A row being dragged, drawn under the cursor with a gap where it would land.
 const Lifted = struct {
@@ -286,32 +290,43 @@ pub const ReorderList = struct {
 
 /// Set by useAlignedRows: rows put their label left and their control at the right edge.
 var g_is_aligned: bool = false;
+/// Set by useCompactRows: half the space around row dividers and between a group's rows.
+var g_is_compact: bool = false;
 /// Set by useDetailRows: the label column of unaligned rows.
 var g_label_style: *const ui.Style = &style.label;
 /// Set by openFieldGroup: its rows go undivided, with softer labels.
 var g_is_in_field_group: bool = false;
+/// Set by useUndividedRows: rows that belong with the one above go without a divider.
+var g_is_undivided: bool = false;
 /// Aligned rows drawn so far in the open section; every one after the first gets a divider above it.
 var g_section_row_count: usize = 0;
 /// This frame's row hints, registered after their rows are drawn.
 var g_row_hints: RowHints = .{};
 /// Last frame's row hints, which this frame's rows show as tooltips on their labels.
 var g_row_hints_before: RowHints = .{};
-/// The row whose label was drawn last, which a hintText straight after it explains; null after anything else that a hint could be about.
+/// For a hintText straight after; null after anything else a hint could be about.
 var g_last_labelled_row: ?ui.Key = null;
 var g_open_section: ?u64 = null;
+/// Whether the settings row being drawn is lit; see isRowLit.
+var g_is_row_lit: bool = false;
+/// The settings row being drawn had its label clicked, and no control in it has taken the click yet; see takeRowClick.
+var g_is_row_click_pending: bool = false;
 var g_confirm_key: ?u64 = null;
-/// The rows of the roster that just had a row added, to scroll to its end when next drawn.
-var g_scroll_to_end: ?u64 = null;
+/// Scroll panes that just had something added at their end, to scroll there when next opened; searched linearly, since there are only a few.
+var g_scroll_to_end: [MAX_PENDING_SCROLLS]u64 = undefined;
+var g_scroll_to_end_count: usize = 0;
 var g_confirm_until_ms: i64 = 0;
-/// The detail label column's width this frame: wide enough for last frame's longest label word, so a long translated word doesn't break.
+/// Fits last frame's longest label word, so a long translated word doesn't break.
 var g_detail_column: f32 = style.DETAIL_LABEL_WIDTH;
 /// What this frame's labels need, taking over at the next beginFrame.
 var g_detail_column_next: f32 = style.DETAIL_LABEL_WIDTH;
 /// Every master list's width this frame: wide enough for last frame's widest footer and row names.
 var g_roster_width: f32 = style.ROSTER_WIDTH;
 var g_roster_width_next: f32 = style.ROSTER_WIDTH;
-/// The row being dragged to a new place in its list; `grab_y` and `row_height` are where it was picked up and its height, for drawing it lifted.
+/// `grab_y` and `row_height` let the lifted row be drawn where it was picked up.
 var g_reorder: ?struct { list: u64, from: usize, start_y: f64, grab_y: f32, row_height: f32, insert: usize, has_moved: bool = false } = null;
+/// Set by a notice's button; see takeNoticeTarget.
+var g_notice_target: ?NoticeTarget = null;
 
 pub fn beginFrame() void {
     g_row_hints_before = g_row_hints;
@@ -329,52 +344,76 @@ pub fn reset() void {
     g_row_hints_before = .{};
     g_last_labelled_row = null;
     g_open_section = null;
+    g_is_row_lit = false;
+    g_is_row_click_pending = false;
+    g_is_undivided = false;
     g_confirm_key = null;
-    g_scroll_to_end = null;
+    g_scroll_to_end_count = 0;
     g_detail_column = style.DETAIL_LABEL_WIDTH;
     g_detail_column_next = style.DETAIL_LABEL_WIDTH;
     g_roster_width = style.ROSTER_WIDTH;
     g_roster_width_next = style.ROSTER_WIDTH;
+    g_notice_target = null;
 }
 
-/// A panel with its heading and the intro hint; the caller closes it.
+/// A card under its heading and intro hint; the caller closes it.
 pub fn openSection(context: *ui.Frame, comptime title: []const u8, comptime hint: []const u8, section_style: *const ui.Style) !Section {
-    return openAnySection(context, title, hint, section_style, null);
-}
+    const key: ui.Key = .str("knots.section:" ++ title);
+    const id = key.hash();
+    const ui_state = context.ui();
+    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, id);
+    const shown_title = lang.text(title);
+    search.captureSection(id);
+    search.captureText(shown_title);
+    search.captureText(lang.text(hint));
+    // A section the search doesn't match is laid out of sight rather than skipped, so its caller needn't know.
+    const is_hidden = !search.sectionMatches(id);
+    const block_style = try context.arena().create(ui.Style);
+    block_style.* = style.section_block.with(.{ .height = section_style.height });
+    const block = Rect{ .key = key, .style = if (is_hidden) &style.section_hidden else block_style };
+    _ = try block.open(context);
 
-/// openSection with an on/off switch for the whole section at the right of its heading.
-pub fn openSwitchedSection(context: *ui.Frame, comptime title: []const u8, comptime hint: []const u8, section_style: *const ui.Style, header_switch: SectionSwitch) !Section {
-    return openAnySection(context, title, hint, section_style, header_switch);
+    const intro = Rect{ .key = .str("knots.intro:" ++ title), .style = &style.section_intro };
+    _ = try intro.open(context);
+    try context.e(Text{ .selectable = false, .key = .str("knots.title:" ++ title), .content = shown_title, .style = &style.heading });
+    if (hint.len > 0) try boxedText(context, .str("knots.hint:" ++ title), hint, &style.section_hint_box, &style.hint);
+    try intro.close(context);
+
+    const card = Rect{ .key = .str("knots.card:" ++ title), .style = section_style };
+    _ = try card.open(context);
+    g_open_section = id;
+    g_section_row_count = 0;
+    g_last_labelled_row = null;
+    return .{ .block = block, .card = card };
 }
 
 /// A label-then-controls row; the caller adds the controls and closes it.
 pub fn openBinding(context: *ui.Frame, key: ui.Key, label: []const u8) !Row {
-    const row = try openSettingsRow(context, key, if (g_is_aligned) &style.aligned_row else &style.binding_row);
+    const row = try openSettingsRow(context, key, if (g_is_aligned) &style.aligned_row else &style.binding_row, .settings);
     const shown = lang.text(label);
     search.captureText(shown);
     try rowLabel(context, key, key.indexed(1), shown, try rowLabelStyle(context, shown));
     return row;
 }
 
-/// openBinding with `mark` at the end of the label's column, so the controls still start where other rows' do.
-pub fn openMarkedBinding(context: *ui.Frame, key: ui.Key, label: []const u8, mark: []const u8) !Row {
-    const row = try openSettingsRow(context, key, &style.aligned_row);
-    const cell = Rect{ .key = key.indexed(2), .style = if (g_is_aligned) &style.inline_row else &style.label_cell };
-    _ = try cell.open(context);
+/// openBinding for a slider; in a field group its label only fits its text, leaving the spare width to the slider.
+pub fn openSliderBinding(context: *ui.Frame, key: ui.Key, label: []const u8) !Row {
+    if (!g_is_in_field_group) return openBinding(context, key, label);
+    const row = try openSettingsRow(context, key, &style.aligned_row, .settings);
     const shown = lang.text(label);
     search.captureText(shown);
-    try rowLabel(context, key, key.indexed(1), shown, try rowLabelStyle(context, shown));
-    try context.e(Text{ .selectable = false, .key = key.indexed(3), .content = mark, .style = &style.binding_arrow });
-    try cell.close(context);
+    const fitted = try context.arena().create(ui.Style);
+    fitted.* = style.label_aligned_grouped.with(.{ .width = .fixed(@ceil(try textWidth(context, shown, &style.label_aligned_grouped))) });
+    try rowLabel(context, key, key.indexed(1), shown, fitted);
     return row;
 }
 
-/// A modal over the whole window, behind which the rest of the dialog dims and blurs; the caller opens and closes it.
+/// The rest of the dialog dims and blurs behind it; the caller opens and closes it.
 pub fn modal(key: ui.Key, is_open: *bool, panel_style: *const ui.Style) Dialog {
     return .{ .is_open = is_open, .key = key, .style = panel_style, .parts = .{ .backdrop = &style.modal_backdrop } };
 }
 
-/// A popover beside `anchor`, on whichever side has room; the caller fills it and ends it with closeResponse, where `.backdrop` is a click outside.
+/// On whichever side of `anchor` has room; in closeResponse, `.backdrop` is a click outside.
 pub fn openPopover(context: *ui.Frame, key: ui.Key, is_open: *bool, anchor: Box) !Dialog {
     const ui_state = context.ui();
     const extent = context.input().logical_extent;
@@ -393,7 +432,7 @@ pub fn openPopover(context: *ui.Frame, key: ui.Key, is_open: *bool, anchor: Box)
     return openPlaced(context, key, is_open, &style.popover, .{ x, y });
 }
 
-/// A menu dropping down from `anchor`, lined up with its left edge, or its right edge where there's no room; the caller fills it and closes it.
+/// Aligned to `anchor`'s left edge, or its right where there's no room; the caller fills and closes it.
 pub fn openMenu(context: *ui.Frame, key: ui.Key, is_open: *bool, anchor: Box) !Dialog {
     const viewport_width: f32 = @floatFromInt(context.input().logical_extent.width);
     const max_x = @max(POPOVER_MARGIN, viewport_width - style.MENU_WIDTH - POPOVER_MARGIN);
@@ -473,15 +512,13 @@ pub fn textWidth(context: *ui.Frame, text: []const u8, text_style: *const ui.Sty
     return (try face.measure(text, font_size * scale)).width / scale;
 }
 
-/// Widens every master list, from the next frame, so a row's `name` doesn't break mid-word beside its `lead` (a portrait or dot, 0 for none) and `badge` ("" for none).
+/// From the next frame, so `name` stays on one line beside `lead` (portrait or dot, 0 for none) and `badge` ("" for none), up to style.ROSTER_MAX_WIDTH.
 pub fn fitRosterRow(context: *ui.Frame, name: []const u8, lead: f32, badge: []const u8) !void {
     const frame_padding = comptime style.roster.padding.?;
     const row_padding = comptime style.roster_row.padding.?;
     const gap = comptime style.roster_row.gap.?;
-    var widest: f32 = 0;
-    var words = std.mem.tokenizeScalar(u8, name, ' ');
-    while (words.next()) |word| widest = @max(widest, try textWidth(context, word, &style.roster_name_selected));
-    var needed = frame_padding.left() + frame_padding.right() + style.ROW_SCROLLBAR_GUTTER + row_padding.left() + row_padding.right() + widest;
+    const name_width = try textWidth(context, name, &style.roster_name_selected);
+    var needed = frame_padding.left() + frame_padding.right() + style.ROW_SCROLLBAR_GUTTER + row_padding.left() + row_padding.right() + name_width;
     if (lead > 0) needed += lead + gap;
     if (badge.len > 0) needed += gap + try textWidth(context, badge, &style.roster_badge);
     widenRosters(context, needed);
@@ -496,15 +533,13 @@ pub fn withWidth(context: *ui.Frame, base: *const ui.Style, width: f32) !*const 
 
 /// A master list whose rows scroll, or fit when `is_filling` is false, above a pinned footer of add buttons.
 pub fn openRoster(context: *ui.Frame, key: ui.Key, frame_style: *const ui.Style, is_filling: bool) !Roster {
-    return openAnyRoster(context, key, frame_style, is_filling, null);
+    const frame = Rect{ .key = key, .style = try withWidth(context, frame_style, g_roster_width) };
+    _ = try frame.open(context);
+    const rows = try openScrollPane(context, key.indexed(1), if (is_filling) style.roster_scroll else style.roster_fit);
+    return .{ .key = key, .frame = frame, .rows = rows };
 }
 
-/// openRoster with a searchBox above its rows; the caller filters the rows by `query`.
-pub fn openSearchedRoster(context: *ui.Frame, key: ui.Key, frame_style: *const ui.Style, is_filling: bool, query: *std.ArrayList(u8), placeholder: []const u8) !Roster {
-    return openAnyRoster(context, key, frame_style, is_filling, .{ .query = query, .placeholder = placeholder });
-}
-
-/// A search box with a button to clear it, e.g. at the top of a master list; `query` is owned by the caller.
+/// A search box with a button to clear it, e.g. the header's settings search; `query` is owned by the caller.
 pub fn searchBox(context: *ui.Frame, key: ui.Key, query: *std.ArrayList(u8), placeholder: []const u8) !void {
     const row = Rect{ .key = key, .style = &style.search_row };
     _ = try row.open(context);
@@ -518,7 +553,7 @@ pub fn searchBox(context: *ui.Frame, key: ui.Key, query: *std.ArrayList(u8), pla
     try row.close(context);
 }
 
-/// An empty list's stand-in, centred where the list and its details would be: `title`, `message` on how to start, then the caller's buttons; the caller closes it.
+/// Centred where the list and details would be: `title`, `message`, then the caller's buttons; the caller closes it.
 pub fn openEmptyState(context: *ui.Frame, key: ui.Key, title: []const u8, message: []const u8) !EmptyState {
     const state = Rect{ .key = key, .style = &style.empty_state };
     _ = try state.open(context);
@@ -531,6 +566,19 @@ pub fn openEmptyState(context: *ui.Frame, key: ui.Key, title: []const u8, messag
     const actions = Rect{ .key = key.indexed(3), .style = &style.empty_state_actions };
     _ = try actions.open(context);
     return .{ .state = state, .actions = actions };
+}
+
+/// One row in place of an empty master list and its details: what the list is for, then its add button; returns whether that was clicked.
+pub fn emptyListRow(context: *ui.Frame, key: ui.Key, message: []const u8, add_label: []const u8) !bool {
+    const row = Rect{ .key = key, .style = &style.list_row };
+    _ = try row.open(context);
+    const shown = lang.text(message);
+    search.captureText(shown);
+    search.captureText(lang.text(add_label));
+    try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = shown, .style = &style.empty_list_text });
+    const is_clicked = try glyphButton(context, key.indexed(2), .add, add_label, &style.add_button, false);
+    try row.close(context);
+    return is_clicked;
 }
 
 /// The refresh icon that adds every open EVE client; a tooltip names it, since the icon alone doesn't.
@@ -570,6 +618,31 @@ pub fn isAligned() bool {
     return g_is_aligned;
 }
 
+/// Halves the space between rows, matching a popover's tighter gap; returns the previous setting, for putting back.
+pub fn useCompactRows(is_compact: bool) bool {
+    const previous = g_is_compact;
+    g_is_compact = is_compact;
+    return previous;
+}
+
+/// Drops the dividers above the rows drawn next, e.g. a hotkey's own switches under it; returns the previous setting, for putting back.
+pub fn useUndividedRows(is_undivided: bool) bool {
+    const previous = g_is_undivided;
+    g_is_undivided = is_undivided;
+    return previous;
+}
+
+/// Whether the settings row being drawn is under the mouse, for controls that show more of themselves while it is.
+pub fn isRowLit() bool {
+    return g_is_row_lit;
+}
+
+/// True once per label click on the settings row being drawn, for the first control in it that acts on one, e.g. by taking focus.
+pub fn takeRowClick() bool {
+    defer g_is_row_click_pending = false;
+    return g_is_row_click_pending;
+}
+
 /// The width laid over a hotkey box in these rows, like slider's track; null keeps it growing.
 pub fn hotkeyWidth() ?*const ui.Style {
     if (g_is_in_field_group) return &style.hotkey_width_grouped;
@@ -577,15 +650,45 @@ pub fn hotkeyWidth() ?*const ui.Style {
     return null;
 }
 
-/// A row of the caller's own cells, e.g. a grid's, spaced and divided like the aligned rows around it; the caller closes it.
+/// The caller's own cells, spaced and divided like aligned rows; the caller closes it.
 pub fn openRow(context: *ui.Frame, key: ui.Key) !Row {
-    return openSettingsRow(context, key, &style.aligned_row);
+    return openSettingsRow(context, key, &style.aligned_row, .settings);
 }
 
-/// A scrolling column that keeps a gutter for its scrollbar only while it has one, so its rows otherwise reach the edge like those around it.
+/// Focuses the text input `key` with its `text_length` bytes selected, so typing replaces them; call before drawing it, once as its modal opens.
+pub fn focusTextInput(context: *ui.Frame, key: ui.Key, text_length: usize) !void {
+    const ui_state = context.ui();
+    const id = key.hash();
+    ui_state.state.focused = id;
+    const edit_state = try ui_state.state.getOrCreate(.text_input, ui_state.allocator, id);
+    edit_state.sel_anchor = 0;
+    edit_state.cursor = @intCast(text_length);
+}
+
+/// openRow for a modal, flush with its text and buttons; the caller closes it.
+pub fn openModalFieldRow(context: *ui.Frame, key: ui.Key) !Row {
+    return openSettingsRow(context, key, &style.aligned_row, .modal);
+}
+
+/// Scrolls the pane keyed `key`, e.g. TAB_CONTENT_KEY, to its end from the next frame, once what was added there is drawn.
+pub fn scrollToEnd(context: *ui.Frame, key: ui.Key) void {
+    const id = key.hash();
+    context.requestRedraw();
+    if (std.mem.indexOfScalar(u64, g_scroll_to_end[0..g_scroll_to_end_count], id) != null) return;
+    if (g_scroll_to_end_count == MAX_PENDING_SCROLLS) return;
+    g_scroll_to_end[g_scroll_to_end_count] = id;
+    g_scroll_to_end_count += 1;
+}
+
+/// Keeps a scrollbar gutter only while scrolling, so rows otherwise reach the edge.
 pub fn openScrollPane(context: *ui.Frame, key: ui.Key, styles: style.ScrollPane) !ScrollPane {
     const content_key = key.indexed(1);
     const ui_state = context.ui();
+    if (std.mem.indexOfScalar(u64, g_scroll_to_end[0..g_scroll_to_end_count], key.hash())) |index| {
+        g_scroll_to_end_count -= 1;
+        g_scroll_to_end[index] = g_scroll_to_end[g_scroll_to_end_count];
+        (try ui_state.state.getOrCreate(.scroll, ui_state.allocator, key.hash())).offset = .{ 0, SCROLL_TO_END };
+    }
     _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, key.hash());
     _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, content_key.hash());
     // Measured last frame; the content column fits its rows, so it outgrows the pane once the pane scrolls.
@@ -604,7 +707,7 @@ pub fn openScrollPane(context: *ui.Frame, key: ui.Key, styles: style.ScrollPane)
     return .{ .pane = pane, .content = content };
 }
 
-/// A row of buttons, one per option, with `selected` highlighted; returns the index clicked, if it isn't the selected one.
+/// Returns the index clicked, unless it's `selected`.
 pub fn segmented(context: *ui.Frame, key: ui.Key, options: []const []const u8, selected: usize) !?usize {
     const group = Rect{ .key = key, .style = &style.segmented };
     _ = try group.open(context);
@@ -624,14 +727,14 @@ pub fn segmented(context: *ui.Frame, key: ui.Key, options: []const []const u8, s
     return clicked_index;
 }
 
-/// A modal's settings-style row, lit on hover like a popover's: `label` on the left, what the caller adds pushed to the right; the caller closes it.
+/// `label` left, the caller's controls right; the caller closes it.
 pub fn openModalRow(context: *ui.Frame, key: ui.Key, label: []const u8) !Row {
-    const row = try openRow(context, key);
+    const row = try openModalFieldRow(context, key);
     try rowLabel(context, key, key.indexed(1), lang.text(label), &style.label_aligned);
     return row;
 }
 
-/// style.ACCENT_PRESETS, then a rainbow picker for any other; `is_custom` says the picker chose `color`, so it's the one ringed even when the colour matches a preset.
+/// style.ACCENT_PRESETS and a rainbow picker; `is_custom` rings the picker even when `color` matches a preset.
 pub fn accentChoices(context: *ui.Frame, key: ui.Key, color: *ui.Color, is_custom: *bool) !void {
     const row = Rect{ .key = key, .style = &style.accent_choices };
     _ = try row.open(context);
@@ -652,7 +755,7 @@ pub fn accentChoices(context: *ui.Frame, key: ui.Key, color: *ui.Color, is_custo
     }
     const custom_ring = Rect{ .key = key.indexed(1), .style = if (chosen_preset == null) &style.accent_ring_chosen else &style.accent_ring };
     _ = try custom_ring.open(context);
-    const tip = Tooltip{ .key = key.indexed(2), .content = lang.text("Any other colour") };
+    const tip = Tooltip{ .key = key.indexed(2), .content = lang.text("Any other color") };
     _ = try tip.open(context);
     const picker_key = key.indexed(3);
     _ = try context.interact(ColorPicker{
@@ -690,7 +793,7 @@ pub fn colorParts(is_aligned: bool) ColorPicker.Parts {
     };
 }
 
-/// A colour row that can be left unset to inherit `fallback`, shown struck through; the popup's Reset unsets it.
+/// Unset inherits `fallback`, shown struck through; Reset unsets it.
 pub fn optionalColor(context: *ui.Frame, key: ui.Key, label: []const u8, current: ?u32, fallback: u32) !?ColorChange {
     const row = try openBinding(context, key, label);
     var change: ?ColorChange = null;
@@ -716,7 +819,7 @@ pub fn reorderRow(context: *ui.Frame, base: ui.Key, index: usize) !void {
     try reorderRowByHandle(context, base, index, base.indexed(index));
 }
 
-/// reorderRow for a row whose controls would take the press, e.g. a text box: only a press on `handle` starts the drag.
+/// Only a press on `handle` starts the drag, for rows whose controls take the press.
 pub fn reorderRowByHandle(context: *ui.Frame, base: ui.Key, index: usize, handle: ui.Key) !void {
     const ui_state = context.ui();
     const id = base.indexed(index).hash();
@@ -759,7 +862,7 @@ pub fn reorderFinish(context: *ui.Frame, base: ui.Key, count: usize) ?Move {
 
 /// A run of settings that dims, and takes no clicks or keyboard focus, while `is_enabled` is false.
 pub fn openGroup(context: *ui.Frame, key: ui.Key, is_enabled: bool) !Group {
-    return openAnyGroup(context, key, &style.group, is_enabled);
+    return openAnyGroup(context, key, if (g_is_compact) &style.group_compact else &style.group, is_enabled);
 }
 
 /// Like openGroup, filling the rest of a filling tab's section.
@@ -826,7 +929,7 @@ pub fn glyphButton(context: *ui.Frame, key: ui.Key, glyph: glyphs.Glyph, label: 
     return response.clicked and !is_disabled;
 }
 
-/// A hint under a row ending in a link, e.g. "Learn more", always shown since a tooltip can't hold a link; returns whether the link was clicked.
+/// Always shown, since a tooltip can't hold a link; returns whether it was clicked.
 pub fn hintWithLink(context: *ui.Frame, key: ui.Key, content: []const u8, link_label: []const u8) !bool {
     const shown = lang.text(content);
     search.captureText(shown);
@@ -844,7 +947,7 @@ pub fn paragraph(context: *ui.Frame, key: ui.Key, content: []const u8) !void {
     try boxedText(context, key, content, &style.hint_box, &style.hint);
 }
 
-/// A tooltip on the label of the row drawn just before it, else a paragraph; `content` must outlive the frame, e.g. a string literal.
+/// On the previous row's label, else a paragraph; `content` must outlive the frame.
 pub fn hintText(context: *ui.Frame, key: ui.Key, content: []const u8) !void {
     const row = g_last_labelled_row orelse return paragraph(context, key, content);
     search.captureText(lang.text(content));
@@ -859,7 +962,25 @@ pub fn notice(context: *ui.Frame, key: ui.Key, content: []const u8) !void {
     try boxedText(context, key, content, &style.notice, &style.notice_text);
 }
 
-/// Text inside a box: knots lays a Text out without its padding, border or background, so they go on a Rect around it.
+/// notice with a button that opens `target`'s tab, the one that turns on what the notice says is off.
+pub fn noticeWithButton(context: *ui.Frame, key: ui.Key, content: []const u8, button_label: []const u8, target: NoticeTarget) !void {
+    const box = Rect{ .key = key, .style = &style.notice_with_button };
+    _ = try box.open(context);
+    try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = lang.text(content), .style = &style.notice_text });
+    const is_clicked = (try context.interact(Button{ .key = key.indexed(2), .label = lang.text(button_label), .style = &style.notice_button })).clicked;
+    try box.close(context);
+    if (!is_clicked) return;
+    g_notice_target = target;
+    context.requestRedraw();
+}
+
+/// The tab a notice's button asked for since the last call, for form to open once the tab is drawn.
+pub fn takeNoticeTarget() ?NoticeTarget {
+    defer g_notice_target = null;
+    return g_notice_target;
+}
+
+/// knots lays out a Text without padding, border or background, so they go on a surrounding Rect.
 pub fn boxedText(context: *ui.Frame, key: ui.Key, content: []const u8, box_style: *const ui.Style, text_style: *const ui.Style) !void {
     const box = Rect{ .key = key, .style = box_style };
     _ = try box.open(context);
@@ -877,6 +998,11 @@ pub fn subheading(context: *ui.Frame, key: ui.Key, content: []const u8) !void {
 /// Returns whether the user moved it this frame.
 pub fn slider(context: *ui.Frame, key: ui.Key, value: *f32, min: f32, max: f32, steps: f32) !bool {
     const track_style = if (g_is_in_field_group) &style.slider_box_grouped else if (g_is_aligned) &style.slider_box_aligned else &style.slider_box;
+    return sizedSlider(context, key, value, min, max, steps, track_style);
+}
+
+/// slider with its own track width, e.g. to leave room for more controls in its row.
+pub fn sizedSlider(context: *ui.Frame, key: ui.Key, value: *f32, min: f32, max: f32, steps: f32, track_style: *const ui.Style) !bool {
     const track = Rect{ .key = key, .style = track_style };
     _ = try track.open(context);
     const response = try context.interact(SliderInput{
@@ -885,7 +1011,7 @@ pub fn slider(context: *ui.Frame, key: ui.Key, value: *f32, min: f32, max: f32, 
         .min = min,
         .max = max,
         .steps = steps,
-        .parts = .{ .track = &style.slider_track, .fill = &style.slider_fill, .thumb = if (context.ui().inert_depth > 0) &style.slider_thumb_inert else &style.slider_thumb },
+        .parts = .{ .track = &style.slider_track, .fill = &style.slider_fill, .thumb = &style.slider_thumb },
     });
     try track.close(context);
     return response.changed;
@@ -905,7 +1031,7 @@ pub fn checkbox(context: *ui.Frame, key: ui.Key, label: []const u8, is_checked: 
     if (shown.len == 0) return toggleSwitch(context, key, is_checked);
 
     const row = try openRow(context, key.indexed(9));
-    try rowLabel(context, key.indexed(9), key.indexed(8), shown, alignedLabelStyle());
+    try rowLabel(context, key.indexed(9), key.indexed(8), shown, try alignedLabelStyle(context, shown));
     const is_flipped = try toggleSwitch(context, key, is_checked);
     try row.close(context);
     if (is_flipped) return true;
@@ -914,7 +1040,7 @@ pub fn checkbox(context: *ui.Frame, key: ui.Key, label: []const u8, is_checked: 
     return true;
 }
 
-/// A detail pane's lone setting: `label`, then a switch at the row's end that a click anywhere on the row flips; returns whether it was flipped.
+/// A click anywhere on the row flips the switch; returns whether it flipped.
 pub fn switchRow(context: *ui.Frame, key: ui.Key, label: []const u8, is_checked: *bool) !bool {
     const row = try openBinding(context, key, label);
     try context.e(Rect{ .key = key.indexed(3), .style = &style.spacer });
@@ -938,14 +1064,13 @@ pub fn textStyle(arena: std.mem.Allocator, color: u32, size: f32, options: TextO
     return text_style;
 }
 
-/// knots has no switch, so it's a pill button whose knob slides across; returns whether it was flipped this frame.
+/// knots has no switch: a pill button with a sliding knob; returns whether it flipped.
 fn toggleSwitch(context: *ui.Frame, key: ui.Key, is_checked: *bool) !bool {
     // knots never animates layout, so the knob is pushed along by a spacer whose width is eased here.
     const position = context.ui().anim(key.hash(), "knob", if (is_checked.*) 1 else 0, .{ .duration_ms = style.SWITCH_ANIMATION_MS });
     const spacer = try context.arena().create(ui.Style);
     spacer.* = .{ .width = .fixed(position * style.SWITCH_TRAVEL) };
-    const on_style = if (context.ui().inert_depth > 0) &style.switch_on_inert else &style.switch_on;
-    const button = Button{ .key = key, .style = if (is_checked.*) on_style else &style.switch_off };
+    const button = Button{ .key = key, .style = if (is_checked.*) &style.switch_on else &style.switch_off };
     const response = try button.openResponse(context);
     try context.e(Rect{ .key = key.indexed(2), .style = spacer });
     try context.e(Rect{ .key = key.indexed(1), .style = if (is_checked.*) &style.switch_knob_on else &style.switch_knob_off });
@@ -994,7 +1119,7 @@ fn selectStyle(context: *ui.Frame, labels: []const []const u8, min_width: f32) !
     return fitted;
 }
 
-/// disabled_button, keeping `button_style`'s width and alignment so disabling a full-width button doesn't shrink it.
+/// Keeps `button_style`'s width and alignment, so a disabled full-width button doesn't shrink.
 fn disabledLook(context: *ui.Frame, button_style: *const ui.Style) !*const ui.Style {
     const look = try context.arena().create(ui.Style);
     look.* = style.disabled_button.with(.{ .width = button_style.width, .justify = button_style.justify, .gap = button_style.gap });
@@ -1008,64 +1133,21 @@ fn reorderLifted(context: *ui.Frame, base: ui.Key) ?Lifted {
     return .{ .from = drag.from, .slot = if (drag.insert > drag.from) drag.insert - 1 else drag.insert, .top = mouse_y - drag.grab_y, .row_height = drag.row_height };
 }
 
-fn openAnyRoster(context: *ui.Frame, key: ui.Key, frame_style: *const ui.Style, is_filling: bool, roster_search: ?RosterSearch) !Roster {
-    const frame = Rect{ .key = key, .style = try withWidth(context, frame_style, g_roster_width) };
-    _ = try frame.open(context);
-    if (roster_search) |box| try searchBox(context, key.indexed(5), box.query, box.placeholder);
-    const ui_state = context.ui();
-    const pane_key = key.indexed(1);
-    if (g_scroll_to_end == pane_key.hash()) {
-        g_scroll_to_end = null;
-        (try ui_state.state.getOrCreate(.scroll, ui_state.allocator, pane_key.hash())).offset = .{ 0, SCROLL_TO_END };
-    }
-    const rows = try openScrollPane(context, pane_key, if (is_filling) style.roster_scroll else style.roster_fit);
-    return .{ .key = key, .frame = frame, .rows = rows };
-}
-
-fn openAnySection(context: *ui.Frame, comptime title: []const u8, comptime hint: []const u8, section_style: *const ui.Style, header_switch: ?SectionSwitch) !Section {
-    const key: ui.Key = .str("knots.section:" ++ title);
-    const id = key.hash();
-    const ui_state = context.ui();
-    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, id);
-    const shown_title = lang.text(title);
-    search.captureSection(id);
-    search.captureText(shown_title);
-    search.captureText(lang.text(hint));
-    // A section the search doesn't match is laid out of sight rather than skipped, so its caller needn't know.
-    const is_hidden = !search.sectionMatches(id);
-    const section = Rect{ .key = key, .style = if (is_hidden) &style.section_hidden else section_style };
-    _ = try section.open(context);
-    g_open_section = id;
-    g_section_row_count = 0;
-    g_last_labelled_row = null;
-
-    const heading = Rect{ .key = .str("knots.heading:" ++ title), .style = &style.section_heading };
-    _ = try heading.open(context);
-    const title_row = Rect{ .key = .str("knots.heading.title:" ++ title), .style = &style.section_heading_title };
-    _ = try title_row.open(context);
-    try context.e(Text{ .selectable = false, .key = .str("knots.title:" ++ title), .content = shown_title, .style = &style.heading });
-    try title_row.close(context);
-    var is_flipped = false;
-    if (header_switch) |toggle| {
-        const group = try openInlineGroup(context, .str("knots.section.switch.group:" ++ title), toggle.is_available);
-        is_flipped = try toggleSwitch(context, .str("knots.section.switch:" ++ title), toggle.is_on);
-        try group.close(context);
-    }
-    try heading.close(context);
-
-    if (hint.len > 0) try boxedText(context, .str("knots.hint:" ++ title), hint, &style.hint_box, &style.hint);
-    return .{ .rect = section, .is_flipped = is_flipped };
-}
-
 fn openAnyFieldGroup(context: *ui.Frame, key: ui.Key, label: []const u8, row_style: *const ui.Style, column_style: *const ui.Style) !FieldGroup {
+    // Among aligned rows it's divided off like one and takes a row's label width; detail panes divide their groups themselves and share their narrow label column.
+    const is_among_rows = g_is_aligned;
+    if (is_among_rows and nextRowHasDivider()) try separator(context, key.indexed(3));
     g_last_labelled_row = null;
     const row = Rect{ .key = key, .style = row_style };
     _ = try row.open(context);
     const shown = lang.text(label);
     search.captureText(shown);
     // The group's label sits a row's inset in, so its column is that much narrower.
-    try fitDetailColumn(context, shown, style.ROW_INSET);
-    const label_style = try withWidth(context, &style.field_group_label_text, g_detail_column - style.ROW_INSET);
+    const label_width = if (is_among_rows) style.LABEL_WIDTH else blk: {
+        try fitDetailColumn(context, shown, style.ROW_INSET);
+        break :blk g_detail_column;
+    };
+    const label_style = try withWidth(context, &style.field_group_label_text, label_width - style.ROW_INSET);
     try boxedText(context, key.indexed(1), label, &style.field_group_label, label_style);
     const column = Rect{ .key = key.indexed(2), .style = column_style };
     _ = try column.open(context);
@@ -1084,7 +1166,7 @@ fn openAnyGroup(context: *ui.Frame, key: ui.Key, group_style: *const ui.Style, i
     return .{ .key = key, .rect = rect, .is_enabled = is_enabled };
 }
 
-/// A row's label, inside a tooltip when last frame gave the row a hint; a hintText straight after it explains this row.
+/// Inside a tooltip when last frame gave the row a hint.
 fn rowLabel(context: *ui.Frame, row_key: ui.Key, label_key: ui.Key, shown: []const u8, label_style: *const ui.Style) !void {
     g_last_labelled_row = row_key;
     const label = Text{ .selectable = false, .key = label_key, .content = shown, .style = label_style };
@@ -1103,9 +1185,9 @@ fn rowLabel(context: *ui.Frame, row_key: ui.Key, label_key: ui.Key, shown: []con
     try tip.close(context);
 }
 
-/// A plain row's label: pushed against its controls when aligned, else in the label column, which a detail pane widens to fit.
+/// Against the controls when aligned, else in the label column, which a detail pane widens.
 fn rowLabelStyle(context: *ui.Frame, shown: []const u8) !*const ui.Style {
-    if (g_is_aligned) return alignedLabelStyle();
+    if (g_is_aligned) return alignedLabelStyle(context, shown);
     if (g_label_style == &style.detail_label) return detailLabelStyle(context, shown);
     return g_label_style;
 }
@@ -1131,26 +1213,34 @@ fn fitRoster(context: *ui.Frame, footer: RosterFooter) !void {
     widenRosters(context, needed);
 }
 
-/// Every master list takes the widest of this frame's `needed` widths from the next frame, up to style.ROSTER_MAX_WIDTH.
+/// Every master list takes this frame's widest `needed` from the next frame, up to style.ROSTER_MAX_WIDTH.
 fn widenRosters(context: *ui.Frame, needed: f32) void {
     const width = @min(@ceil(needed), style.ROSTER_MAX_WIDTH);
     g_roster_width_next = @max(g_roster_width_next, width);
     if (width > g_roster_width) context.requestRedraw();
 }
 
-fn alignedLabelStyle() *const ui.Style {
-    return if (g_is_in_field_group) &style.label_aligned_grouped else &style.label_aligned;
+/// Grows against the row's controls but never below `shown`'s longest word, so a crowded row wraps its label between words rather than inside one.
+fn alignedLabelStyle(context: *ui.Frame, shown: []const u8) !*const ui.Style {
+    const base = if (g_is_in_field_group) &style.label_aligned_grouped else &style.label_aligned;
+    var widest: f32 = 0;
+    var words = std.mem.tokenizeScalar(u8, shown, ' ');
+    while (words.next()) |word| widest = @max(widest, try textWidth(context, word, base));
+    const fitted = try context.arena().create(ui.Style);
+    fitted.* = base.with(.{ .width = .{ .kind = .grow, .min = @ceil(widest) } });
+    return fitted;
 }
 
 /// Counts the row: the section's first has no divider above it.
 fn nextRowHasDivider() bool {
     defer g_section_row_count += 1;
-    return !g_is_in_field_group and g_open_section != null and g_section_row_count > 0;
+    return !g_is_in_field_group and !g_is_undivided and g_open_section != null and g_section_row_count > 0;
 }
 
-/// Lit while the cursor is anywhere in last frame's box, controls included, since knots only hovers the innermost element.
-fn openSettingsRow(context: *ui.Frame, key: ui.Key, row_style: *const ui.Style) !Row {
-    const divider: ?Rect = if (g_is_aligned and nextRowHasDivider()) Rect{ .key = key.indexed(ROW_DIVIDER_INDEX), .style = &style.row_divider } else null;
+/// A settings row is lit anywhere in last frame's box, since knots only hovers the innermost element.
+fn openSettingsRow(context: *ui.Frame, key: ui.Key, row_style: *const ui.Style, look: RowLook) !Row {
+    const divider_style = if (g_is_compact) &style.row_divider_compact else &style.row_divider;
+    const divider: ?Rect = if (g_is_aligned and nextRowHasDivider()) Rect{ .key = key.indexed(ROW_DIVIDER_INDEX), .style = divider_style } else null;
     if (divider) |rect| _ = try rect.open(context);
 
     // A row without a label leaves nothing for a hint after it to sit on.
@@ -1161,9 +1251,17 @@ fn openSettingsRow(context: *ui.Frame, key: ui.Key, row_style: *const ui.Style) 
     const is_live = ui_state.inert_depth == 0 and ui_state.acceptsInput(key.hash());
     const mouse = ui_state.input.mouse_pos;
     const is_lit = is_live and measuredBox(ui_state, key).contains(.{ @floatCast(mouse[0]), @floatCast(mouse[1]) });
+    g_is_row_lit = is_lit;
     const lit_style = try context.arena().create(ui.Style);
-    lit_style.* = row_style.with(.{ .padding = .xy(style.ROW_INSET, 0), .radius = .sm, .background = if (is_lit) .{ .color = style.ROW_HOVER } else .transparent });
+    lit_style.* = switch (look) {
+        .settings => row_style.with(.{ .padding = .xy(style.ROW_INSET, 0), .radius = .sm, .background = if (is_lit) .{ .color = style.ROW_HOVER } else .transparent }),
+        .modal => row_style.*,
+    };
     // Interactive, so the cursor moving onto another row redraws, and a click on the label lands on the row.
     _ = try ui_state.openStyled(key, .{ .base = &Rect.base.root, .user = lit_style }, .{}, .{ .interactive = true });
-    return .{ .rect = .{ .key = key, .style = lit_style }, .divider = divider, .is_clicked = is_live and (ui_state.leftClicked(key.hash(), .exact) or ui_state.leftClicked(key.indexed(ROW_TOOLTIP_INDEX).hash(), .exact)) };
+    const is_clicked = is_live and (ui_state.leftClicked(key.hash(), .exact) or ui_state.leftClicked(key.indexed(ROW_TOOLTIP_INDEX).hash(), .exact));
+    g_is_row_click_pending = is_clicked;
+    // The control that takes the click changes after it has drawn, e.g. a dropdown opening.
+    if (is_clicked) context.requestRedraw();
+    return .{ .rect = .{ .key = key, .style = lit_style }, .divider = divider, .is_clicked = is_clicked };
 }

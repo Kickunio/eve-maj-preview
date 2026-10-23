@@ -187,8 +187,8 @@ pub const ChatlogMonitor = struct {
         self.bounty_tracker = bounty;
     }
 
-    /// Logged rather than asserted, since a ReleaseFast assert would turn the race into undefined behaviour.
-    fn isWorkerStopped(self: *const ChatlogMonitor, setting: []const u8) bool {
+    /// Logs rather than asserts when it's running, so a misordered call costs a setting instead of the app.
+    pub fn isWorkerStopped(self: *const ChatlogMonitor, setting: []const u8) bool {
         if (self.worker_thread == null) return true;
         slog.err("Failed to change chatlog {s}: the worker thread is running", .{setting});
         return false;
@@ -210,7 +210,7 @@ pub const ChatlogMonitor = struct {
         self.worker_thread = try std.Thread.spawn(.{}, workerMain, .{self});
     }
 
-    /// Main thread only, like the rest of what the tick calls; asks the worker to follow the character's logs.
+    /// Main thread only.
     pub fn addCharacter(self: *ChatlogMonitor, character_name: []const u8) !void {
         if (scout.isGenericCharacterName(character_name) or self.requested.contains(character_name)) return;
         const key = try self.allocator.dupe(u8, character_name);
@@ -233,7 +233,6 @@ pub const ChatlogMonitor = struct {
         try self.commands.push(.{ .resolve_character_id = try self.allocator.dupe(u8, character_name) });
     }
 
-    /// Sends the tick's logouts, closed windows and logins to the worker.
     pub fn update(self: *ChatlogMonitor, scout_result: *const scout.UpdateResult) !void {
         for (scout_result.closed_windows.items) |closed| try self.removeCharacter(closed.character_name);
         for (scout_result.name_changes.items) |change| {
@@ -377,7 +376,11 @@ pub const ChatlogMonitor = struct {
             try self.monitored_paths.put(key, {});
         }
 
-        if (try new_file.start(self.allocator, self.io)) |match| {
+        const initial_system = new_file.start(self.allocator, self.io) catch |err| blk: {
+            slog.warn("Failed to read the current system from '{s}' for '{s}', following it from its end: {}", .{ path, character_name, err });
+            break :blk null;
+        };
+        if (initial_system) |match| {
             slog.debug("Initial system for {s}: {s} (event_timestamp={})", .{ character_name, match.system, match.event_timestamp });
             // Not a jump: it's where the character already was.
             self.queueSystemUpdate(character_name, match.system, match.event_timestamp, false);
@@ -389,11 +392,7 @@ pub const ChatlogMonitor = struct {
 
     fn pollLogFiles(self: *ChatlogMonitor) void {
         const backoff: tail.Backoff = .{ .idle_threshold = self.idle_poll_threshold, .max_multiplier = self.max_poll_multiplier };
-        for (self.log_files.items) |*file| {
-            file.poll(self.allocator, self.io, backoff, LineHandler{ .monitor = self, .file = file }) catch |err| {
-                slog.err("Failed to read '{s}': {}", .{ file.path, err });
-            };
-        }
+        for (self.log_files.items) |*file| file.poll(self.allocator, self.io, backoff, LineHandler{ .monitor = self, .file = file });
     }
 
     fn clearRescanNames(self: *ChatlogMonitor) void {
@@ -506,12 +505,12 @@ pub const ChatlogMonitor = struct {
         }
 
         if (file.is_chatlog) {
-            if (lines.parseChatLine(line)) |system| self.handleSystemChange(file, system, .chatlog);
+            if (lines.parseChatLine(line)) |system| self.handleSystemChange(file, system, .chatlog, lines.leadingTimestamp(line));
             return;
         }
 
         const parsed = lines.parseGameLine(line);
-        if (parsed.system) |change| self.handleSystemChange(file, change.system, change.source);
+        if (parsed.system) |change| self.handleSystemChange(file, change.system, change.source, lines.leadingTimestamp(line));
         if (parsed.activity) |activity| switch (activity) {
             .event => self.handleGamelogEvent(file, line),
             .mining => self.handleMiningEvent(file, line),
@@ -520,7 +519,7 @@ pub const ChatlogMonitor = struct {
     }
 
     /// Ignores an undock or Local change that repeats the last system, but never a jump; `system` is borrowed and copied into the queued events.
-    fn handleSystemChange(self: *ChatlogMonitor, file: *LogFile, system: []const u8, source: lines.SystemSource) void {
+    fn handleSystemChange(self: *ChatlogMonitor, file: *LogFile, system: []const u8, source: lines.SystemSource, event_timestamp: u64) void {
         const system_hash = std.hash.Wyhash.hash(0, system);
         const is_jump = source == .jump or source == .conduit;
         if (!is_jump and file.last_system_hash == system_hash) return;
@@ -528,8 +527,8 @@ pub const ChatlogMonitor = struct {
 
         // Only jumps notify: undock and Local detection report the same arrival and would fire it twice.
         if (source == .jump) self.queueNotification(file.character_name, .{ .notification_type = .SystemChange, .target = system });
-        // 0, since live lines arrive in order; undocks and Local changes aren't travel.
-        self.queueSystemUpdate(file.character_name, system, 0, is_jump);
+        // Timestamped, since a quiet chatlog can be read after a newer gamelog jump.
+        self.queueSystemUpdate(file.character_name, system, event_timestamp, is_jump);
         slog.info("System change ({s}): {s} -> {s}", .{ @tagName(source), file.character_name, system });
     }
 

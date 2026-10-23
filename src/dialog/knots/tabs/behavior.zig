@@ -1,7 +1,6 @@
-//! The configuration window's Behavior tab: startup, mouse interaction, auto-minimize, exclusion, saved window positions and Ultra Potato Mode; main thread only.
+//! The configuration window's Behavior tab: mouse interaction, auto-minimize, exclusion, saved window positions and Ultra Potato Mode; main thread only.
 const std = @import("std");
 const ui = @import("ui");
-const win32 = @import("../../../platform/win32.zig");
 const config = @import("../../../config.zig");
 const ultra_potato = @import("../../tools/ultra_potato.zig");
 const session = @import("../session.zig");
@@ -18,11 +17,10 @@ const Text = ui.component.Text;
 const SelectInput = ui.component.SelectInput;
 const slog = log.Scoped("dialog_knots");
 
-const PROTOCOL_DOCS_URL = "https://github.com/mrmjstc/eve-maj-preview/blob/main/docs/CONFIGURATION.md#protocol-handler";
-
 /// A list of names scanned from outside the settings, kept until the next scan.
 const Scan = struct {
     arena: std.heap.ArenaAllocator,
+    /// Owned by `arena`.
     names: []const []const u8,
     selected_index: u32 = 0,
 };
@@ -32,16 +30,17 @@ const PotatoScan = union(enum) {
     failed,
     found: struct {
         arena: std.heap.ArenaAllocator,
+        /// Owned by `arena`.
         profiles: []const ultra_potato.Profile,
         selected_index: u32 = 0,
     },
 };
 
 var g_allocator: std.mem.Allocator = undefined;
-/// Open clients for Set All, scanned when the tab first shows and on ↻.
+/// Open clients for Copy to All, scanned when the tab first shows and on ↻.
 var g_sources: ?Scan = null;
 var g_potato: PotatoScan = .not_scanned;
-/// Set by a ↻ click and done before the next frame draws its dropdown, since a rescan frees the names this frame's dropdown drew.
+/// Done before the next frame's dropdown, since a rescan frees the names this frame drew.
 var g_is_sources_rescan_due: bool = false;
 /// Like g_is_sources_rescan_due, for the EVE settings profiles.
 var g_is_potato_rescan_due: bool = false;
@@ -64,7 +63,6 @@ pub fn reset() void {
 }
 
 pub fn show(context: *ui.Frame) !void {
-    try startup(context);
     try interaction(context);
     try autoMinimize(context);
     try exclusion(context);
@@ -72,37 +70,21 @@ pub fn show(context: *ui.Frame) !void {
     if (session.global().get("advancedMode")) try ultraPotato(context);
 }
 
-fn startup(context: *ui.Frame) !void {
-    const section = try widgets.openSection(context, "Startup", "Launch on Windows login, and register the evemajpreview:// URL protocol for external control (Stream Deck, scripts, etc.).", &style.section);
-    const global = session.global();
-    try bind.toggle(context, global, "runOnStartup", "Run on Startup");
-    try widgets.hintText(context, .src(@src()), "Starts EVE-Maj Preview when you sign in to Windows.");
-    try bind.toggle(context, global, "autoRegisterProtocol", "Auto-Register Protocol Handler");
-    if (try widgets.hintWithLink(context, .src(@src()), "Lets links in other apps control EVE-Maj Preview.", "Learn more")) {
-        if (!win32.shellOpenUrl(PROTOCOL_DOCS_URL)) slog.warn("Failed to open '{s}' in the browser", .{PROTOCOL_DOCS_URL});
-    }
-    try bind.toggle(context, global, "disableUpdateChecks", "Disable Update Checks");
-    try widgets.hintText(context, .src(@src()), "Stops checking online for new versions.");
-    try section.close(context);
-}
-
 fn interaction(context: *ui.Frame) !void {
-    const section = try widgets.openSection(context, "Interaction", "Mouse behavior for thumbnails and client list rows, including when to activate the EVE client window on left-click, and whether client windows animate when restored or minimized.", &style.section);
+    const section = try widgets.openSection(context, "Interaction", "How thumbnails and the client list react to the mouse, and how clients animate.", &style.section);
     const ref = session.profile().child("interaction");
+    try bind.segmented(context, ref, "animationStyle", "Animation Style", &.{ "None", "Original" });
+    try widgets.hintText(context, .src(@src()), "Original plays Windows' own minimize and restore animation.");
     try bind.toggle(context, ref, "clickThrough", "Click Through");
     try widgets.hintText(context, .src(@src()), "Clicks go through thumbnails and the client list to what's behind.");
     const is_click_through = ref.get("clickThrough");
 
     const mouse_options = try widgets.openGroup(context, .src(@src()), !is_click_through);
-    try bind.choice(context, ref, "clickTrigger", "Click Trigger");
-    try widgets.hintText(context, .src(@src()), "Mouse Up avoids accidental drags.");
+    try bind.segmented(context, ref, "clickTrigger", "Click Trigger", &.{ "Mouse Down", "Mouse Up" });
+    try widgets.hintText(context, .src(@src()), "Mouse Up waits until you let go, so sliding off first cancels the click.");
     try bind.choice(context, ref, "hoverCursor", "Hover Cursor");
     try widgets.hintText(context, .src(@src()), "The pointer shown over thumbnails and the client list.");
     try mouse_options.close(context);
-
-    try bind.choice(context, ref, "animationStyle", "Animation Style");
-    try widgets.hintText(context, .src(@src()), "How clients look as they're restored or minimized.");
-
     if (session.showsThumbnails()) try hoverZoom(context, ref, is_click_through);
     try section.close(context);
 }
@@ -122,7 +104,8 @@ fn hoverZoom(context: *ui.Frame, ref: session.Ref(config.InteractionConfig), is_
 
 fn autoMinimize(context: *ui.Frame) !void {
     const ref = session.profile().child("autoMinimize");
-    const section = try bind.switchedSection(context, "Auto-Minimize", "Minimizes an EVE client window after it's been unfocused for the configured delay.", ref, "enabled", true);
+    const section = try widgets.openSection(context, "Auto-Minimize", "Minimizes EVE clients that have been in the background for a while.", &style.section);
+    try bind.toggle(context, ref, "enabled", "Enable Auto-Minimize");
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
     try bind.toggle(context, ref, "exemptLastActiveOnFocusLoss", "Keep Last-Active Client Visible");
     try widgets.hintText(context, .src(@src()), "Never minimizes the client you were just in, even after the delay.");
@@ -160,19 +143,21 @@ fn exclusionOverlay(context: *ui.Frame) !void {
 }
 
 fn windowPosition(context: *ui.Frame) !void {
-    const section = try widgets.openSection(context, "Window Position", "Saves each character's real EVE client window position, restored via the Move to Saved Positions hotkey or automatically on login. Set All copies the selected window's current position to every character; Clear All removes every saved position.", &style.section);
+    const section = try widgets.openSection(context, "Window Position", "Saves each character's EVE window position and puts the window back there.", &style.section);
     const ref = session.profile().child("autoMovePosition");
     try bind.toggle(context, ref, "enabled", "Restore Saved Position on Login");
     try widgets.hintText(context, .src(@src()), "Uses each character's window position from the Characters tab.");
     try bind.toggle(context, ref, "moveOnStartup", "Restore Saved Position on App Startup");
     try widgets.hintText(context, .src(@src()), "Also moves clients already logged in when the app starts.");
+    try bind.number(context, ref, "verifyCount", "Recheck Count", .{ .unit = "times", .singular_unit = "time" });
+    try widgets.hintText(context, .src(@src()), "How many times to check again; 0 turns this off.");
+    const rechecks = try widgets.openGroup(context, .src(@src()), ref.get("verifyCount") > 0);
     try bind.number(context, ref, "verifyIntervalMs", "Recheck Interval", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "EVE can shift its window while loading, so it's checked again this often.");
-    try bind.number(context, ref, "verifyCount", "Recheck Count", .{});
-    try widgets.hintText(context, .src(@src()), "How many times to check again; 0 turns this off.");
+    try rechecks.close(context);
 
     if (g_sources == null or g_is_sources_rescan_due) scanSources();
-    const set_all = try widgets.openBinding(context, .src(@src()), "Copy to All From");
+    const set_all = try widgets.openBinding(context, .src(@src()), "Copy Position From");
     const source = try sourceSelect(context);
     if (try widgets.glyphButton(context, .src(@src()), .refresh, "", &style.icon_button, false)) {
         g_is_sources_rescan_due = true;
@@ -180,7 +165,7 @@ fn windowPosition(context: *ui.Frame) !void {
     }
     const paired_width = try pairedButtonWidth(context);
     const set_all_style = try widgets.withWidth(context, if (source == null) &style.paired_disabled_button else &style.paired_button, paired_width);
-    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Set All"), .disabled = source == null, .style = set_all_style })).clicked) setAll(source);
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Copy to All"), .disabled = source == null, .style = set_all_style })).clicked) setAll(source);
     try set_all.close(context);
     try widgets.hintText(context, .src(@src()), "Copies that window's position to every character.");
     const clear_all = try widgets.openBinding(context, .src(@src()), "Saved Positions");
@@ -192,15 +177,15 @@ fn windowPosition(context: *ui.Frame) !void {
     try section.close(context);
 }
 
-/// Set All, Clear All and its Confirm share a width, so their edges line up: the widest of their labels, at least style.PAIRED_BUTTON_WIDTH.
+/// Copy to All, Clear All and Confirm share the widest label's width, at least style.PAIRED_BUTTON_WIDTH.
 fn pairedButtonWidth(context: *ui.Frame) !f32 {
     const padding = comptime style.plain_button.padding.?;
-    const border = 2;
+    const border_width = comptime style.plain_button.border_width.?.max();
     var widest: f32 = 0;
-    for ([_][]const u8{ "Set All", "Clear All", "Confirm" }) |label| {
+    for ([_][]const u8{ "Copy to All", "Clear All", "Confirm" }) |label| {
         widest = @max(widest, try widgets.textWidth(context, lang.text(label), &style.button_text));
     }
-    return @max(style.PAIRED_BUTTON_WIDTH, @ceil(padding.left() + widest + padding.right() + border));
+    return @max(style.PAIRED_BUTTON_WIDTH, @ceil(padding.left() + widest + padding.right() + 2 * border_width));
 }
 
 fn clearAll() void {
@@ -212,7 +197,7 @@ fn clearAll() void {
     status.show(.success, "Window positions cleared", .{});
 }
 
-/// The open client Set All copies from, or null when none is open.
+/// The open client whose position Copy to All copies, or null when none is open.
 fn sourceSelect(context: *ui.Frame) !?[]const u8 {
     const sources = if (g_sources) |*scan| scan else return null;
     const key: ui.Key = .str("knots.positions.source");
@@ -249,17 +234,14 @@ fn scanOpenClients() !Scan {
     const previous: ?[]const u8 = if (g_sources) |sources| if (sources.names.len > 0) sources.names[@min(sources.selected_index, sources.names.len - 1)] else null else null;
     var arena = std.heap.ArenaAllocator.init(g_allocator);
     errdefer arena.deinit();
-    // The scout's names only live for this frame, so they're copied into the scan's own arena.
     const names = try positions.openClients(arena.allocator());
-    const copies = try arena.allocator().alloc([]const u8, names.len);
     var selected_index: u32 = 0;
-    for (names, copies, 0..) |name, *copy, index| {
-        copy.* = try arena.allocator().dupe(u8, name);
+    for (names, 0..) |name, index| {
         if (previous) |was| {
             if (std.mem.eql(u8, was, name)) selected_index = @intCast(index);
         }
     }
-    return .{ .arena = arena, .names = copies, .selected_index = selected_index };
+    return .{ .arena = arena, .names = names, .selected_index = selected_index };
 }
 
 fn setAll(source: ?[]const u8) void {
@@ -276,7 +258,7 @@ fn setAll(source: ?[]const u8) void {
 }
 
 fn ultraPotato(context: *ui.Frame) !void {
-    const section = try widgets.openSection(context, "Ultra Potato Mode", "Forces EVE Online's heaviest graphics settings (shaders, shadows, textures, reflections, post-processing, cloth, ambient occlusion, volumetrics) to their lowest quality. Close all EVE clients first, since a client overwrites these files on exit. A .bak backup of each file is made before its first edit.", &style.section);
+    const section = try widgets.openSection(context, "Ultra Potato Mode", "Sets EVE's heaviest graphics options to their lowest quality.", &style.section);
     if (g_potato == .not_scanned or g_is_potato_rescan_due) scanPotato();
     const row = try widgets.openBinding(context, .src(@src()), "EVE Settings Profile");
     const paths = try potatoSelect(context);
@@ -287,8 +269,8 @@ fn ultraPotato(context: *ui.Frame) !void {
     try row.close(context);
     try widgets.hintText(context, .src(@src()), "The EVE settings to change. Close EVE first.");
     const apply = try widgets.openBinding(context, .src(@src()), "Lowest Graphics Settings");
-    const can_apply = paths != null;
-    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Apply Ultra Potato Mode"), .disabled = !can_apply, .style = if (can_apply) &style.plain_button else &style.disabled_button })).clicked) {
+    const has_selection = paths != null;
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Apply Ultra Potato Mode"), .disabled = !has_selection, .style = if (has_selection) &style.plain_button else &style.disabled_button })).clicked) {
         if (paths) |chosen| applyPotato(chosen);
     }
     try apply.close(context);

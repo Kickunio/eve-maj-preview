@@ -1,7 +1,7 @@
 //! Number formatting for on-screen stats.
 const std = @import("std");
 
-/// Inserts comma thousands-separators into the leading run of ASCII digits in `text` (e.g. "12405.3 m3/min" -> "12,405.3 m3/min"); returns `text` unchanged if `buf` is too small.
+/// Groups only the leading digits ("12405.3 m3/min" -> "12,405.3 m3/min"); `text` unchanged if `buf` is too small.
 pub fn insertThousandsSeparators(buf: []u8, text: []const u8) []const u8 {
     var digit_end: usize = 0;
     while (digit_end < text.len and std.ascii.isDigit(text[digit_end])) : (digit_end += 1) {}
@@ -26,7 +26,7 @@ pub fn insertThousandsSeparators(buf: []u8, text: []const u8) []const u8 {
     return buf[0 .. out_len + rest.len];
 }
 
-/// Abbreviates an ISK value with k/m suffixes (e.g. 2_450_000.0 -> "2.5m", 200_000.0 -> "200k", 850.0 -> "850"); "?" if `buf` is too small.
+/// With k/m suffixes (2_450_000 -> "2.5m", 200_000 -> "200k", 850 -> "850"); "?" if `buf` is too small.
 pub fn formatIskAbbreviated(buf: []u8, value: f32) []const u8 {
     const abs_value = @abs(value);
     if (abs_value >= 999_500.0) {

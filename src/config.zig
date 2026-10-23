@@ -38,12 +38,16 @@ pub const writeDefaultProfile = profiles.writeDefault;
 pub const createProfile = profiles.create;
 pub const copyProfile = profiles.copy;
 pub const restoreProfileBackup = profiles.restoreBackup;
+pub const replaceProfileWithBackup = profiles.replaceWithBackup;
 pub const readProfileAccent = profiles.readAccent;
+pub const readProfileBackupAccent = profiles.readBackupAccent;
 pub const deleteProfileBackup = profiles.deleteBackup;
 pub const deleteProfileToBackup = profiles.deleteToBackup;
+pub const renameProfile = profiles.rename;
+pub const backUpProfile = profiles.backUp;
 pub const checkProfileDeletable = profiles.checkDeletable;
 pub const listProfileBackups = profiles.listBackups;
-pub const BackupName = profiles.BackupName;
+pub const profileBackupDir = profiles.backupDir;
 pub const parseBackupName = profiles.parseBackupName;
 pub const profileFileName = profiles.fileNameFor;
 pub const profileDisplayName = profiles.displayName;
@@ -71,6 +75,7 @@ pub const CombatConfig = activity.CombatConfig;
 pub const MiningConfig = activity.MiningConfig;
 pub const BountyConfig = activity.BountyConfig;
 pub const ResourcesConfig = activity.ResourcesConfig;
+pub const PingConfig = activity.PingConfig;
 pub const TravelConfig = activity.TravelConfig;
 pub const IskRateUnit = activity.IskRateUnit;
 pub const NotificationTypeConfig = notifications.NotificationTypeConfig;
@@ -126,6 +131,7 @@ pub const Config = struct {
     mining: MiningConfig = .{},
     bounty: BountyConfig = .{},
     resources: ResourcesConfig = .{},
+    ping: PingConfig = .{},
     travel: TravelConfig = .{},
     accentColor: u32 = 0xFFD9A441,
     windowFilters: std.ArrayList(WindowFilterConfig) = .empty,
@@ -157,7 +163,7 @@ pub const Config = struct {
         try spaces.ensureSpecialSpaces(allocator, &config.thumbnailSpaces);
         spaces.keepSpecialSpacesFirst(config.thumbnailSpaces.items);
 
-        if (config.formatVersion < 2) {
+        if (config.formatVersion < migrate.DPI_AWARE_VERSION) {
             for (config.characters.items) |*character| {
                 if (character.position) |position| character.position = position.scaleFromLegacyDpiUnaware();
             }
@@ -227,6 +233,14 @@ pub const Config = struct {
             for (self.systemColors.items) |system_color| {
                 if (system_color.matches(name, uses_wildcards)) return system_color.color;
             }
+        }
+        return null;
+    }
+
+    /// Ignores case, as typed names in URLs do; the first match wins.
+    pub fn hotkeyGroupIndex(self: *const Config, name: []const u8) ?usize {
+        for (self.hotkeyGroups.items, 0..) |group, index| {
+            if (std.ascii.eqlIgnoreCase(group.name, name)) return index;
         }
         return null;
     }
@@ -313,7 +327,7 @@ pub const Config = struct {
         };
     }
 
-    /// The badge-enabled groups `character_name` is in, comma-joined by name or 1-based number ("1, Miners"); "" when none. Owned by the caller.
+    /// The badge-enabled groups `character_name` is in, comma-joined by name or 1-based number ("1, Miners"); "" when none; owned by the caller.
     pub fn groupBadgeLabel(self: *const Config, allocator: std.mem.Allocator, character_name: []const u8) ![]const u8 {
         var label: std.Io.Writer.Allocating = .init(allocator);
         errdefer label.deinit();
@@ -349,3 +363,108 @@ pub const Config = struct {
         return out;
     }
 };
+
+const testing = std.testing;
+
+fn testConfig(json_text: []const u8) !Config {
+    return Config.buildConfigFromJson(testing.allocator, json_text, "Test");
+}
+
+test "findSystemColor prefers an exact name over an earlier pattern" {
+    var config = try testConfig(
+        \\{"systemColors": [{"systemName": "J*", "color": "0xFF000001"}, {"systemName": "Jita", "color": "0xFF000002"}]}
+    );
+    defer config.deinit();
+
+    try testing.expectEqual(@as(?u32, 0xFF000002), config.findSystemColor("Jita"));
+    try testing.expectEqual(@as(?u32, 0xFF000001), config.findSystemColor("J123456"));
+    try testing.expectEqual(@as(?u32, null), config.findSystemColor("Amarr"));
+}
+
+test "groupBadgeLabel names badge groups, numbering unnamed ones from 1" {
+    var config = try testConfig(
+        \\{"hotkeyGroups": [
+        \\  {"name": "", "characters": ["Alpha"], "showBadge": true},
+        \\  {"name": "Miners", "characters": ["Alpha"], "showBadge": true},
+        \\  {"name": "Hidden", "characters": ["Alpha"], "showBadge": false},
+        \\  {"name": "Scouts", "characters": ["Bravo"], "showBadge": true}
+        \\]}
+    );
+    defer config.deinit();
+
+    const label = try config.groupBadgeLabel(testing.allocator, "Alpha");
+    defer testing.allocator.free(label);
+    try testing.expectEqualStrings("1, Miners", label);
+
+    const none = try config.groupBadgeLabel(testing.allocator, "Charlie");
+    defer testing.allocator.free(none);
+    try testing.expectEqualStrings("", none);
+}
+
+test "hotkeyGroupIndex ignores case but hasHotkeyGroupNamed doesn't" {
+    var config = try testConfig(
+        \\{"hotkeyGroups": [{"name": "Miners"}, {"name": "miners"}]}
+    );
+    defer config.deinit();
+
+    try testing.expectEqual(@as(?usize, 0), config.hotkeyGroupIndex("MINERS"));
+    try testing.expectEqual(@as(?usize, null), config.hotkeyGroupIndex("Scouts"));
+    try testing.expect(!config.hasHotkeyGroupNamed("MINERS"));
+    try testing.expect(config.hasHotkeyGroupNamed("miners"));
+}
+
+test "a character's own settings override the profile's, which apply to unknown characters" {
+    var config = try testConfig(
+        \\{"characters": [{"name": "Alpha", "displayName": "Main", "opacity": 128, "thumbnailSize": {"width": 300}}]}
+    );
+    defer config.deinit();
+
+    try testing.expectEqualStrings("Main", config.getDisplayName("Alpha"));
+    try testing.expectEqualStrings("Bravo", config.getDisplayName("Bravo"));
+    try testing.expectEqual(@as(u8, 128), config.getCharacterOpacity("Alpha"));
+    try testing.expectEqual(config.thumbnail.thumbnailOpacity, config.getCharacterOpacity("Bravo"));
+
+    const own_size = config.handPlacedSize("Alpha");
+    try testing.expectEqual(@as(i32, 300), own_size.width);
+    try testing.expectEqual(config.thumbnail.height, own_size.height);
+    const default_size = config.handPlacedSize("Bravo");
+    try testing.expectEqual(config.thumbnail.width, default_size.width);
+    try testing.expectEqual(config.thumbnail.height, default_size.height);
+}
+
+test "shownColors follows the client list's own settings in its view" {
+    var config = try testConfig(
+        \\{"display": {"viewMode": "ClientList", "listViewSystemNameColor": "0xFF000003"}, "thumbnail": {"systemNameColor": "0xFF000004"}}
+    );
+    defer config.deinit();
+
+    try testing.expectEqual(@as(u32, 0xFF000003), config.shownColors().system_name_color);
+    config.display.viewMode = .Thumbnails;
+    try testing.expectEqual(@as(u32, 0xFF000004), config.shownColors().system_name_color);
+}
+
+test "getOrCreateCharacter returns an existing character rather than adding another" {
+    var config = try Config.getDefaultsWithProfile(testing.allocator, "Test");
+    defer config.deinit();
+
+    (try config.getOrCreateCharacter("Alpha")).opacity = 100;
+    const again = try config.getOrCreateCharacter("Alpha");
+    try testing.expectEqual(@as(?u8, 100), again.opacity);
+    try testing.expectEqual(@as(usize, 1), config.characters.items.len);
+}
+
+test "clone copies every setting into memory of its own" {
+    var config = try testConfig(
+        \\{"characters": [{"name": "Alpha", "displayName": "Main"}], "hotkeyGroups": [{"name": "Miners", "characters": ["Alpha"]}]}
+    );
+    defer config.deinit();
+    var copy = try config.clone(testing.allocator);
+    defer copy.deinit();
+
+    const original_json = try config.toJsonString(testing.allocator);
+    defer testing.allocator.free(original_json);
+    const copy_json = try copy.toJsonString(testing.allocator);
+    defer testing.allocator.free(copy_json);
+    try testing.expectEqualStrings(original_json, copy_json);
+    try testing.expect(config.characters.items[0].name.ptr != copy.characters.items[0].name.ptr);
+}

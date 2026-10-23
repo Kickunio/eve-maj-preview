@@ -7,7 +7,7 @@ const session = @import("session.zig");
 
 const LiveWindow = struct { position: config.Position, size: config.WindowSize };
 
-/// Logged-in clients' character names, for picking a window to copy from. Copied into `arena`.
+/// Logged-in clients' character names, copied into `arena`.
 pub fn openClients(arena: std.mem.Allocator) ![]const []const u8 {
     const scout = &session.runningApp().scout;
     var names: std.ArrayList([]const u8) = .empty;

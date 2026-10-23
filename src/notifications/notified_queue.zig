@@ -6,8 +6,8 @@ const log = @import("../log.zig");
 const slog = log.Scoped("notified_queue");
 
 pub const NotifiedQueue = struct {
-    /// Owns a copy of the name since it must outlive ThumbnailWindow.character_name, which is freed on window close.
     const Entry = struct {
+        /// Owned, since it outlives ThumbnailWindow.character_name, which is freed on window close.
         character_name: []const u8,
         notified_at: win32.Ticks,
     };

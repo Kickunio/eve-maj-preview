@@ -129,9 +129,9 @@ var g_hovered_button: ?Button = null;
 var g_pressed_button: ?Button = null;
 var g_ui_scale: f32 = 1.0;
 var g_text_font_px: i32 = 0;
-/// Every text on the overlay but Save's, recreated when the scale changes. Owned; kept for the rest of the run.
+/// Every text on the overlay but Save's, recreated when the scale changes; owned, kept for the rest of the run.
 var g_text_font: ?win32.HFONT = null;
-/// Save's text, alongside g_text_font. Owned; kept for the rest of the run.
+/// Save's text, alongside g_text_font; owned, kept for the rest of the run.
 var g_strong_font: ?win32.HFONT = null;
 var g_hand_cursor: ?win32.HCURSOR = null;
 
@@ -761,7 +761,7 @@ fn wndProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win3
                 _ = win32.SetCursor(cursor orelse return win32.DefWindowProcA(hwnd, msg, wParam, lParam));
                 return 1;
             }
-            // Explicit crosshair so it's obvious the whole screen is draggable, not just click-through like the ghost/hint overlays.
+            // A crosshair, so the whole screen reads as somewhere to drag.
             _ = win32.SetCursor(g_cross_cursor orelse return win32.DefWindowProcA(hwnd, msg, wParam, lParam));
             return 1;
         },

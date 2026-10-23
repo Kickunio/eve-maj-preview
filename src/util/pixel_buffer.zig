@@ -1,8 +1,9 @@
 //! Filling, outlining and alpha-fixing rects in a raw 0xAARRGGBB pixel buffer; no I/O.
 const std = @import("std");
 
-/// A `width` x `height` buffer of 0xAARRGGBB pixels, rows packed with no padding; borrows `pixels`.
+/// A `width` x `height` buffer of 0xAARRGGBB pixels, rows packed with no padding.
 pub const Canvas = struct {
+    /// Borrowed.
     pixels: [*]u32,
     width: usize,
     height: usize,
@@ -11,7 +12,7 @@ pub const Canvas = struct {
 /// A rect's part inside a pixel buffer, and how thick its outline can be.
 const ClippedRect = struct { left: usize, top: usize, right: usize, bottom: usize, thickness: usize };
 
-/// GDI text rendering leaves the alpha byte at 0; sets alpha=255 on every pixel with non-zero RGB still at alpha 0 within the given rect, without touching alpha other drawing code already set.
+/// GDI text leaves alpha at 0, so non-black pixels still at 0 become opaque; alpha other drawing set is kept.
 pub fn fixTextAlphaRect(canvas: Canvas, x: i32, y: i32, rect_width: usize, rect_height: usize) void {
     const width = canvas.width;
     const start_x: usize = @intCast(@max(0, x));
@@ -61,7 +62,7 @@ pub fn fillRoundedRect(canvas: Canvas, x: usize, y: usize, rect_width: usize, re
     }
 }
 
-/// Draws a `thickness`-px outline of a rect placed anywhere inside the canvas, clamped to its bounds.
+/// A rect starting off the canvas is moved onto its edge, not clipped.
 pub fn drawRectOutline(canvas: Canvas, x: i32, y: i32, rect_width: usize, rect_height: usize, thickness: usize, color: u32) void {
     const clipped = clipToCanvas(canvas, x, y, rect_width, rect_height, thickness) orelse return;
     const line = clipped.thickness;

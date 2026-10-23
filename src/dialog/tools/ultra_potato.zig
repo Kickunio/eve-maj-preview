@@ -22,17 +22,19 @@ const TARGET_KEYS = [_][]const u8{
     "volumetricQuality",
 };
 
-/// Strings come from scanProfiles' allocator, which the caller frees.
 pub const Profile = struct {
+    /// From scanProfiles' allocator; the caller frees it.
     path: []const u8,
+    /// From scanProfiles' allocator; the caller frees it.
     label: []const u8,
 };
 
-/// path comes from applyToFiles' allocator, which the caller frees; error_message is static.
 pub const ApplyResult = struct {
+    /// From applyToFiles' allocator; the caller frees it.
     path: []const u8,
     succeeded: bool,
     changed: bool,
+    /// Static.
     error_message: ?[:0]const u8,
 };
 

@@ -2,6 +2,7 @@
 const std = @import("std");
 const win32 = @import("../../platform/win32.zig");
 const lang = @import("../../lang/lang.zig");
+const detached = @import("../../util/detached.zig");
 const log = @import("../../log.zig");
 
 const slog = log.Scoped("dialog_knots");
@@ -30,9 +31,10 @@ pub const Picked = struct {
 };
 
 var g_allocator: std.mem.Allocator = undefined;
-/// Set while a picker is open, so a second click doesn't stack another. Main thread sets it; the picker's thread clears it.
+/// Set while a picker is open, so a second click doesn't stack another; the main thread sets it and the picker's thread clears it.
 var g_is_busy: std.atomic.Value(bool) = .init(false);
 
+/// Once at startup, since a picker's thread can outlive the window that opened it.
 pub fn init(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
 }
@@ -52,11 +54,10 @@ fn startPicker(target: Target, index: usize, title: []const u8, owner: ?win32.HW
     errdefer g_allocator.free(shown_title);
     const file_type_name = try g_allocator.dupe(u8, lang.text(fileTypeName(target)));
     errdefer g_allocator.free(file_type_name);
-    const thread = try std.Thread.spawn(.{}, pickerThread, .{ target, index, shown_title, file_type_name, owner, timer_hwnd, command });
-    thread.detach();
+    try detached.spawn(pickerThread, .{ target, index, shown_title, file_type_name, owner, timer_hwnd, command });
 }
 
-/// The picker's thread, which owns and frees `title` and `file_type_name`; touches nothing of the main thread's but the allocator and the posted message.
+/// Owns `title` and `file_type_name`; shares only the allocator and the posted message with the main thread.
 fn pickerThread(target: Target, index: usize, title: []const u8, file_type_name: []const u8, owner: ?win32.HWND, timer_hwnd: win32.HWND, command: usize) void {
     defer g_is_busy.store(false, .release);
     defer g_allocator.free(title);

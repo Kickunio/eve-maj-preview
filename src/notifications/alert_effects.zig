@@ -35,9 +35,9 @@ pub fn playUnmuted(notification_config: *const config.NotificationConfig, type_c
                 slog.debug("Failed to fit '{s}' into the spoken alert, speaking it without: {}", .{ name, err });
                 break :blk text;
             };
-            tts.speakAlert(spoken);
+            tts.speakAlert(spoken, notification_config.tts_max_waiting);
         } else {
-            tts.speakAlert(text);
+            tts.speakAlert(text, notification_config.tts_max_waiting);
         }
     }
 

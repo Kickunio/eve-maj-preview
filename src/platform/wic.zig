@@ -24,7 +24,7 @@ const HRESULT = c_long;
 const Object = anyopaque;
 
 pub const Decoded = struct {
-    /// RGBA, `width` * 4 bytes a row. Owned; freed by deinit.
+    /// RGBA, `width` * 4 bytes a row; owned, freed by deinit.
     pixels: []u8,
     width: u32,
     height: u32,

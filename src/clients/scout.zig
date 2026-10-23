@@ -30,17 +30,19 @@ pub const EveWindow = struct {
     is_login_time_exact: bool = false,
 };
 
-/// Names are owned; freed by UpdateResult.deinit.
 pub const NameChange = struct {
     hwnd: win32.HWND,
+    /// Owned; freed by UpdateResult.deinit.
     old_name: []const u8,
+    /// Owned; freed by UpdateResult.deinit.
     new_name: []const u8,
     logged_in_at: win32.Ticks,
 };
 
-/// character_name isn't unique (multiple windows can all report "EVE"), so hwnd travels with it; owned, freed by UpdateResult.deinit.
+/// character_name isn't unique (several windows can report "EVE"), so hwnd travels with it.
 pub const ClosedWindow = struct {
     hwnd: win32.HWND,
+    /// Owned; freed by UpdateResult.deinit.
     character_name: []const u8,
 };
 
@@ -61,7 +63,9 @@ pub const Scout = struct {
     /// Borrows the live config.
     config: *const config_mod.Config,
     windows: std.ArrayList(EveWindow),
-    /// Filled by the WinEvent hooks between ticks and handed over by update().
+    /// Windows the destroy hook saw close; update() drops them, since the hook can run while a tick still borrows `windows`.
+    pending_destroyed: std.ArrayList(win32.HWND),
+    /// Handed over by update().
     pending_closed: std.ArrayList(ClosedWindow),
     pending_name_changes: std.ArrayList(NameChange),
     next_logout_order: u64 = 1,
@@ -85,6 +89,7 @@ pub const Scout = struct {
             .allocator = allocator,
             .config = config,
             .windows = .empty,
+            .pending_destroyed = .empty,
             .pending_closed = .empty,
             .pending_name_changes = .empty,
             .process_hooks = .init(allocator),
@@ -140,6 +145,7 @@ pub const Scout = struct {
         while (hooks.next()) |process_hooks| process_hooks.unhook();
         self.process_hooks.deinit();
 
+        self.pending_destroyed.deinit(self.allocator);
         freeClosedWindows(self.allocator, &self.pending_closed);
         freeNameChanges(self.allocator, &self.pending_name_changes);
 
@@ -257,6 +263,17 @@ pub const Scout = struct {
         };
     }
 
+    fn dropDestroyedWindows(self: *Scout) void {
+        defer self.pending_destroyed.clearRetainingCapacity();
+        for (self.pending_destroyed.items) |hwnd| {
+            const index = self.indexOf(hwnd) orelse continue;
+            const window = self.windows.items[index];
+            if (!self.reportClosed(window)) continue;
+            slog.debug("Window destroyed: '{s}' (hwnd {*})", .{ window.character_name, hwnd });
+            self.removeWindowAt(index);
+        }
+    }
+
     /// Catches windows closed without a destroy event, e.g. when that hook couldn't be installed.
     fn dropClosedWindows(self: *Scout) void {
         var i: usize = self.windows.items.len;
@@ -280,6 +297,7 @@ pub const Scout = struct {
 
     /// Once per tick; caller deinits the result.
     pub fn update(self: *Scout, should_scan: bool) UpdateResult {
+        self.dropDestroyedWindows();
         if (should_scan) self.dropClosedWindows();
         const closed = self.pending_closed;
         self.pending_closed = .empty;
@@ -372,7 +390,7 @@ pub const Scout = struct {
             i -= 1;
             const window = &self.windows.items[i];
             const filter = self.currentFilter(window.hwnd, window.process_id) orelse {
-                _ = self.reportClosed(window.*);
+                if (!self.reportClosed(window.*)) continue;
                 self.removeWindowAt(i);
                 continue;
             };
@@ -490,12 +508,10 @@ fn windowDestroyCallback(_: win32.HANDLE, _: win32.DWORD, hwnd: win32.HWND, id_o
     const scout = g_event_scout orelse return;
 
     // By hwnd alone, since a partially-destroyed window can fail GetClassNameA.
-    const index = scout.indexOf(hwnd) orelse return;
-    const eve_window = scout.windows.items[index];
-    if (!scout.reportClosed(eve_window)) return;
-
-    slog.debug("Window destroyed: '{s}' (hwnd {*})", .{ eve_window.character_name, hwnd });
-    scout.removeWindowAt(index);
+    if (scout.indexOf(hwnd) == null) return;
+    scout.pending_destroyed.append(scout.allocator, hwnd) catch |err| {
+        slog.warn("Failed to note destroyed window {*}, so it's dropped at the next scan instead: {}", .{ hwnd, err });
+    };
 }
 
 const testing = std.testing;

@@ -1,4 +1,4 @@
-//! Combat, mining, bounty and resource overlays, and the travel left-behind check.
+//! Combat, mining, bounty, resource and ping overlays, and the travel left-behind check.
 const types = @import("types.zig");
 const wire = @import("wire.zig");
 const ranges_mod = @import("ranges.zig");
@@ -22,11 +22,11 @@ pub const CombatConfig = struct {
     outgoing_font_weight: types.FontWeight = .Regular,
     update_interval_ms: u32 = 1000,
     incoming_position: types.TextPosition = .TopCenter,
-    outgoing_position: types.TextPosition = .BottomCenter,
+    outgoing_position: types.TextPosition = .TopCenter,
     incoming_offset_x: i32 = 0,
     incoming_offset_y: i32 = 0,
     outgoing_offset_x: i32 = 0,
-    outgoing_offset_y: i32 = 0,
+    outgoing_offset_y: i32 = 24,
     incoming_show_prefix: bool = true,
     outgoing_show_prefix: bool = true,
     /// Comma-separated, case-insensitive weapon-name substrings whose hits count toward DPS but don't trigger the Taking Damage alert.
@@ -162,6 +162,34 @@ pub const ResourcesConfig = struct {
     }
 
     pub const Wire = wire.Wire(ResourcesConfig);
+};
+
+/// One label and no alerts, like ResourcesConfig.
+pub const PingConfig = struct {
+    enabled: bool = false,
+    color: u32 = 0xFFFFFFFF,
+    bg_color: u32 = 0xE6000000,
+    font_size: i32 = 12,
+    font_name: []const u8 = "Segoe UI",
+    font_weight: types.FontWeight = .Regular,
+    update_interval_ms: u32 = 10000,
+    position: types.TextPosition = .RightCenter,
+    offset_x: i32 = 0,
+    offset_y: i32 = 24,
+
+    pub const ranges = .{
+        .font_size = ranges_mod.FONT_SIZE,
+        // Like ResourcesConfig's ceiling, since a ping rarely changes between samples.
+        .update_interval_ms = .{ 1000, 60000 },
+        .offset_x = ranges_mod.TEXT_OFFSET,
+        .offset_y = ranges_mod.TEXT_OFFSET,
+    };
+
+    pub fn validate(self: *PingConfig) void {
+        ranges_mod.clamp(PingConfig, self);
+    }
+
+    pub const Wire = wire.Wire(PingConfig);
 };
 
 pub const TravelThresholdMode = enum { percent, count };

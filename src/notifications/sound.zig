@@ -50,6 +50,10 @@ const MF_SOURCE_READERF_ENDOFSTREAM: u32 = 0x2;
 const WAVE_MAPPER: u32 = 0xFFFFFFFF;
 const CALLBACK_EVENT: u32 = 0x00050000;
 const WAVE_FORMAT_PCM: u16 = 1;
+/// Added to the clip's length before giving up on WOM_DONE, so a device that never reports it can't block shutdown.
+const PLAYBACK_GRACE_MS: u64 = 2000;
+/// Sounds waiting behind the one playing; past it the oldest is dropped.
+const MAX_WAITING_ALERTS = 3;
 
 extern "mfplat" fn MFStartup(version: u32, flags: u32) callconv(.c) HRESULT;
 extern "mfplat" fn MFShutdown() callconv(.c) HRESULT;
@@ -60,6 +64,7 @@ extern "winmm" fn waveOutOpen(phwo: *?HANDLE, device_id: u32, format: *const WAV
 extern "winmm" fn waveOutPrepareHeader(hwo: HANDLE, header: *WAVEHDR, size: u32) callconv(.c) u32;
 extern "winmm" fn waveOutUnprepareHeader(hwo: HANDLE, header: *WAVEHDR, size: u32) callconv(.c) u32;
 extern "winmm" fn waveOutWrite(hwo: HANDLE, header: *WAVEHDR, size: u32) callconv(.c) u32;
+extern "winmm" fn waveOutReset(hwo: HANDLE) callconv(.c) u32;
 extern "winmm" fn waveOutClose(hwo: HANDLE) callconv(.c) u32;
 extern "winmm" fn waveOutSetVolume(hwo: ?HANDLE, volume: u32) callconv(.c) u32;
 
@@ -136,7 +141,7 @@ const IMFSample = extern struct {
         QueryInterface: *const anyopaque,
         AddRef: *const anyopaque,
         Release: *const fn (*IMFSample) callconv(.c) u32,
-        // IMFAttributes base (30 slots); none are called here, only ConvertToContiguousBuffer below is.
+        // The IMFAttributes base's 30 slots, none of them called.
         GetItem: *const anyopaque,
         GetItemType: *const anyopaque,
         CompareItem: *const anyopaque,
@@ -246,6 +251,10 @@ const Command = struct {
     pub fn deinit(self: Command) void {
         std.heap.page_allocator.free(self.path);
     }
+
+    pub fn isAlert(_: Command) bool {
+        return true;
+    }
 };
 
 /// Keeps Media Foundation started for as long as the worker runs.
@@ -280,7 +289,7 @@ pub fn playAlert(path: []const u8, volume_percent: u8) void {
         slog.warn("Failed to queue sound alert '{s}': {}", .{ path, err });
         return;
     };
-    g_worker.push(.{ .path = copy, .volume_percent = volume_percent });
+    g_worker.pushAlert(.{ .path = copy, .volume_percent = volume_percent }, MAX_WAITING_ALERTS);
 }
 
 /// Call once during app shutdown.
@@ -310,7 +319,7 @@ fn decodeToPcm(allocator: std.mem.Allocator, path_utf16: [*:0]const WCHAR) !Deco
     if (pcm_type.vtable.SetGUID(pcm_type, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio) < 0) return error.SetMediaTypeFailed;
     if (pcm_type.vtable.SetGUID(pcm_type, &MF_MT_SUBTYPE, &MFAudioFormat_PCM) < 0) return error.SetMediaTypeFailed;
 
-    // Triggers Media Foundation's built-in MP3 decoder transform automatically.
+    // Asking for PCM makes Media Foundation insert its MP3 decoder.
     if (reader.vtable.SetCurrentMediaType(reader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, null, pcm_type) < 0) {
         return error.SetCurrentMediaTypeFailed;
     }
@@ -366,7 +375,7 @@ fn decodeToPcm(allocator: std.mem.Allocator, path_utf16: [*:0]const WCHAR) !Deco
     };
 }
 
-/// Decodes and plays `path` (WAV/MP3), blocking until done; Media Foundation must already be started (see Player).
+/// Decodes and plays `path` (WAV/MP3), blocking until done or timed out; Media Foundation must already be started (see Player).
 fn playBlocking(allocator: std.mem.Allocator, path: []const u8, volume_percent: u8) !void {
     const path_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
     defer allocator.free(path_utf16);
@@ -401,5 +410,12 @@ fn playBlocking(allocator: std.mem.Allocator, path: []const u8, volume_percent: 
     defer _ = waveOutUnprepareHeader(hwo, &header, @sizeOf(WAVEHDR));
 
     if (waveOutWrite(hwo, &header, @sizeOf(WAVEHDR)) != 0) return error.WaveOutWriteFailed;
-    _ = win32.WaitForSingleObject(event, win32.INFINITE);
+
+    const length_ms = @as(u64, pcm.data.len) * 1000 / @max(format.nAvgBytesPerSec, 1);
+    const timeout_ms: u32 = @intCast(@min(length_ms + PLAYBACK_GRACE_MS, win32.INFINITE - 1));
+    if (win32.WaitForSingleObject(event, timeout_ms) != win32.WAIT_OBJECT_0) {
+        // Returns the header to the app, so the deferred unprepare and close succeed.
+        _ = waveOutReset(hwo);
+        return error.PlaybackTimedOut;
+    }
 }

@@ -27,8 +27,9 @@ pub const Changes = struct {
 pub const LogFinder = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
-    /// Both dirs owned; freed in deinit.
+    /// Owned; freed in deinit.
     chatlog_dir: []const u8,
+    /// Owned; freed in deinit.
     gamelog_dir: []const u8,
     /// Borrowed; outlives the finder.
     character_ids: ?*CharacterIds,
@@ -36,6 +37,7 @@ pub const LogFinder = struct {
     gamelog_watcher: ?win32.HANDLE,
     /// A watch started late; rearm skips it once, so a log made during its catch-up rescan stays signalled.
     chatlog_watch_is_new: bool = false,
+    /// See chatlog_watch_is_new.
     gamelog_watch_is_new: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, chatlog_dir: []const u8, gamelog_dir: []const u8, character_ids: ?*CharacterIds) !LogFinder {

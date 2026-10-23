@@ -16,11 +16,13 @@ pub const Command = union(enum) {
     }
 };
 
-/// Worker to main thread, which resolves the hwnd since only it may touch Scout and ThumbnailSet. Owned; freed in deinit.
+/// Worker to main thread, which resolves the hwnd since only it may touch Scout and ThumbnailSet.
 pub const SystemUpdate = struct {
+    /// Owned; freed in deinit.
     character_name: []const u8,
+    /// Owned; freed in deinit.
     system_name: []const u8,
-    /// 0 skips the staleness check; live-tail lines arrive in order.
+    /// YYYYMMDDHHMMSS of the line it came from; 0 if unreadable, which skips the staleness check.
     event_timestamp: u64,
     /// Stargate and conduit jumps only, for Travel Mode.
     is_jump: bool = false,
@@ -31,8 +33,9 @@ pub const SystemUpdate = struct {
     }
 };
 
-/// Worker to main thread: when a character's session began, from its gamelog's name. Owned; freed in deinit.
+/// Worker to main thread: when a character's session began, from its gamelog's name.
 pub const SessionStart = struct {
+    /// Owned; freed in deinit.
     character_name: []const u8,
     /// UTC Unix seconds.
     started_at: i64,
@@ -42,10 +45,11 @@ pub const SessionStart = struct {
     }
 };
 
-/// Worker to main thread, which renders the text from per-type config. Owned; freed in deinit.
+/// Worker to main thread, which renders the text from per-type config.
 pub const NotificationEvent = struct {
+    /// Owned; freed in deinit.
     character_name: []const u8,
-    /// source/target are owned copies.
+    /// Its source and target are owned copies, freed in deinit.
     notification: notification_mod.Notification,
 
     pub fn deinit(self: *NotificationEvent, allocator: std.mem.Allocator) void {
@@ -93,4 +97,44 @@ pub fn Queue(comptime T: type) type {
             self.items.clearRetainingCapacity();
         }
     };
+}
+
+const testing = std.testing;
+
+fn sessionStart(allocator: std.mem.Allocator, character_name: []const u8) !SessionStart {
+    return .{ .character_name = try allocator.dupe(u8, character_name), .started_at = 0 };
+}
+
+test "drain moves everything queued, in order, and empties the queue" {
+    var queue: Queue(SessionStart) = .init(testing.allocator, testing.io);
+    defer queue.deinit();
+    try queue.push(try sessionStart(testing.allocator, "Alpha"));
+    try queue.push(try sessionStart(testing.allocator, "Bravo"));
+
+    var out: std.ArrayList(SessionStart) = .empty;
+    defer {
+        for (out.items) |*item| item.deinit(testing.allocator);
+        out.deinit(testing.allocator);
+    }
+    try queue.drain(&out);
+
+    try testing.expectEqual(@as(usize, 2), out.items.len);
+    try testing.expectEqualStrings("Alpha", out.items[0].character_name);
+    try testing.expectEqualStrings("Bravo", out.items[1].character_name);
+    try testing.expectEqual(@as(usize, 0), queue.items.items.len);
+}
+
+test "deinit frees what is still queued" {
+    var queue: Queue(SessionStart) = .init(testing.allocator, testing.io);
+    defer queue.deinit();
+    try queue.push(try sessionStart(testing.allocator, "Alpha"));
+}
+
+test "push frees the item when it can't be queued" {
+    var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 1 });
+    const allocator = failing.allocator();
+    var queue: Queue(SessionStart) = .init(allocator, testing.io);
+    defer queue.deinit();
+
+    try testing.expectError(error.OutOfMemory, queue.push(try sessionStart(allocator, "Alpha")));
 }

@@ -5,6 +5,7 @@ const activity = @import("../config/activity.zig");
 const TravelConfig = activity.TravelConfig;
 
 pub const Traveler = struct {
+    /// Borrows from the caller.
     system_name: []const u8,
     /// When it last jumped, in ms on the caller's clock; 0 when it hasn't this session.
     last_jump_ms: u64,
@@ -12,7 +13,7 @@ pub const Traveler = struct {
     is_excluded: bool,
 };
 
-/// The system most tracked travelers are in, once enough of them have been there for window_seconds; null otherwise. Borrows from `travelers`.
+/// Where most tracked travelers are, once enough have been there for window_seconds; borrows from `travelers`.
 pub fn groupSystem(travel: *const TravelConfig, travelers: []const Traveler, now_ms: u64) ?[]const u8 {
     var eligible_count: usize = 0;
     for (travelers) |traveler| {

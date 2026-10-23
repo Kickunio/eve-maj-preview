@@ -30,7 +30,8 @@ pub fn show(context: *ui.Frame) !void {
 }
 
 fn monitoring(context: *ui.Frame, chatlog: ChatlogRef) !void {
-    const section = try bind.switchedSection(context, "Log Monitoring", "Watches EVE's chat and game logs for each character's system, event alerts, login time, and combat, mining and bounty rates. In EVE, enable Esc > Chat Channel Settings > Log chat to file so logs get written to disk.", chatlog, "enabled", true);
+    const section = try widgets.openSection(context, "Log Monitoring", "Reads EVE's logs for systems, alerts, and combat, mining and bounty rates.", &style.section);
+    try bind.toggle(context, chatlog, "enabled", "Enable Log Monitoring");
     const options = try widgets.openGroup(context, .src(@src()), chatlog.get("enabled"));
     try directory(context, chatlog, .{
         .field = "chatlogDir",
@@ -38,7 +39,7 @@ fn monitoring(context: *ui.Frame, chatlog: ChatlogRef) !void {
         .placeholder = "C:\\Users\\...\\Chatlogs",
         .target = .chatlog_dir,
         .title = "Select Chatlog Directory",
-        .hint = "Usually Documents\\EVE\\logs\\Chatlogs.",
+        .hint = "Usually Documents\\EVE\\logs\\Chatlogs. In EVE, enable Esc > Chat Channel Settings > Log chat to file.",
     });
     try directory(context, chatlog, .{
         .field = "gamelogDir",
@@ -52,7 +53,7 @@ fn monitoring(context: *ui.Frame, chatlog: ChatlogRef) !void {
     try section.close(context);
 }
 
-/// A path box with a Browse button, whose folder picker sets the path once it closes; hovering the box shows a path too long for it.
+/// Browse's picker sets the path once it closes; hovering shows a path too long for the box.
 fn directory(context: *ui.Frame, chatlog: ChatlogRef, comptime row_settings: DirectoryRow) !void {
     const field = row_settings.field;
     const row = try widgets.openBinding(context, .str("knots.chatlog.dir:" ++ field), row_settings.label);
@@ -70,11 +71,11 @@ fn directory(context: *ui.Frame, chatlog: ChatlogRef, comptime row_settings: Dir
 }
 
 fn polling(context: *ui.Frame, chatlog: ChatlogRef) !void {
-    const section = try widgets.openSection(context, "Polling & Performance", "", &style.section);
+    const section = try widgets.openSection(context, "Polling & Performance", "How often the logs are read, and how a quiet log is read less often.", &style.section);
     const options = try widgets.openGroup(context, .src(@src()), chatlog.get("enabled"));
     try bind.number(context, chatlog, "pollIntervalMs", "Poll Interval", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How often logs are checked for new lines.");
-    try bind.number(context, chatlog, "idlePollThreshold", "Idle Threshold (polls)", .{});
+    try bind.number(context, chatlog, "idlePollThreshold", "Polls Before Idle", .{ .unit = "polls", .singular_unit = "poll" });
     try widgets.hintText(context, .src(@src()), "Checks with nothing new before a quiet log is checked less often.");
     try bind.number(context, chatlog, "maxPollMultiplier", "Max Poll Multiplier", .{ .unit = "\u{00D7}" });
     try widgets.hintText(context, .src(@src()), "How much less often a quiet log can be checked.");

@@ -13,12 +13,9 @@ const placement = @import("../layout/placement.zig");
 const spaces = @import("../layout/spaces.zig");
 const monitors = @import("../layout/monitors.zig");
 const state = @import("state.zig");
-const input = @import("input.zig");
 const window = @import("window.zig");
 const arrange = @import("arrange.zig");
-const list_view = @import("list_view.zig");
 const renderer_mod = @import("renderer.zig");
-const center = @import("../notifications/center.zig");
 const dispatch = @import("../notifications/dispatch.zig");
 const notification_mod = @import("../notifications/notification.zig");
 const log = @import("../log.zig");
@@ -27,10 +24,10 @@ const slog = log.Scoped("thumbnail_set");
 
 pub const ThumbnailWindow = window.ThumbnailWindow;
 
-/// Each thumbnail's last-known system name, copied before a reload tears ThumbnailSet down so the new thumbnails can be seeded instead of starting blank.
+/// Copied before a reload so the new thumbnails start with their system names.
 pub const SystemNameSnapshot = struct {
     allocator: std.mem.Allocator,
-    /// Keyed by source_hwnd, which stays stable across the thumbnails' teardown and recreation.
+    /// Keyed by source_hwnd, which survives the thumbnails' teardown and recreation; values owned, freed in deinit.
     names: std.AutoHashMap(win32.HWND, []const u8),
 
     pub fn init(allocator: std.mem.Allocator) SystemNameSnapshot {
@@ -64,29 +61,28 @@ pub const SystemNameSnapshot = struct {
 
 pub const ThumbnailSet = struct {
     allocator: std.mem.Allocator,
-    /// Searched linearly: there are only ever a few dozen, and an index would go stale on every removal.
+    /// Searched linearly: there are only ever a few dozen.
     thumbnails: std.ArrayList(ThumbnailWindow),
     instance: win32.HINSTANCE,
-    /// Read-only, so every runtime change goes through `store` and reaches both the running and the saved copy.
+    /// Read-only: runtime changes go through `store`, reaching the running and saved copies.
     config: *const config_mod.Config,
+    /// Borrowed; outlives the thumbnail set.
     store: *config_mod.ProfileStore,
     /// Borrowed from App, which keeps it across a thumbnail set rebuild.
     exclusions: *const exclusions_mod.Exclusions,
-    /// Borrowed from App, which keeps it across a thumbnail set rebuild.
-    notifications: *center.NotificationCenter,
+    /// Borrowed from App's NotificationCenter, which keeps them across a thumbnail set rebuild.
+    notification_records: dispatch.Records,
     destroy_event_hook: ?win32.HANDLE = null,
     renderer: renderer_mod.Renderer,
-    /// Non-null only in ClientList mode.
-    list_window: ?list_view.ListWindow = null,
     auto_move: auto_move_mod.AutoMoveVerifier,
     ghost_overlay: drag_overlays.GhostOverlay,
     /// Shared by dragging and region select.
     hint_box: gdi_overlay.HintBox = .{},
     /// Sole "who's focused" source of truth; write only via reconcileThumbnailStates.
     active_source_hwnd: ?win32.HWND = null,
-    /// Unique system/character colours; lives as long as this ThumbnailSet, which a profile reload recreates along with Config.
+    /// Unique system and character colours.
     auto_colors: config_mod.AutoColorStore,
-    /// The mode the thumbnails were created for; a different one needs a new ThumbnailSet (see App.onLiveProfileEdited).
+    /// A different mode needs a new ThumbnailSet (see App.onLiveProfileEdited).
     view_mode: types.ViewMode,
 
     pub const refreshAllThumbnailConfigCaches = arrange.refreshConfigCaches;
@@ -103,14 +99,24 @@ pub const ThumbnailSet = struct {
         system_names: ?*const SystemNameSnapshot = null,
     };
 
+    /// Passed in, since input handling sits above thumbnail/.
+    pub const Callbacks = struct {
+        window_procs: window.WindowProcs,
+        /// The EVENT_OBJECT_DESTROY hook on our own process's windows.
+        destroy_hook: win32.WINEVENTPROC,
+    };
+
     const ThumbnailStrings = struct {
+        /// Owned.
         character_name: []const u8,
+        /// Owned.
         system_name: []const u8,
+        /// Owned.
         group_badge_label: []const u8,
     };
 
-    /// Borrows `store`, `exclusions` and `notifications`, which must outlive the thumbnail set.
-    pub fn init(allocator: std.mem.Allocator, store: *config_mod.ProfileStore, exclusions: *const exclusions_mod.Exclusions, notifications: *center.NotificationCenter) !ThumbnailSet {
+    /// Borrows `store`, `exclusions` and `notification_records`, which must outlive the thumbnail set.
+    pub fn init(allocator: std.mem.Allocator, store: *config_mod.ProfileStore, exclusions: *const exclusions_mod.Exclusions, notification_records: dispatch.Records, callbacks: Callbacks) !ThumbnailSet {
         const instance = win32.GetModuleHandleA(null) orelse return error.GetModuleHandleFailed;
         const config = &store.live;
 
@@ -125,32 +131,20 @@ pub const ThumbnailSet = struct {
             .config = config,
             .store = store,
             .exclusions = exclusions,
-            .notifications = notifications,
+            .notification_records = notification_records,
             .view_mode = config.display.viewMode,
         };
 
-        try window.registerClasses(instance);
+        try window.registerClasses(instance, callbacks.window_procs);
 
         // Own process only: removeDestroyedOverlay acts on our overlay windows alone.
-        thumbnail_set.destroy_event_hook = win32.setWinEventHookForProcess(win32.EVENT_OBJECT_DESTROY, input.windowDestroyProc, win32.GetCurrentProcessId());
+        thumbnail_set.destroy_event_hook = win32.setWinEventHookForProcess(win32.EVENT_OBJECT_DESTROY, callbacks.destroy_hook, win32.GetCurrentProcessId());
         if (thumbnail_set.destroy_event_hook == null) slog.err("Failed to set up destroy event hook", .{});
-
-        if (config.display.viewMode == .ClientList) {
-            thumbnail_set.list_window = list_view.ListWindow.init(allocator, store, instance) catch |err| blk: {
-                slog.err("Failed to create list window: {}", .{err});
-                break :blk null;
-            };
-        }
 
         return thumbnail_set;
     }
 
     pub fn deinit(self: *ThumbnailSet) void {
-        if (self.list_window) |*list_window| {
-            list_window.deinit();
-            self.list_window = null;
-        }
-
         if (self.destroy_event_hook) |hook| _ = win32.UnhookWinEvent(hook);
 
         self.ghost_overlay.deinit();
@@ -163,7 +157,7 @@ pub const ThumbnailSet = struct {
         self.auto_colors.deinit();
     }
 
-    /// Shows `notification` on `source_hwnd`'s thumbnail, subject to that type's notification settings.
+    /// Subject to that type's notification settings.
     pub fn notify(self: *ThumbnailSet, source_hwnd: win32.HWND, notification: notification_mod.Notification) void {
         const thumbnail = self.getThumbnailBySourceHwnd(source_hwnd) orelse {
             slog.debug("Window 0x{x} not found for notification update (thumbnail may not exist yet)", .{@intFromPtr(source_hwnd)});
@@ -172,7 +166,7 @@ pub const ThumbnailSet = struct {
         dispatch.notify(self.dispatchContext(), thumbnail, notification);
     }
 
-    /// Every EVE client's thumbnail, for a global user action; kept out of history, and its sound and speech play once.
+    /// For a global user action: kept out of history, and its sound and speech play once.
     pub fn notifyAll(self: *ThumbnailSet, notification: notification_mod.Notification) void {
         dispatch.notifyAll(self.dispatchContext(), self.thumbnails.items, notification);
     }
@@ -204,7 +198,7 @@ pub const ThumbnailSet = struct {
         try self.renderer.render(self.config, thumbnail, self.active_source_hwnd);
     }
 
-    /// renderThumbnail, logging (not propagating) a failure with context folded into the message.
+    /// Logs a failure, with `context` in the message, instead of propagating it.
     pub fn renderThumbnailLogged(self: *ThumbnailSet, thumbnail: *ThumbnailWindow, context: []const u8) void {
         self.renderThumbnail(thumbnail) catch |err| {
             slog.err("Failed to render thumbnail for '{s}' ({s}): {}", .{ thumbnail.character_name, context, err });
@@ -234,7 +228,7 @@ pub const ThumbnailSet = struct {
         return removed_any and spaces.anyActive(self.config);
     }
 
-    /// After one of our own windows was destroyed; a source EVE window closing is Scout's to report (see cleanupClosedThumbnails).
+    /// Our own windows only; a source window closing is Scout's to report.
     pub fn removeDestroyedOverlay(self: *ThumbnailSet, hwnd: win32.HWND) void {
         const index = self.indexOfOverlay(hwnd) orelse return;
         slog.info("Window closed (event), removing thumbnail for {s}", .{self.thumbnails.items[index].character_name});
@@ -254,7 +248,10 @@ pub const ThumbnailSet = struct {
     /// Polled on demand, since a hotkey press carries no window of its own.
     pub fn thumbnailUnderCursor(self: *ThumbnailSet) ?*ThumbnailWindow {
         var cursor: win32.POINT = undefined;
-        if (!win32.toBool(win32.GetCursorPos(&cursor))) return null;
+        if (!win32.toBool(win32.GetCursorPos(&cursor))) {
+            slog.warn("Failed to get the cursor position to find the thumbnail under it", .{});
+            return null;
+        }
 
         const hwnd_at_cursor = win32.WindowFromPoint(cursor) orelse return null;
         const source_hwnd = win32.GetPropA(hwnd_at_cursor, window.SOURCE_HWND_PROP) orelse return null;
@@ -325,20 +322,19 @@ pub const ThumbnailSet = struct {
         }
     }
 
-    fn autoVisibility(self: *const ThumbnailSet, eve_has_focus: bool) state.VisibilityState {
-        return if (self.config.shownAutoHide().is_enabled and !eve_has_focus) .hidden_automatic else .visible;
+    fn focusHide(self: *const ThumbnailSet, eve_has_focus: bool) state.FocusHide {
+        return .{ .is_enabled = self.config.shownAutoHide().is_enabled, .is_eve_focused = eve_has_focus };
     }
 
-    /// Leaves one hidden by hand alone; returns whether it changed.
+    /// Returns whether it changed.
     pub fn applyAutoVisibility(self: *const ThumbnailSet, thumbnail: *ThumbnailWindow, eve_has_focus: bool) bool {
-        if (thumbnail.visibility_state == .hidden_manual) return false;
-        const target = self.autoVisibility(eve_has_focus);
+        const target = thumbnail.visibility_state.afterAutoHide(self.focusHide(eve_has_focus));
         if (thumbnail.visibility_state == target) return false;
         thumbnail.setVisibility(target);
         return true;
     }
 
-    /// Hides every visible thumbnail, adding the windows it hid to `hidden` so showThumbnails brings back only those, not ones already hidden.
+    /// Records the ones it hid in `hidden`, so showThumbnails restores only those.
     pub fn hideVisibleThumbnails(self: *ThumbnailSet, allocator: std.mem.Allocator, hidden: *std.ArrayList(win32.HWND)) void {
         for (self.thumbnails.items) |*thumbnail| {
             if (!thumbnail.isVisible()) continue;
@@ -403,7 +399,7 @@ pub const ThumbnailSet = struct {
         slog.debug("Updated system for {s}: {s}", .{ thumbnail.character_name, system_name });
     }
 
-    /// Renders every thumbnail with needs_render set; past `max_immediate`, the rest stay dirty for the next tick.
+    /// Past `max_immediate`, the rest stay dirty for the next tick.
     pub fn renderDirtyThumbnails(self: *ThumbnailSet, max_immediate: ?usize) void {
         var rendered: usize = 0;
         for (self.thumbnails.items) |*thumbnail| {
@@ -419,19 +415,10 @@ pub const ThumbnailSet = struct {
         }
     }
 
-    pub fn updateDpsForCharacter(self: *ThumbnailSet, source_hwnd: win32.HWND, incoming_dps: ?f32, outgoing_dps: ?f32) void {
+    /// `setter` is an ActivityStats setter; redraws if anything shown changed.
+    pub fn updateStats(self: *ThumbnailSet, source_hwnd: win32.HWND, comptime setter: anytype, args: anytype) void {
         const thumbnail = self.getThumbnailBySourceHwnd(source_hwnd) orelse return;
-        if (thumbnail.stats.setDps(incoming_dps, outgoing_dps)) thumbnail.needs_render = true;
-    }
-
-    pub fn updateMiningForCharacter(self: *ThumbnailSet, source_hwnd: win32.HWND, rate: ?f32, isk_rate: ?f32) void {
-        const thumbnail = self.getThumbnailBySourceHwnd(source_hwnd) orelse return;
-        if (thumbnail.stats.setMining(rate, isk_rate)) thumbnail.needs_render = true;
-    }
-
-    pub fn updateBountyForCharacter(self: *ThumbnailSet, source_hwnd: win32.HWND, isk_rate: ?f32) void {
-        const thumbnail = self.getThumbnailBySourceHwnd(source_hwnd) orelse return;
-        if (thumbnail.stats.setBounty(isk_rate)) thumbnail.needs_render = true;
+        if (@call(.auto, setter, .{&thumbnail.stats} ++ args)) thumbnail.needs_render = true;
     }
 
     /// After Scout backdated the client's login from its gamelog.
@@ -441,12 +428,7 @@ pub const ThumbnailSet = struct {
         thumbnail.needs_render = true;
     }
 
-    pub fn updateResourceStatsForCharacter(self: *ThumbnailSet, source_hwnd: win32.HWND, cpu_percent: f32, ram_mb: f32, vram_mb: f32, has_vram: bool) void {
-        const thumbnail = self.getThumbnailBySourceHwnd(source_hwnd) orelse return;
-        if (thumbnail.stats.setResources(cpu_percent, ram_mb, vram_mb, has_vram)) thumbnail.needs_render = true;
-    }
-
-    /// Reacts to Scout's name-change events (logins, logouts, renames); returns whether the layout needs a reflow.
+    /// Logins, logouts and renames; returns whether the layout needs a reflow.
     fn applyNameChanges(self: *ThumbnailSet, name_changes: []const scout.NameChange) bool {
         var any_login = false;
         var any_logout = false;
@@ -484,7 +466,7 @@ pub const ThumbnailSet = struct {
         thumbnail.needs_render = true;
     }
 
-    /// Once log monitoring is off, so nothing the logs last said stays on screen with no way to update.
+    /// Once log monitoring is off, so stale log readings don't stay on screen.
     pub fn clearLogReadings(self: *ThumbnailSet) void {
         for (self.thumbnails.items) |*thumbnail| {
             if (thumbnail.system_name.len > 0) self.clearSystemName(thumbnail);
@@ -494,7 +476,7 @@ pub const ThumbnailSet = struct {
         slog.debug("Cleared what the logs last showed", .{});
     }
 
-    /// Startup/reload: creates every window's thumbnail, then reflows once, since createThumbnail sizes each one against the count so far.
+    /// Reflows once at the end, since createThumbnail sizes each against the count so far.
     pub fn populate(self: *ThumbnailSet, eve_windows: []const scout.EveWindow, options: PopulateOptions) void {
         if (self.addMissingThumbnails(eve_windows, options) and arrange.hasCountDependentLayout(self)) self.repositionAllThumbnails();
     }
@@ -505,31 +487,18 @@ pub const ThumbnailSet = struct {
         needs_region_reflow = self.applyNameChanges(name_changes) or needs_region_reflow;
         self.auto_move.verify(self.config);
 
-        // createThumbnail seeds character_name from eve_window, so new thumbnails need no re-sync.
         const created_new = self.addMissingThumbnails(eve_windows, .{
             .should_move_to_saved = self.config.autoMovePosition.enabled,
             .should_minimize_new = self.config.autoMinimize.startMinimized,
         });
         needs_region_reflow = (created_new and arrange.hasCountDependentLayout(self)) or needs_region_reflow;
 
-        // Coalesced into one reflow, since any combination of the three triggers above can fire in the same tick.
+        // One reflow for all three triggers above.
         if (needs_region_reflow) self.repositionAllThumbnails();
 
         self.renderDirtyThumbnails(null);
-
-        if (self.list_window) |*list_window| {
-            list_window.render(self.thumbnails.items, self.active_source_hwnd) catch |err| {
-                slog.err("Failed to render list window: {}", .{err});
-            };
-        }
     }
 
-    /// Applies the list view settings only read when it's created, for a change made in the config dialog.
-    pub fn syncListWindow(self: *ThumbnailSet) void {
-        if (self.list_window) |*list| list.sync();
-    }
-
-    /// Saves where the thumbnail with window `hwnd` now sits.
     pub fn saveThumbnailPosition(self: *ThumbnailSet, hwnd: win32.HWND) void {
         const thumbnail = self.getThumbnailByOverlayHwnd(hwnd) orelse return;
         const entry = positionOf(thumbnail) orelse return;
@@ -551,7 +520,7 @@ pub const ThumbnailSet = struct {
     }
 
     fn dispatchContext(self: *const ThumbnailSet) dispatch.Context {
-        return .{ .allocator = self.allocator, .config = self.config, .center = self.notifications, .active_source_hwnd = self.active_source_hwnd };
+        return .{ .allocator = self.allocator, .config = self.config, .records = self.notification_records, .active_source_hwnd = self.active_source_hwnd };
     }
 
     fn destroyThumbnail(self: *ThumbnailSet, thumbnail: ThumbnailWindow) void {
@@ -559,7 +528,7 @@ pub const ThumbnailSet = struct {
         self.freeThumbnailData(thumbnail);
     }
 
-    /// Frees what every ThumbnailWindow owns regardless of mode: its strings and notification stack.
+    /// Frees what it owns in every mode: its strings and notification stack.
     fn freeThumbnailData(self: *ThumbnailSet, thumbnail: ThumbnailWindow) void {
         self.allocator.free(thumbnail.character_name);
         self.allocator.free(thumbnail.system_name);
@@ -616,7 +585,7 @@ pub const ThumbnailSet = struct {
         self.refreshExclusion(thumbnail);
     }
 
-    /// The client is back at the login screen, so it has no system and its notifications no longer apply; applyNameChanges' reflow moves it.
+    /// Back at the login screen; applyNameChanges' reflow moves it.
     fn onLogout(self: *ThumbnailSet, thumbnail: *ThumbnailWindow) void {
         dispatch.clearAll(self.allocator, thumbnail);
         self.refreshExclusion(thumbnail);
@@ -635,7 +604,7 @@ pub const ThumbnailSet = struct {
         thumbnail.needs_render = true;
     }
 
-    /// Creates a thumbnail for each window not yet tracked, logging and skipping failures; returns whether any were created.
+    /// Logs and skips failures; returns whether any were created.
     fn addMissingThumbnails(self: *ThumbnailSet, eve_windows: []const scout.EveWindow, options: PopulateOptions) bool {
         var created_new = false;
 
@@ -676,7 +645,7 @@ pub const ThumbnailSet = struct {
         };
     }
 
-    /// The data record both creation paths share; the caller supplies the window handles (sentinels outside Thumbnails mode) and owns the result's strings.
+    /// Shared by both creation paths; the caller supplies the handles and owns the result's strings.
     fn newThumbnailRecord(self: *ThumbnailSet, eve_window: *const scout.EveWindow, initial_system_name: []const u8, handles: window.Handles, is_win32_enabled: bool) !ThumbnailWindow {
         const strings = try self.dupeThumbnailStrings(eve_window.character_name, initial_system_name);
         var thumbnail: ThumbnailWindow = .{
@@ -691,7 +660,7 @@ pub const ThumbnailSet = struct {
             .cached_group_badge_label = strings.group_badge_label,
             .auto_minimize = .{ .inactive_since = win32.Ticks.now() },
             // The new client isn't tracked yet, so isEveWindowForeground alone would miss it.
-            .visibility_state = self.autoVisibility(win32.GetForegroundWindow() == eve_window.hwnd or self.isEveWindowForeground()),
+            .visibility_state = state.VisibilityState.visible.afterAutoHide(self.focusHide(win32.GetForegroundWindow() == eve_window.hwnd or self.isEveWindowForeground())),
             .is_win32_enabled = is_win32_enabled,
         };
         thumbnail.refreshConfigCache(self.config, &self.auto_colors);
@@ -739,8 +708,9 @@ pub const ThumbnailSet = struct {
 
         var thumbnail = try self.newThumbnailRecord(eve_window, initial_system_name, handles, true);
         errdefer self.freeThumbnailData(thumbnail);
-        try self.renderThumbnail(&thumbnail);
+        // Before rendering, which can fail after creating the overlay bitmap.
         errdefer thumbnail.render_cache.deinit();
+        try self.renderThumbnail(&thumbnail);
         const is_shown = if (thumbnail.render_cache.settings) |settings| settings.show_thumbnail else false;
         if (is_shown) window.showText(handles, position, size);
 
@@ -752,7 +722,10 @@ pub const ThumbnailSet = struct {
     fn positionOf(thumbnail: *const ThumbnailWindow) ?config_mod.ProfileStore.CharacterPosition {
         if (!thumbnail.is_win32_enabled) return null;
         var rect: win32.RECT = undefined;
-        if (!win32.toBool(win32.GetWindowRect(thumbnail.hwnd, &rect))) return null;
+        if (!win32.toBool(win32.GetWindowRect(thumbnail.hwnd, &rect))) {
+            slog.warn("Failed to get the position of '{s}' to save it", .{thumbnail.character_name});
+            return null;
+        }
         return .{ .name = thumbnail.character_name, .position = .{ .x = rect.left, .y = rect.top } };
     }
 };

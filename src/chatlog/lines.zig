@@ -192,6 +192,12 @@ pub fn characterIdFromFileName(file_name: []const u8) ?[]const u8 {
     return id;
 }
 
+/// YYYYMMDDHHMMSS from the "[ time ]" a whole line starts with, or 0.
+pub fn leadingTimestamp(line: []const u8) u64 {
+    const close = std.mem.findScalar(u8, line, ']') orelse return 0;
+    return lineTimestamp(line, close);
+}
+
 pub fn listenerName(header: []const u8) ?[]const u8 {
     const needle = "Listener:";
     const match_index = std.mem.find(u8, header, needle) orelse return null;
@@ -308,6 +314,12 @@ test "lineTimestamp reads the bracketed time before a position" {
     const line = "[ 2026.09.21 21:10:31 ] EVE System > Channel changed to Local : Jita";
     try testing.expectEqual(@as(u64, 20260921211031), lineTimestamp(line, std.mem.find(u8, line, "EVE").?));
     try testing.expectEqual(@as(u64, 0), lineTimestamp("no bracket here", 10));
+}
+
+test "leadingTimestamp reads a whole line's time, with or without a BOM" {
+    try testing.expectEqual(@as(u64, 20260905011608), leadingTimestamp("[ 2026.09.05 01:16:08 ] (None) Jumping from C-J6MT to 8-WYQZ"));
+    try testing.expectEqual(@as(u64, 20260921211031), leadingTimestamp("\u{FEFF}[ 2026.09.21 21:10:31 ] EVE System > Channel changed to Local : Jita"));
+    try testing.expectEqual(@as(u64, 0), leadingTimestamp("no bracket here"));
 }
 
 test "lastSystemInGame picks whichever of jump and undock came last" {

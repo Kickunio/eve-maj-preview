@@ -66,12 +66,10 @@ pub fn resolveMonitorPlacement(display: *const config.DisplayConfig) ?MonitorPla
     return if (display.monitorIndex) |monitor_index| getMonitorPlacement(monitor_index, display.useMonitorWorkArea) else null;
 }
 
-/// DPI for a specific monitor; used before a window exists on it yet.
 fn getMonitorDpi(hmonitor: win32.HMONITOR) u32 {
     return win32.monitorDpi(hmonitor);
 }
 
-/// DPI for the system default monitor; used as a fallback when no target monitor is configured.
 fn defaultDpi() u32 {
     return win32.GetDpiForSystem();
 }

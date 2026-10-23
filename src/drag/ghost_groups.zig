@@ -6,9 +6,10 @@ const spaces = @import("../layout/spaces.zig");
 
 const Config = config_mod.Config;
 
-/// One saved-position outline; `names` is the comma-joined list of every character sharing that exact rect, owned by whoever holds the group slice.
+/// One saved-position outline.
 pub const GhostGroup = struct {
     rect: win32.RECT,
+    /// Every character sharing that exact rect, comma-joined; owned by whoever holds the group slice.
     names: []const u8,
 };
 

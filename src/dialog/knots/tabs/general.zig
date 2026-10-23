@@ -1,6 +1,7 @@
-//! The configuration window's General tab: app-wide preferences, then, in Advanced Mode, logging, scanning, and the window filters that pick which applications are tracked; main thread only.
+//! The configuration window's General tab: app-wide preferences and startup, then, in Advanced Mode, logging, scanning, and the window filters that pick which applications are tracked; main thread only.
 const std = @import("std");
 const ui = @import("ui");
+const win32 = @import("../../../platform/win32.zig");
 const config = @import("../../../config.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
@@ -9,14 +10,17 @@ const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
 const window_picker = @import("../window_picker.zig");
 const lang = @import("../../../lang/lang.zig");
+const log = @import("../../../log.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
 const ProfileRef = session.Ref(config.Config);
 const FilterRef = session.Ref(config.WindowFilterConfig);
+const slog = log.Scoped("dialog_knots");
 
 const NEW_FILTER_NAME = "New Filter";
+const PROTOCOL_DOCS_URL = "https://github.com/mrmjstc/eve-maj-preview/blob/main/docs/CONFIGURATION.md#command-line-and-protocol";
 
 var g_allocator: std.mem.Allocator = undefined;
 var g_selected_index: usize = 0;
@@ -38,6 +42,7 @@ pub fn reset() void {
 
 pub fn show(context: *ui.Frame) !void {
     try preferences(context);
+    try startup(context);
     if (!session.global().get("advancedMode")) return;
     try logging(context);
     try scanning(context);
@@ -48,7 +53,7 @@ fn preferences(context: *ui.Frame) !void {
     const section = try widgets.openSection(
         context,
         "Preferences",
-        "Advanced Mode reveals power-user settings across the app (extra tabs, position/spacing parameters, snapping, layout system, and more). These preferences are global and apply across all profiles.",
+        "Settings for the app itself, shared by every profile.",
         &style.section,
     );
     const global = session.global();
@@ -60,6 +65,20 @@ fn preferences(context: *ui.Frame) !void {
     try bind.toggle(context, global, "alwaysOnTop", "Always on Top");
     try widgets.hintText(context, .src(@src()), "Keeps this window above other windows.");
     if (global.get("alwaysOnTop") != was_on_top) host.setAlwaysOnTop(!was_on_top);
+    try section.close(context);
+}
+
+fn startup(context: *ui.Frame) !void {
+    const section = try widgets.openSection(context, "Startup", "Starting with Windows, control from other apps, and update checks.", &style.section);
+    const global = session.global();
+    try bind.toggle(context, global, "runOnStartup", "Run on Startup");
+    try widgets.hintText(context, .src(@src()), "Starts EVE-Maj Preview when you sign in to Windows.");
+    try bind.toggle(context, global, "autoRegisterProtocol", "Auto-Register Protocol Handler");
+    if (try widgets.hintWithLink(context, .src(@src()), "Lets links in other apps control EVE-Maj Preview.", "Learn more")) {
+        if (!win32.shellOpenUrl(PROTOCOL_DOCS_URL)) slog.warn("Failed to open '{s}' in the browser", .{PROTOCOL_DOCS_URL});
+    }
+    try bind.invertedToggle(context, global, "disableUpdateChecks", "Check for Updates");
+    try widgets.hintText(context, .src(@src()), "Looks online for a new version at startup.");
     try section.close(context);
 }
 
@@ -80,9 +99,8 @@ fn scanning(context: *ui.Frame) !void {
 fn windowFilters(context: *ui.Frame) !void {
     const profile = session.profile();
     var is_enabled = g_are_filters_enabled orelse (profile.ptr.windowFilters.items.len > 0);
-    const section = try widgets.openSwitchedSection(context, "Window Filters", "Configure which applications to track. Each filter can match by window class name and executable name.", &style.section, .{ .is_on = &is_enabled });
-    if (section.is_flipped) g_are_filters_enabled = is_enabled;
-    try widgets.hintText(context, .src(@src()), "When off, only EVE windows are shown.");
+    const section = try widgets.openSection(context, "Window Filters", "Tracks other apps by window class or executable. Off shows only EVE.", &style.section);
+    if (try widgets.checkbox(context, .src(@src()), "Enable Window Filters", &is_enabled)) g_are_filters_enabled = is_enabled;
 
     const options = try widgets.openGroup(context, .src(@src()), is_enabled);
     try filterList(context, profile);
@@ -104,15 +122,15 @@ fn filterList(context: *ui.Frame, profile: ProfileRef) !void {
         if (first_editable == null) first_editable = index;
         if (index == g_selected_index) is_selected_editable = true;
     }
-    if (first_editable) |first| {
-        if (!is_selected_editable) g_selected_index = first;
-    }
+    const first = first_editable orelse {
+        if (try widgets.emptyListRow(context, .src(@src()), "No window filters yet. Add one to show another app's windows as thumbnails.", "Add Window Filter")) addFilter(profile);
+        return;
+    };
+    if (!is_selected_editable) g_selected_index = first;
     const master_detail = Rect{ .key = .src(@src()), .style = &style.master_detail };
     _ = try master_detail.open(context);
-    const list = try widgets.openRoster(context, .str("knots.filter.roster"), &style.roster_filters, false);
-    if (first_editable == null) {
-        try widgets.boxedText(context, .src(@src()), "No window filters yet.", &style.roster_empty, &style.roster_empty_text);
-    }
+    // A fixed height, like System Colors', so Add sits at the bottom as on every other list.
+    const list = try widgets.openRoster(context, .str("knots.filter.roster"), &style.roster_fixed, true);
 
     const arena = context.arena();
     for (filters, 0..) |*filter, index| {
@@ -135,17 +153,13 @@ fn filterList(context: *ui.Frame, profile: ProfileRef) !void {
         try widgets.fitRosterRow(context, name, 0, badge);
         try row.close(context);
     }
-    const added: ?FilterRef = if (try list.close(context, .{ .add_label = "Add Window Filter" }) == .add) profile.append("windowFilters", .{ .name = lang.text(NEW_FILTER_NAME), .enabled = true }) else null;
-    if (added) |filter| g_selected_index = filter.index;
-    if (first_editable == null and added == null) {
-        const empty = Rect{ .key = .src(@src()), .style = &style.detail_fit };
-        _ = try empty.open(context);
-        try widgets.paragraph(context, .src(@src()), "Add a window filter under the list to start tracking another application.");
-        try empty.close(context);
-    } else {
-        try filterDetail(context, profile, g_selected_index);
-    }
+    if (try list.close(context, .{ .add_label = "Add Window Filter" }) == .add) addFilter(profile);
+    try filterDetail(context, profile, g_selected_index);
     try master_detail.close(context);
+}
+
+fn addFilter(profile: ProfileRef) void {
+    if (profile.append("windowFilters", .{ .name = lang.text(NEW_FILTER_NAME), .enabled = true })) |added| g_selected_index = added.index;
 }
 
 fn filterDetail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
@@ -174,7 +188,7 @@ fn filterDetail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     try executables.close(context);
     try widgets.hintText(context, ui.Key.str("knots.filter.exes.hint").indexed(index), "Separate names with commas.");
     const detect = try widgets.openBinding(context, ui.Key.str("knots.filter.detect").indexed(index), "Detect");
-    if (try widgets.glyphButton(context, ui.Key.str("knots.filter.pick").indexed(index), .refresh, "Pick Running Window", &style.plain_button, false)) window_picker.open(g_allocator, &g_picker, index);
+    if (try widgets.glyphButton(context, ui.Key.str("knots.filter.pick").indexed(index), .refresh, "Pick Running Window", &style.add_button, false)) window_picker.open(g_allocator, &g_picker, index);
     try detect.close(context);
     try widgets.hintText(context, ui.Key.str("knots.filter.detect.hint").indexed(index), "Pick an open window to fill in this filter.");
     try picker(context, profile, filter);
@@ -183,7 +197,6 @@ fn filterDetail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     if (removed) removeFilter(profile, index);
 }
 
-/// Picking a window fills in its class and executable, and names the filter after the executable.
 fn picker(context: *ui.Frame, profile: ProfileRef, filter: FilterRef) !void {
     const chosen = try window_picker.select(context, &g_picker, .str("knots.filter.picker"), filter.index) orelse return;
     filter.setStrings("class_names", &.{chosen.class});

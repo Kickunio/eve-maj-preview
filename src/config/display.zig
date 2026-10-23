@@ -7,7 +7,7 @@ pub const DisplayConfig = struct {
     startX: i32 = 10,
     startY: i32 = 10,
 
-    /// Horizontal gap for thumbnails with no saved position, lined up left-to-right from startX/startY instead of stacking.
+    /// Gap between unplaced thumbnails, lined up from startX/startY instead of stacking.
     newThumbnailSpacing: i32 = 10,
 
     viewMode: types.ViewMode = .Thumbnails,
@@ -45,7 +45,7 @@ pub const DisplayConfig = struct {
     listViewHideWhenNoEveFocus: bool = false,
     listViewHideDebounceMs: u32 = 500,
 
-    /// The History Panel.
+    /// The notifInfoPanel fields are the History Panel's.
     showNotifInfoPanel: bool = false,
     notifInfoPanelX: i32 = 10,
     notifInfoPanelY: i32 = 250,

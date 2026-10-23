@@ -6,6 +6,7 @@ const key_list = @import("../../../config/key_list.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
 const hotkey = @import("../hotkey.zig");
+const labels = @import("../labels.zig");
 const profiles = @import("../profiles.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
@@ -13,7 +14,6 @@ const window_picker = @import("../window_picker.zig");
 const lang = @import("../../../lang/lang.zig");
 
 const Rect = ui.component.Rect;
-const Text = ui.component.Text;
 const KeyList = key_list.KeyList;
 
 const DOTLAN_URL = "https://evemaps.dotlan.net/";
@@ -22,6 +22,7 @@ const ADASHBOARD_URL = "https://adashboard.info/intel";
 /// Stands in for a session.Ref for one profile's switch hotkey, which is only saved while it's bound.
 const ProfileSwitch = struct {
     index: usize,
+    /// Borrows from profiles.list().
     target: []const u8,
 
     pub fn get(self: ProfileSwitch, comptime _: []const u8) KeyList {
@@ -111,65 +112,75 @@ pub fn show(context: *ui.Frame) !void {
     try widgets.hintText(context, .src(@src()), "A hotkey on 1 won't fire on Alt+1, so Alt+1 still reaches the game.");
     try system.close(context);
 
-    const actions = try widgets.openSection(context, "Window Actions", "Minimize, close, hide thumbnails, toggle auto-minimize, or send every window back to its saved position.", &style.section);
-    try binding(context, profile_hotkeys, "hotkeyCloseAll", "Close All Clients");
+    const actions = try widgets.openSection(context, "Window Actions", "Close or minimize clients, hide thumbnails, or restore saved positions.", &style.section);
+    try binding(context, profile_hotkeys, "hotkeyCloseAll");
     try widgets.hintText(context, .src(@src()), "Closes every EVE client, except those set below.");
-    // Straight under the hotkey they qualify.
     const close_all = session.profile().child("closeAll");
-    try bind.toggle(context, close_all, "excludeCycleExcludedClients", "Don't Close Excluded Clients");
+    // Its own switches, so they read as part of its row.
+    const was_undivided = widgets.useUndividedRows(true);
+    try bind.toggle(context, close_all, "excludeCycleExcludedClients", "Skip Excluded Characters");
     try widgets.hintText(context, .src(@src()), "Uses the excluded characters from the Behavior tab.");
-    try bind.toggle(context, close_all, "excludeLoginScreenClients", "Don't Close Logged-Out Clients");
+    try bind.toggle(context, close_all, "excludeLoginScreenClients", "Skip Logged-Out Clients");
     try widgets.hintText(context, .src(@src()), "Leaves clients at the login screen running.");
-    try binding(context, profile_hotkeys, "hotkeyCloseActive", "Close Active Client");
+    _ = widgets.useUndividedRows(was_undivided);
+    try binding(context, profile_hotkeys, "hotkeyCloseActive");
     try widgets.hintText(context, .src(@src()), "Closes the EVE client you're in.");
-    try binding(context, profile_hotkeys, "hotkeyMinimizeAll", "Minimize All Clients");
+    try binding(context, profile_hotkeys, "hotkeyMinimizeAll");
     try widgets.hintText(context, .src(@src()), "Minimizes every EVE client at once.");
-    try binding(context, profile_hotkeys, "hotkeyToggleVisibility", "Toggle Thumbnail Visibility");
+    try binding(context, profile_hotkeys, "hotkeyToggleVisibility");
     try widgets.hintText(context, .src(@src()), "Hides or shows all thumbnails.");
-    try binding(context, profile_hotkeys, "hotkeyToggleAutoMinimize", "Toggle Auto-Minimize");
+    try binding(context, profile_hotkeys, "hotkeyToggleAutoMinimize");
     try widgets.hintText(context, .src(@src()), "Lasts until restart; it isn't saved.");
-    try binding(context, profile_hotkeys, "hotkeyMoveToSavedPositions", "Move Windows to Saved Positions");
+    try binding(context, profile_hotkeys, "hotkeyMoveToSavedPositions");
     try widgets.hintText(context, .src(@src()), "Uses the window positions saved on the Characters tab.");
     try actions.close(context);
 
+    const modes = try widgets.openSection(context, "Modes", "Turn thumbnail dragging or Travel Mode on and off. Also in the tray menu.", &style.section);
+    try binding(context, profile_hotkeys, "hotkeyToggleDragging");
+    try widgets.hintText(context, .src(@src()), "Lets you move thumbnails with the mouse.");
+    try binding(context, profile_hotkeys, "hotkeyToggleTravelMode");
+    try widgets.hintText(context, .src(@src()), "Alerts you when a character is left behind on a jump.");
+    try modes.close(context);
+
+    const history = try widgets.openSection(context, "Notification History", "Show, hide or clear the history panel. Both are also in the tray menu.", &style.section);
+    try binding(context, profile_hotkeys, "hotkeyToggleNotificationHistory");
+    try widgets.hintText(context, .src(@src()), "Shows or hides the history panel.");
+    try binding(context, profile_hotkeys, "hotkeyClearNotificationHistory");
+    try widgets.hintText(context, .src(@src()), "Empties the history panel.");
+    try history.close(context);
+
     const cycling = try widgets.openSection(context, "Special Cycling", "Step through the excluded characters, or the ones that recently notified.", &style.section);
-    try pair(context, profile_hotkeys, "hotkeyPreviousExcluded", "hotkeyNextExcluded", "Excluded Characters");
-    try widgets.hintText(context, .src(@src()), "Steps through only the characters you've excluded.");
-    try pair(context, profile_hotkeys, "hotkeyPreviousNotified", "hotkeyCycleNotified", "Notified Characters");
-    try widgets.hintText(context, .src(@src()), "Characters with a recent alert. Set how recent on the Notifications tab.");
-    try binding(context, profile_hotkeys, "hotkeyToggleExclusion", "Toggle Character Exclusion");
+    try pair(context, profile_hotkeys, "hotkeyPreviousExcluded", "hotkeyNextExcluded", "Steps through only the characters you've excluded.");
+    try pair(context, profile_hotkeys, "hotkeyPreviousNotified", "hotkeyCycleNotified", "Characters with a recent alert. Set how recent on the Notifications tab.");
+    try binding(context, profile_hotkeys, "hotkeyToggleExclusion");
     try widgets.hintText(context, .src(@src()), "Acts on the EVE window you're in, not the thumbnail under the mouse.");
     try cycling.close(context);
 
-    const suspend_exit = try widgets.openSection(context, "Suspend and Exit", "Suspend or resume every hotkey (the suspend hotkey itself always works), or close EVE-Maj Preview. EVE clients stay open.", &style.section);
-    try binding(context, profile_hotkeys, "hotkeySuspend", "Toggle Suspend Hotkeys");
+    const suspend_exit = try widgets.openSection(context, "Suspend, Mute and Exit", "Pause hotkeys or audio alerts, or close EVE-Maj Preview.", &style.section);
+    try binding(context, profile_hotkeys, "hotkeySuspend");
     try widgets.hintText(context, .src(@src()), "This hotkey keeps working while the others are off.");
-    try binding(context, profile_hotkeys, "hotkeyToggleAlertMute", "Mute Audio Alerts");
+    try binding(context, profile_hotkeys, "hotkeyToggleAlertMute");
     try widgets.hintText(context, .src(@src()), "Mutes spoken and sound alerts until restart. Also in the tray menu.");
-    try binding(context, profile_hotkeys, "hotkeyExitApp", "Exit App");
+    try binding(context, profile_hotkeys, "hotkeyExitApp");
     try widgets.hintText(context, .src(@src()), "Closes EVE-Maj Preview; your EVE clients stay open.");
     try suspend_exit.close(context);
 
-    const clients = try widgets.openSection(context, "Client Cycling", "Step through open EVE client windows, ordered by the Characters list of whichever profile is loaded.", &style.section);
+    const clients = try widgets.openSection(context, "Client Cycling", "Step through every open EVE client, in the loaded profile's Characters order.", &style.section);
     try bind.toggle(context, global, "cycleAllClientsRespectExclusions", "Skip Excluded Characters");
     try widgets.hintText(context, .src(@src()), "Uses the excluded characters from the Behavior tab.");
-    try pair(context, global, "hotkeyCycleAllClientsBackward", "hotkeyCycleAllClientsForward", "Logged-In Clients");
-    try widgets.hintText(context, .src(@src()), "Every logged-in client, in Characters tab order.");
-    try pair(context, global, "hotkeyCycleNotLoggedInBackward", "hotkeyCycleNotLoggedInForward", "Logged-Out Clients");
-    try widgets.hintText(context, .src(@src()), "Clients at the login screen, oldest logout first.");
+    try pair(context, global, "hotkeyCycleAllClientsBackward", "hotkeyCycleAllClientsForward", "Every logged-in client, in Characters tab order.");
+    try pair(context, global, "hotkeyCycleNotLoggedInBackward", "hotkeyCycleNotLoggedInForward", "Clients at the login screen, oldest logout first.");
     try clients.close(context);
 
     const profile_section = try widgets.openSection(context, "Profiles", "Cycle through profiles, or switch straight to one.", &style.section);
-    try pair(context, global, "hotkeyPreviousProfile", "hotkeyNextProfile", "Profile");
-    try widgets.hintText(context, .src(@src()), "Loads the previous or next profile.");
+    try pair(context, global, "hotkeyPreviousProfile", "hotkeyNextProfile", "Loads the previous or next profile.");
     try profileSwitchRows(context);
     try profile_section.close(context);
 
-    const outside = try widgets.openSection(context, "Outside EVE", "Jump to the app you last had focused, to a specific running application, or to a URL in your browser.", &style.section);
-    try binding(context, global, "hotkeyReturnToLastApp", "Return to Last App");
+    const outside = try widgets.openSection(context, "Outside EVE", "Jump to the last app you used, a running app, or a URL in your browser.", &style.section);
+    try pair(context, global, "hotkeyCycleAppsBackward", "hotkeyCycleAppsForward", "Steps through the running apps below, in order.");
+    try binding(context, global, "hotkeyReturnToLastApp");
     try widgets.hintText(context, .src(@src()), "Jumps back to the app you used before EVE.");
-    try pair(context, global, "hotkeyCycleAppsBackward", "hotkeyCycleAppsForward", "Cycle Apps");
-    try widgets.hintText(context, .src(@src()), "Steps through the running apps below, in order.");
     try widgets.subheading(context, .src(@src()), "App Hotkeys");
     try appHotkeys(context);
     try widgets.subheading(context, .src(@src()), "URL Hotkeys");
@@ -178,25 +189,29 @@ pub fn show(context: *ui.Frame) !void {
 }
 
 /// `ref` has session.Ref's get and set for `field`.
-fn binding(context: *ui.Frame, ref: anytype, comptime field: []const u8, label: []const u8) !void {
-    const row = try widgets.openBinding(context, .str("knots.hotkeys.binding:" ++ field), label);
+fn binding(context: *ui.Frame, ref: anytype, comptime field: []const u8) !void {
+    const label = comptime labels.hotkeyLabel(field);
+    comptime std.debug.assert(label.half == .none);
+    const row = try widgets.openBinding(context, .str("knots.hotkeys.binding:" ++ field), label.text);
     try hotkey.field(context, ref, field);
     try row.close(context);
 }
 
-/// A backward/forward set in one row, each half marked with its direction; `ref` has session.Ref's get and set for both fields.
-fn pair(context: *ui.Frame, ref: anytype, comptime previous: []const u8, comptime next: []const u8, label: []const u8) !void {
-    const row = try widgets.openMarkedBinding(context, .str("knots.hotkeys.pair:" ++ previous), label, "\u{2190}");
-    const halves = Rect{ .key = .str("knots.hotkeys.pair.halves:" ++ previous), .style = &style.inline_row_fit };
-    _ = try halves.open(context);
-    try hotkey.field(context, ref, previous);
-    try context.e(Text{ .selectable = false, .key = .str("knots.hotkeys.pair.arrow:" ++ next), .content = "\u{2192}", .style = &style.binding_arrow });
-    try hotkey.field(context, ref, next);
-    try halves.close(context);
-    try row.close(context);
+/// Backward and forward a row each under the pair's name, like Hotkey Groups' keys, both explained by `hint`; `ref` has session.Ref's get and set for both.
+fn pair(context: *ui.Frame, ref: anytype, comptime previous: []const u8, comptime next: []const u8, comptime hint: []const u8) !void {
+    const label = comptime labels.hotkeyLabel(previous);
+    comptime std.debug.assert(label.half == .back and labels.hotkeyLabel(next).half == .forward and std.mem.eql(u8, label.text, labels.hotkeyLabel(next).text));
+    const group = try widgets.openFieldGroup(context, .str("knots.hotkeys.pair:" ++ previous), label.text);
+    inline for (.{ .{ previous, "Cycle Backward" }, .{ next, "Cycle Forward" } }) |half| {
+        const row = try widgets.openBinding(context, .str("knots.hotkeys.half:" ++ half[0]), half[1]);
+        try hotkey.field(context, ref, half[0]);
+        try row.close(context);
+        try widgets.hintText(context, .str("knots.hotkeys.half.hint:" ++ half[0]), hint);
+    }
+    try group.close(context);
 }
 
-/// One row per existing profile rather than a list of its own, so adding or deleting a profile changes the rows.
+/// A row per profile, so adding or deleting a profile changes the rows.
 fn profileSwitchRows(context: *ui.Frame) !void {
     for (profiles.list(), 0..) |name, index| {
         const label = try lang.format(context.arena(), "Switch to: {name}", .{ .name = profiles.displayName(name) });
@@ -207,7 +222,7 @@ fn profileSwitchRows(context: *ui.Frame) !void {
     }
 }
 
-/// Each row ends in its hotkey box, lined up with the bindings above; a row left with no name and no key is removed.
+/// Hotkey boxes line up with the bindings above; a row left with no name and no key is removed.
 fn appHotkeys(context: *ui.Frame) !void {
     const global = session.global();
     var index: usize = 0;
@@ -227,10 +242,9 @@ fn appHotkeys(context: *ui.Frame) !void {
         }
     }
     try draftAppRow(context, global.ptr.appHotkeys.items.len);
-    try widgets.paragraph(context, .src(@src()), "Fill in the empty row to add one; clear a row to remove it.");
 }
 
-/// An empty row after the app hotkeys, so the list never looks empty; typing, binding or picking into it adds the entry.
+/// Keeps the list from looking empty; typing, binding or picking into it adds the entry.
 fn draftAppRow(context: *ui.Frame, index: usize) !void {
     const row = Rect{ .key = .str("knots.hotkeys.app.draft"), .style = &style.list_row };
     _ = try row.open(context);
@@ -252,7 +266,6 @@ fn addAppHotkey(comptime field: []const u8, value: anytype) void {
     added.set(field, value);
 }
 
-/// Picking a window fills in its executable name.
 fn picker(context: *ui.Frame, entry: session.Ref(global_mod.AppHotkeyConfig)) !void {
     const chosen = try window_picker.select(context, &g_picker, .str("knots.hotkeys.app.picker"), entry.index) orelse return;
     entry.set("executableName", chosen.executable);
@@ -270,7 +283,7 @@ fn urlHotkeys(context: *ui.Frame) !void {
         try bind.textBox(context, entry, "url", "https://example.com");
         try hotkey.field(context, entry, "hotkey");
         try row.close(context);
-        // Only aDashboard takes a clipboard upload, so the option hangs under its row and is cleared for any other URL.
+        // Only aDashboard takes a clipboard upload, so the option is cleared for any other URL.
         if (isAdashboard(entry.get("url"))) {
             try bind.toggle(context, entry, "uploadClipboard", "Upload Clipboard Content (dscan/local)");
             try widgets.hintText(context, ui.Key.str("knots.hotkeys.url.upload.hint").indexed(index), "Sends the clipboard to aDashboard and opens the result.");
@@ -303,7 +316,7 @@ fn hasUrlHotkey(comptime matches: fn ([]const u8) bool) bool {
     return false;
 }
 
-/// A preset's row after the URL hotkeys, like draftAppRow's, showing `url` filled in; typing a different URL or binding a key adds the entry.
+/// Like draftAppRow, prefilled with `url`; typing another URL or binding a key adds the entry.
 fn draftUrlRow(context: *ui.Frame, key: ui.Key, index: usize, url: []const u8) !void {
     const row = Rect{ .key = key, .style = &style.list_row };
     _ = try row.open(context);
@@ -321,7 +334,7 @@ fn isDotlan(url: []const u8) bool {
     return std.ascii.findIgnoreCase(url, "evemaps.dotlan.net") != null;
 }
 
-/// `entry` is an app or URL hotkey's session.Ref; true with no text in `text_field` and no key, once its box isn't being typed in.
+/// No text and no key, once its box isn't being typed in; `entry` is a hotkey's session.Ref.
 fn isBlank(context: *ui.Frame, entry: anytype, comptime text_field: []const u8) bool {
     if (context.ui().focused(bind.boxKey(entry, text_field).hash())) return false;
     return std.mem.trim(u8, entry.get(text_field), " ").len == 0 and entry.get("hotkey").isEmpty();

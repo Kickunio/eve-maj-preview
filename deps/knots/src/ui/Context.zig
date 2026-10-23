@@ -1067,7 +1067,7 @@ fn tessellateLayer(ui: *UI, allocator: Allocator, draw_list: *DrawList, slots: [
                 };
                 try draw_list.pushInstances(&[_]types.Instance{inst}, img.source, clip);
             },
-            .range => |r| try renderRange(draw_list, el.box, r, clip),
+            .range => |r| try renderRange(draw_list, el.box, r, clip, content_scale),
         }
     }
 
@@ -1083,11 +1083,12 @@ fn tessellateLayer(ui: *UI, allocator: Allocator, draw_list: *DrawList, slots: [
     }
 }
 
-fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: Clip.State) !void {
+fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: Clip.State, content_scale: f32) !void {
     const bx = box.x();
-    const by = box.y();
+    // EVE-Maj patch: top and bottom on whole device pixels; a knob centred on a half pixel otherwise loses its lower edge's antialiasing, which falls outside its quad.
+    const by = snapToPixel(box.y(), content_scale);
     const bw = box.w();
-    const bh = box.h();
+    const bh = snapToPixel(box.y() + box.h(), content_scale) - by;
     const th = @max(0, @min(r.track_height orelse bh, bh));
     const ty = by + (bh - th) * 0.5;
     const progress = std.math.clamp(r.progress, 0.0, 1.0);

@@ -3,13 +3,10 @@ const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const gdi_overlay = @import("../platform/gdi_overlay.zig");
 const config_mod = @import("../config.zig");
-const input = @import("input.zig");
 const state = @import("state.zig");
 const overlay = @import("overlay.zig");
-const travel_left_behind = @import("../travel/left_behind.zig");
 const stack = @import("../notifications/stack.zig");
 const scout = @import("../clients/scout.zig");
-const auto_minimize_mod = @import("../control/auto_minimize.zig");
 const log = @import("../log.zig");
 
 const ThumbnailState = config_mod.ThumbnailState;
@@ -24,7 +21,7 @@ pub const SOURCE_HWND_PROP = "SOURCE_HWND";
 /// The owned strings the render cache borrows, so only replaceText may swap them.
 pub const OwnedText = enum { character_name, system_name, group_badge_label };
 
-/// What the activity trackers last pushed; `null` rates mean not enough span yet to trust one (see activity/tracker.zig).
+/// What the trackers last pushed; a null rate has too short a span yet (see activity/tracker.zig).
 pub const ActivityStats = struct {
     incoming_dps: ?f32 = null,
     outgoing_dps: ?f32 = null,
@@ -34,16 +31,20 @@ pub const ActivityStats = struct {
     cpu_percent: f32 = 0.0,
     ram_mb: f32 = 0.0,
     vram_mb: f32 = 0.0,
+    /// Null until the server's first reply, and after a timeout.
+    ping_ms: ?u32 = null,
 
-    /// False until a tracker's first push arrives, to tell "never heard from it" (show nothing) from a reported null rate (show "??").
+    /// Tells never-reported (show nothing) from a reported null rate (show "??").
     has_dps: bool = false,
     has_mining: bool = false,
     has_bounty: bool = false,
     has_resources: bool = false,
-    /// Separate from has_resources: VRAM can stay unavailable (no PDH support, no matching GPU instance) once CPU/RAM are known.
+    /// VRAM can stay unavailable once CPU and RAM are known.
     has_vram: bool = false,
+    /// Connected to a game server, so there's a ping to show.
+    has_ping: bool = false,
 
-    /// Whether each stat is shown: once its tracker has reported, as "??" while the rate is unknown, and not at all while it's zero.
+    /// Once reported: "??" while the rate is unknown, hidden while it's zero.
     pub fn showsIncoming(self: *const ActivityStats) bool {
         return self.has_dps and shown(self.incoming_dps);
     }
@@ -88,10 +89,18 @@ pub const ActivityStats = struct {
         return changed;
     }
 
-    /// Back to never heard from the combat, mining and bounty trackers, keeping resource usage.
+    /// Back to never heard from the combat, mining and bounty trackers, keeping resource usage and ping.
     pub fn clearLogReadings(self: *ActivityStats) bool {
         const had_any = self.has_dps or self.has_mining or self.has_bounty;
-        self.* = .{ .cpu_percent = self.cpu_percent, .ram_mb = self.ram_mb, .vram_mb = self.vram_mb, .has_resources = self.has_resources, .has_vram = self.has_vram };
+        self.* = .{
+            .cpu_percent = self.cpu_percent,
+            .ram_mb = self.ram_mb,
+            .vram_mb = self.vram_mb,
+            .has_resources = self.has_resources,
+            .has_vram = self.has_vram,
+            .ping_ms = self.ping_ms,
+            .has_ping = self.has_ping,
+        };
         return had_any;
     }
 
@@ -105,11 +114,37 @@ pub const ActivityStats = struct {
         self.has_vram = has_vram;
         return changed;
     }
+
+    pub fn setPing(self: *ActivityStats, is_connected: bool, ping_ms: ?u32) bool {
+        const changed = self.has_ping != is_connected or self.ping_ms != ping_ms;
+        self.has_ping = is_connected;
+        self.ping_ms = ping_ms;
+        return changed;
+    }
+};
+
+/// ThumbnailSet records jumps; travel/left_behind.zig reads it and flags alerts.
+pub const LeftBehindState = struct {
+    /// Zero = hasn't jumped this session.
+    last_jump: win32.Ticks = .{},
+    /// Guards the left-behind alert to one per episode; cleared on jump.
+    alert_fired: bool = false,
+
+    pub fn recordJump(self: *LeftBehindState) void {
+        self.last_jump = win32.Ticks.now();
+        self.alert_fired = false;
+    }
+};
+
+/// Only AutoMinimizer.check writes it after creation.
+pub const AutoMinimizeState = struct {
+    /// When check's delay counts from: the last tick the thumbnail was Active or Minimized.
+    inactive_since: win32.Ticks,
 };
 
 pub const ThumbnailWindow = struct {
     hwnd: win32.HWND,
-    /// Layered window used for both the text overlay and the border.
+    /// The layered text and border overlay.
     text_hwnd: win32.HWND,
     thumbnail_id: win32.HTHUMBNAIL,
     source_hwnd: win32.HWND,
@@ -118,9 +153,9 @@ pub const ThumbnailWindow = struct {
     character_name: []const u8,
     /// Owned; ThumbnailSet frees the old one on each system change.
     system_name: []const u8,
-    /// In-game timestamp of the event that set system_name (YYYYMMDD*1000000+HHMMSS); 0 = untimestamped source (e.g. live tailing), which always applies.
+    /// YYYYMMDD*1000000+HHMMSS of the event that set system_name; 0 if unreadable, which always applies.
     system_name_event_timestamp: u64 = 0,
-    travel: travel_left_behind.LeftBehindState = .{},
+    travel: LeftBehindState = .{},
     notifications: stack.NotificationStack = .{},
     last_click_time: win32.Ticks = .{},
     is_excluded_from_cycle: bool = false,
@@ -136,12 +171,12 @@ pub const ThumbnailWindow = struct {
     render_cache: overlay.RenderCache = .{},
 
     visibility_state: state.VisibilityState = .visible,
-    auto_minimize: auto_minimize_mod.AutoMinimizeState,
+    auto_minimize: AutoMinimizeState,
     /// Catches a minimize/restore with no focus change; refreshed each tick except while dragged.
     was_minimized: bool = false,
 
     cached_system_color: u32 = 0,
-    /// Auto-generated per-character name color; null when "Unique Character Name Colors" is disabled, and callers fall back to their own default.
+    /// Null when "Unique Character Name Colors" is off; callers fall back to their default.
     cached_character_color: ?u32 = null,
     /// Borrows from config or character_name.
     cached_display_name: []const u8 = "",
@@ -150,10 +185,10 @@ pub const ThumbnailWindow = struct {
     cached_hide_thumbnail: bool = false,
     cached_thumbnail_size: ?config_mod.CharacterThumbnailSizeConfig = null,
     cached_opacity: u8 = 255,
-    /// Owned, comma-joined label of the badge-enabled groups this character is in ("1, 3"); "" = none.
+    /// Owned; the badge-enabled groups this character is in, comma-joined ("1, 3"), or "" for none.
     cached_group_badge_label: []const u8,
 
-    /// The only writer of the config-derived cached_* fields (all but the owned group badge label), so hot paths don't re-resolve them.
+    /// Sole writer of the config-derived cached_* fields, all but the group badge label.
     pub fn refreshConfigCache(self: *ThumbnailWindow, config: *const config_mod.Config, auto_colors: *config_mod.AutoColorStore) void {
         self.cached_system_color = if (self.system_name.len > 0) auto_colors.systemNameColor(config, self.system_name) else config.shownColors().system_name_color;
         const is_logged_in = !scout.isGenericCharacterName(self.character_name);
@@ -197,13 +232,14 @@ pub const ThumbnailWindow = struct {
         return self.source_hwnd == active_source_hwnd;
     }
 
-    /// The one place a thumbnail's state is decided; only a style-lookup key (getStateConfig), never stored.
+    /// Only a style-lookup key (getStateConfig), never stored.
     pub fn effectiveRenderState(self: *const ThumbnailWindow, active_source_hwnd: ?win32.HWND) ThumbnailState {
-        if (self.is_dragged) return .dragging;
-        if (!self.notifications.isEmpty()) return .alert;
-        if (self.isFocused(active_source_hwnd)) return .active;
-        if (win32.isWindowIconic(self.source_hwnd)) return .minimized;
-        return .inactive;
+        return state.renderState(.{
+            .is_dragged = self.is_dragged,
+            .has_alert = !self.notifications.isEmpty(),
+            .is_focused = self.isFocused(active_source_hwnd),
+            .is_minimized = win32.isWindowIconic(self.source_hwnd),
+        });
     }
 
     /// Always recorded, even while isShown keeps it up, so the hide applies once the alert or drag ends.
@@ -229,7 +265,7 @@ pub const ThumbnailWindow = struct {
         _ = win32.ShowWindow(self.text_hwnd, show_command);
     }
 
-    /// Moves (and, given a size, resizes) both windows, keeping the text overlay above the thumbnail.
+    /// Keeps the text overlay above the thumbnail.
     pub fn moveTo(self: *const ThumbnailWindow, x: i32, y: i32, size: ?Size) void {
         const width = if (size) |s| s.width else 0;
         const height = if (size) |s| s.height else 0;
@@ -238,7 +274,7 @@ pub const ThumbnailWindow = struct {
         _ = win32.SetWindowPos(self.text_hwnd, win32.HWND_TOPMOST, x, y, width, height, size_flag | win32.SWP_NOACTIVATE);
     }
 
-    /// Queues moving (and, given a size, resizing) both windows; the DWM thumbnail's own rect is updated straight away, since DeferWindowPos won't.
+    /// Updates the DWM thumbnail's rect at once, since DeferWindowPos won't.
     pub fn deferPlace(self: *const ThumbnailWindow, hdwp: win32.HDWP, x: i32, y: i32, size: ?Size) ?win32.HDWP {
         const width = if (size) |s| s.width else 0;
         const height = if (size) |s| s.height else 0;
@@ -249,9 +285,9 @@ pub const ThumbnailWindow = struct {
         return after_text;
     }
 
-    /// Resizes the DWM thumbnail window; text_hwnd resizes itself on its next render (UpdateLayeredWindow).
+    /// text_hwnd follows on its next render, through UpdateLayeredWindow.
     pub fn resize(self: *const ThumbnailWindow, size: Size) void {
-        // HWND_NOTOPMOST, not HWND_TOP (a zero-valued sentinel the non-allowzero HWND type can't represent); SWP_NOZORDER makes the value irrelevant anyway.
+        // HWND_TOP doesn't compile against the non-allowzero HWND; SWP_NOZORDER ignores it anyway.
         _ = win32.SetWindowPos(self.hwnd, win32.HWND_NOTOPMOST, 0, 0, size.width, size.height, win32.SWP_NOMOVE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE);
         self.setThumbnailRect(size);
     }
@@ -277,21 +313,27 @@ pub const Handles = struct {
     thumbnail_id: win32.HTHUMBNAIL,
 };
 
+/// Passed in, since input handling sits above thumbnail/.
+pub const WindowProcs = struct {
+    thumbnail: win32.WNDPROC,
+    text: win32.WNDPROC,
+};
+
 var g_has_registered_classes: bool = false;
 
 /// Once per process, since window classes outlive any one ThumbnailSet.
-pub fn registerClasses(instance: win32.HINSTANCE) !void {
+pub fn registerClasses(instance: win32.HINSTANCE, procs: WindowProcs) !void {
     if (g_has_registered_classes) return;
 
     // Black, not white COLOR_WINDOW: shows through whenever DWM has no live thumbnail frame to composite.
     const thumbnail_bg_brush = win32.CreateSolidBrush(0x00000000) orelse return error.CreateBrushFailed;
     // Owned by the class once registered.
-    gdi_overlay.registerWindowClass(instance, input.windowProc, WINDOW_CLASS_NAME, thumbnail_bg_brush) catch |err| {
+    gdi_overlay.registerWindowClass(instance, procs.thumbnail, WINDOW_CLASS_NAME, thumbnail_bg_brush) catch |err| {
         _ = win32.DeleteObject(thumbnail_bg_brush);
         return err;
     };
     // No background brush for a layered window.
-    try gdi_overlay.registerWindowClass(instance, input.textWindowProc, TEXT_WINDOW_CLASS_NAME, null);
+    try gdi_overlay.registerWindowClass(instance, procs.text, TEXT_WINDOW_CLASS_NAME, null);
     g_has_registered_classes = true;
 }
 
@@ -302,7 +344,7 @@ pub fn create(allocator: std.mem.Allocator, instance: win32.HINSTANCE, source_hw
     const name_z = try allocator.dupeSentinel(u8, character_name, 0);
     defer allocator.free(name_z);
 
-    // Needed on both windows since text_hwnd, being topmost, is the one that actually receives mouse messages.
+    // Both windows, since the topmost text_hwnd is the one that gets mouse messages.
     const click_through_ex: win32.DWORD = if (options.is_click_through) win32.WS_EX_TRANSPARENT else 0;
 
     const hwnd = win32.CreateWindowExA(
@@ -330,7 +372,7 @@ pub fn create(allocator: std.mem.Allocator, instance: win32.HINSTANCE, source_hw
     const props = thumbnailProps(size, win32.DWM_TNP_VISIBLE | win32.DWM_TNP_RECTDESTINATION | win32.DWM_TNP_SOURCECLIENTAREAONLY);
     if (win32.DwmUpdateThumbnailProperties(thumbnail_id, &props) != 0) return error.DwmUpdateThumbnailPropertiesFailed;
 
-    // A name of its own, since the error is the log's only clue to which window failed.
+    // Its own error name, since the error is the log's only clue to which window failed.
     const text_hwnd = win32.CreateWindowExA(
         win32.WS_EX_LAYERED | win32.WS_EX_TOPMOST | win32.WS_EX_TOOLWINDOW | win32.WS_EX_NOACTIVATE | click_through_ex,
         TEXT_WINDOW_CLASS_NAME,
@@ -363,7 +405,7 @@ pub fn showText(handles: Handles, position: config_mod.Position, size: Size) voi
     _ = win32.UpdateWindow(handles.text_hwnd);
 }
 
-/// Destroys a Thumbnails-mode thumbnail's windows; its render cache's GDI objects go first, and the DWM thumbnail before the window it draws into.
+/// Render cache GDI objects first, and the DWM thumbnail before the window it draws into.
 pub fn destroy(thumbnail: *const ThumbnailWindow) void {
     thumbnail.render_cache.deinit();
     destroyHandles(.{ .hwnd = thumbnail.hwnd, .text_hwnd = thumbnail.text_hwnd, .thumbnail_id = thumbnail.thumbnail_id });
@@ -387,7 +429,7 @@ pub fn thumbnailProps(size: Size, flags: u32) win32.DWM_THUMBNAIL_PROPERTIES {
     };
 }
 
-/// Stores `other` in `hwnd`'s userdata; SetWindowLongPtrA returns the previous value, so only the last error tells a 0 from a failure.
+/// Stores `other` in `hwnd`'s userdata; only the last error tells a previous 0 from a failure.
 fn link(hwnd: win32.HWND, other: win32.HWND) !void {
     win32.SetLastError(0);
     if (win32.SetWindowLongPtrA(hwnd, win32.GWLP_USERDATA, win32.hwndToUserData(other)) == 0 and win32.GetLastError() != 0) return error.SetWindowLongPtrFailed;

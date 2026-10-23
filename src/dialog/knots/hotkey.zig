@@ -3,9 +3,11 @@ const std = @import("std");
 const ui = @import("ui");
 const win32 = @import("../../platform/win32.zig");
 const vk = @import("../../platform/virtual_keys.zig");
+const config = @import("../../config.zig");
 const key_list = @import("../../config/key_list.zig");
 const keyboard_hook = @import("../../hotkeys/keyboard_hook.zig");
 const session = @import("session.zig");
+const labels = @import("labels.zig");
 const style = @import("style.zig");
 const widgets = @import("widgets.zig");
 const lang = @import("../../lang/lang.zig");
@@ -15,6 +17,7 @@ const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
 const TextInput = ui.component.TextInput;
+const Tooltip = ui.component.Tooltip;
 const KeyList = key_list.KeyList;
 const slog = log.Scoped("dialog_knots");
 
@@ -26,10 +29,30 @@ const MODIFIER_ORDER = [_]struct { flag: u32, name: []const u8 }{
     .{ .flag = vk.MOD_WIN, .name = "Win" },
 };
 
-const CLICK_TO_BIND = "Click to bind";
+const SET_KEY = "Set key";
+const ADD_KEY = "Add another key";
 const RECORDING_PROMPT = "Press keys...";
-/// Keycaps' keys start here, clear of the field's own indexed keys.
+/// The field keys each combo, and the "or" before it, as its own key indexed past these, clear of its other parts.
+const COMBO_KEY_BASE = 20;
+const OR_KEY_BASE = 30;
+/// A combo's caps start here, clear of its button's own indexed keys.
 const KEYCAP_KEY_BASE = 100;
+/// How writeHolders names each of a hotkey group's keys.
+const GROUP_KEY_LABELS = [_]struct { field: []const u8, label: []const u8 }{
+    .{ .field = "forwardKey", .label = "Group '{name}' (forward)" },
+    .{ .field = "backwardKey", .label = "Group '{name}' (back)" },
+    .{ .field = "assignKey", .label = "Group '{name}' (assign)" },
+    .{ .field = "minimizeKey", .label = "Group '{name}' (minimize)" },
+    .{ .field = "closeKey", .label = "Group '{name}' (close)" },
+};
+
+comptime {
+    var key_count = 0;
+    for (@typeInfo(config.HotkeyGroupConfig).@"struct".field_types) |F| {
+        if (F == KeyList) key_count += 1;
+    }
+    std.debug.assert(key_count == GROUP_KEY_LABELS.len);
+}
 
 /// Bindings that may share a combo with their own kind, cycling through each other in order.
 const HolderKind = enum { other, character, group_forward, group_backward };
@@ -39,9 +62,16 @@ const Holders = struct { total: usize = 0, kind: HolderKind = .other, is_mixed: 
 /// A field waiting for a key; the window's messages feed it until something is captured or it's cancelled.
 const Recording = struct {
     id: u64,
+    /// The combo the capture replaces, or null to add one.
+    slot: ?usize,
     /// Set by onWindowMessage or onWinKey; the field applies it on its next frame.
     captured: ?u32 = null,
+    /// MOD_* flags held so far, shown in the recording label before the key that completes the combo.
+    held: u32 = 0,
 };
+
+/// What a combo's caps or remove button asked for this frame.
+const ComboAction = enum { none, replace, remove };
 
 /// A field being typed into, e.g. "Ctrl+1, 1".
 const ManualEdit = struct {
@@ -53,7 +83,7 @@ const ManualEdit = struct {
 
 var g_allocator: std.mem.Allocator = undefined;
 var g_recording: ?Recording = null;
-/// Combos bound more than once, found by beginFrame; empty until it runs.
+/// Combos bound more than once, found by beginFrame; borrows from that frame's arena, so only that frame may read it.
 var g_conflicts: []const u32 = &.{};
 var g_manual: ?ManualEdit = null;
 /// Called once a capture arrives from outside a frame, so the window redraws to apply it.
@@ -79,7 +109,16 @@ pub fn onWindowMessage(msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPAR
     switch (msg) {
         win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN => {
             const virtual_key: u32 = @truncate(wParam);
-            if (virtual_key == win32.VK_ESCAPE or recording.captured != null or modifierFlag(virtual_key) != null) return true;
+            if (virtual_key == win32.VK_ESCAPE or recording.captured != null) return true;
+            if (modifierFlag(virtual_key)) |own| {
+                const held = vk.currentModifiers() | own;
+                // Key repeat sends this again while the modifier is held.
+                if (held != recording.held) {
+                    recording.held = held;
+                    redraw();
+                }
+                return true;
+            }
             // Modifier state at keyup only reflects modifiers still held, so the main key is taken here.
             if (vk.keyName(virtual_key) != null) capture(virtual_key, vk.currentModifiers());
             return true;
@@ -115,65 +154,84 @@ pub fn onWindowMessage(msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPAR
     }
 }
 
-/// Key caps for each combo, a clear button and, in Advanced Mode, a typing button; `ref` needs session.Ref's get, set and index.
+/// Each combo as key caps joined by "or", each removable on its own, then + to add one, plus a typing button in Advanced Mode; `ref` needs session.Ref's get, set and index.
 pub fn field(context: *ui.Frame, ref: anytype, comptime field_name: []const u8) !void {
     // Typed by the setting's struct, so a character's and a group's hotkey at the same index differ.
     const key = ui.Key.str("knots.hotkey:" ++ @typeName(@TypeOf(ref)) ++ "." ++ field_name).indexed(ref.index);
     const id = key.hash();
-    const current: KeyList = ref.get(field_name);
-    const is_conflict = isConflict(current);
+    var current: KeyList = ref.get(field_name);
 
     if (g_recording) |recording| {
         if (recording.id == id) {
             if (recording.captured) |combo| {
-                // Once it holds the most a binding takes, a capture starts it over.
-                var next: KeyList = if (current.len >= key_list.MAX_KEYS) .empty else current;
-                _ = next.append(combo);
-                ref.set(field_name, next);
+                applyCapture(&current, recording.slot, combo);
+                ref.set(field_name, current);
                 stopRecording();
             }
         }
     }
 
+    // A click on the row's label does what the + does.
+    if (widgets.takeRowClick() and !isRecordingField(id) and manualEditFor(id) == null and current.len < key_list.MAX_KEYS) startRecording(context, id, null);
+
     const width = widgets.hotkeyWidth();
-    const row = Rect{ .key = key.indexed(1), .style = if (width != null) &style.inline_row_fit else &style.inline_row };
+    // knots offsets an end-justified row before growing its children, so the typing box, which grows in a detail pane, keeps a start-justified row.
+    const row_style = if (width != null) &style.hotkey_row_fit else if (manualEditFor(id) != null) &style.hotkey_row_typing else &style.hotkey_row;
+    const row = Rect{ .key = key.indexed(1), .style = row_style };
     _ = try row.open(context);
     if (manualEditFor(id)) |edit| {
         try manualBox(context, edit, ref, field_name, key, width);
     } else {
-        const is_recording = isRecordingField(id);
-        const state_style = if (is_recording) &style.hotkey_box_recording else if (is_conflict) &style.hotkey_box_conflict else &style.hotkey_box;
-        const box = Button{ .key = key, .style = try sized(context, state_style, width) };
-        const response = try box.openResponse(context);
-        if (is_recording) {
-            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = lang.text(RECORDING_PROMPT), .style = &style.hotkey_prompt });
-        } else if (current.len == 0) {
-            try context.e(Text{ .selectable = false, .key = key.indexed(2), .content = lang.text(CLICK_TO_BIND), .style = &style.hotkey_placeholder });
-        } else {
-            try keycaps(context, key, current);
+        var removed: ?usize = null;
+        const shows_remove = widgets.isRowLit() or hasComboFocus(context, key, current.len);
+        for (current.slice(), 0..) |combo, index| {
+            if (index > 0) try orText(context, key.indexed(OR_KEY_BASE + index));
+            const combo_key = key.indexed(COMBO_KEY_BASE + index);
+            if (isRecordingSlot(id, index)) {
+                try recordingLabel(context, combo_key);
+                continue;
+            }
+            switch (try comboControl(context, combo_key, combo, shows_remove)) {
+                .none => {},
+                .replace => startRecording(context, id, index),
+                .remove => removed = index,
+            }
         }
-        try box.close(context);
-        if (response.clicked) {
-            if (is_recording) stopRecording() else startRecording(id);
+        if (isRecordingSlot(id, null)) {
+            if (current.len > 0) try orText(context, key.indexed(OR_KEY_BASE));
+            try recordingLabel(context, key.indexed(6));
+        }
+        // The same + throughout, so the row doesn't change under the pointer; a second click cancels.
+        if (current.len < key_list.MAX_KEYS) {
+            if (try addKeyButton(context, key.indexed(7), if (current.len == 0) SET_KEY else ADD_KEY)) {
+                if (isRecordingField(id)) cancelRecording(context) else startRecording(context, id, null);
+            }
+        }
+        if (removed) |index| {
+            // A recording into a later slot would land on the wrong combo once the rest move up.
+            if (isRecordingField(id)) stopRecording();
+            current.remove(index);
+            ref.set(field_name, current);
             context.requestRedraw();
         }
-    }
-    if ((try context.interact(Button{ .key = key.indexed(3), .label = "\u{00D7}", .style = &style.icon_button_danger_text })).clicked) {
-        if (isRecordingField(id)) stopRecording();
-        if (manualEditFor(id) != null) endManual();
-        ref.set(field_name, KeyList.empty);
     }
     if (session.global().get("advancedMode")) {
         const is_editing = manualEditFor(id) != null;
         if (try widgets.glyphButton(context, key.indexed(4), .pencil, "", if (is_editing) &style.hotkey_edit_on else &style.icon_button, false)) {
             if (is_editing) commitManual(ref, field_name) else try startManual(id, current);
+            // The row was drawn before the click switched it, so the box or the keys show from the next frame.
+            context.requestRedraw();
         }
     }
     try row.close(context);
 }
 
-/// Finds this frame's conflicting combos; ones shared only within a HolderKind cycle instead, so those don't count.
 pub fn beginFrame(arena: std.mem.Allocator) !void {
+    g_conflicts = try findConflicts(arena);
+}
+
+/// Combos the edited documents bind more than once outside one HolderKind cycle; allocated in `arena`.
+pub fn findConflicts(arena: std.mem.Allocator) ![]const u32 {
     var holders: std.AutoArrayHashMapUnmanaged(u32, Holders) = .empty;
     try collect(arena, &holders, session.profile().ptr, .other);
     try collect(arena, &holders, session.global().ptr, .other);
@@ -183,23 +241,73 @@ pub fn beginFrame(arena: std.mem.Allocator) !void {
         const counted = entry.value_ptr.*;
         if (counted.total > 1 and (counted.is_mixed or counted.kind == .other)) try conflicts.append(arena, entry.key_ptr.*);
     }
-    g_conflicts = conflicts.items;
+    return conflicts.items;
+}
+
+/// Every binding in the edited documents holding `combo`, named as the window shows it and joined with ", "; names are made in `arena`.
+pub fn writeHolders(arena: std.mem.Allocator, writer: *std.Io.Writer, combo: u32) !void {
+    var names: std.ArrayList([]const u8) = .empty;
+    const profile = session.profile().ptr;
+    const global = session.global().ptr;
+    try addFixedHolders(arena, &names, &profile.hotkeys, combo);
+    for (profile.characters.items) |character| {
+        if (holds(character.hotkey, combo)) try names.append(arena, try lang.format(arena, "Character '{name}'", .{ .name = character.name }));
+    }
+    for (profile.hotkeyGroups.items) |group| {
+        inline for (GROUP_KEY_LABELS) |group_key| {
+            if (holds(@field(group, group_key.field), combo)) try names.append(arena, try lang.format(arena, group_key.label, .{ .name = group.name }));
+        }
+    }
+    try addFixedHolders(arena, &names, global, combo);
+    for (global.profileSwitchHotkeys.items) |entry| {
+        if (holds(entry.hotkey, combo)) try names.append(arena, try lang.format(arena, "Switch to: {name}", .{ .name = config.profileDisplayName(entry.targetProfile) }));
+    }
+    for (global.appHotkeys.items) |entry| {
+        if (holds(entry.hotkey, combo)) try names.append(arena, try lang.format(arena, "App '{name}'", .{ .name = entry.executableName }));
+    }
+    for (global.urlHotkeys.items) |entry| {
+        if (holds(entry.hotkey, combo)) try names.append(arena, try lang.format(arena, "URL '{url}'", .{ .url = entry.url }));
+    }
+    for (names.items, 0..) |name, index| {
+        if (index > 0) try writer.writeAll(", ");
+        try writer.writeAll(name);
+    }
 }
 
 /// Combos as the app spells them, e.g. "Ctrl+1, 1".
 pub fn writeKeys(writer: *std.Io.Writer, keys: KeyList) !void {
-    for (keys.slice(), 0..) |combo, index| {
+    try writeCombos(writer, keys.slice());
+}
+
+pub fn writeCombos(writer: *std.Io.Writer, combos: []const u32) !void {
+    for (combos, 0..) |combo, index| {
         if (index > 0) try writer.writeAll(", ");
         try vk.writeVirtualKey(writer, combo);
     }
 }
 
-/// Whether any of `keys` is bound elsewhere too; see beginFrame.
-fn isConflict(keys: KeyList) bool {
-    for (keys.slice()) |combo| {
-        if (std.mem.findScalar(u32, g_conflicts, combo) != null) return true;
+/// `settings` points to a struct whose KeyList fields are all labels.hotkeyLabel's fixed bindings.
+fn addFixedHolders(arena: std.mem.Allocator, names: *std.ArrayList([]const u8), settings: anytype, combo: u32) !void {
+    const info = @typeInfo(@TypeOf(settings.*)).@"struct";
+    inline for (info.field_names, info.field_types) |name, F| {
+        if (comptime F == KeyList) {
+            if (holds(@field(settings, name), combo)) try names.append(arena, try fixedName(arena, comptime labels.hotkeyLabel(name)));
+        }
     }
-    return false;
+}
+
+/// A pair's half is told apart by its direction.
+fn fixedName(arena: std.mem.Allocator, label: labels.HotkeyLabel) ![]const u8 {
+    const action = lang.text(label.text);
+    return switch (label.half) {
+        .none => action,
+        .back => lang.format(arena, "{action} (back)", .{ .action = action }),
+        .forward => lang.format(arena, "{action} (forward)", .{ .action = action }),
+    };
+}
+
+fn holds(keys: KeyList, combo: u32) bool {
+    return std.mem.findScalar(u32, keys.slice(), combo) != null;
 }
 
 /// Every KeyList in `value`, however deeply nested, counted under the HolderKind of the field it sits in.
@@ -209,10 +317,10 @@ fn collect(arena: std.mem.Allocator, holders: *std.AutoArrayHashMapUnmanaged(u32
         // One binding listing a combo twice still counts once.
         for (value.slice(), 0..) |combo, index| {
             if (std.mem.findScalar(u32, value.slice()[0..index], combo) != null) continue;
-            const gop = try holders.getOrPut(arena, combo);
-            if (!gop.found_existing) gop.value_ptr.* = .{ .kind = kind };
-            gop.value_ptr.total += 1;
-            if (gop.value_ptr.kind != kind) gop.value_ptr.is_mixed = true;
+            const entry = try holders.getOrPut(arena, combo);
+            if (!entry.found_existing) entry.value_ptr.* = .{ .kind = kind };
+            entry.value_ptr.total += 1;
+            if (entry.value_ptr.kind != kind) entry.value_ptr.is_mixed = true;
         }
         return;
     }
@@ -254,39 +362,120 @@ fn holdsKeys(comptime T: type) bool {
     };
 }
 
-/// A bare Win press, which Windows hands to the Start Menu before the window sees it, so the keyboard hook reports it.
+/// Windows hands a bare Win press to the Start Menu first, so the keyboard hook reports it.
 fn onWinKey(modifiers: u32) void {
     const recording = if (g_recording) |*active| active else return;
     if (recording.captured == null) capture(vk.VK_LWIN, modifiers);
 }
 
-fn keycaps(context: *ui.Frame, key: ui.Key, keys: KeyList) !void {
-    const arena = context.arena();
-    var part_index: usize = 0;
-    for (keys.slice(), 0..) |combo, combo_index| {
-        if (combo_index > 0) {
-            try context.e(Text{ .selectable = false, .key = key.indexed(KEYCAP_KEY_BASE + part_index), .content = ",", .style = &style.keycap_separator });
-            part_index += 1;
-        }
-        const modifiers = vk.extractModifiers(combo);
-        for (MODIFIER_ORDER) |modifier| {
-            if (modifiers & modifier.flag == 0) continue;
-            try cap(context, key.indexed(KEYCAP_KEY_BASE + part_index), modifier.name, true);
-            try context.e(Text{ .selectable = false, .key = key.indexed(KEYCAP_KEY_BASE + part_index + 1), .content = "+", .style = &style.keycap_plus });
-            part_index += 2;
-        }
-        const virtual_key = vk.extractVk(combo);
-        const name = vk.keyName(virtual_key) orelse try std.fmt.allocPrint(arena, "VK{X}", .{virtual_key});
-        try cap(context, key.indexed(KEYCAP_KEY_BASE + part_index), name, false);
-        part_index += 1;
+/// Lit while hovered or focused, like a settings row; its remove badge shows then and whenever `shows_remove`, and Delete on its caps removes it too.
+fn comboControl(context: *ui.Frame, key: ui.Key, combo: u32, shows_remove: bool) !ComboAction {
+    const ui_state = context.ui();
+    const caps_key = key.indexed(1);
+    const remove_key = key.indexed(2);
+    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, key.hash());
+    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, remove_key.hash());
+    const mouse: [2]f32 = .{ @floatCast(ui_state.input.mouse_pos[0]), @floatCast(ui_state.input.mouse_pos[1]) };
+    const box = widgets.measuredBox(ui_state, key);
+    // The badge overhangs the combo, so the pointer on its overhang still counts.
+    const is_hovered = box.contains(mouse) or widgets.measuredBox(ui_state, remove_key).contains(mouse);
+    const is_caps_focused = ui_state.focused(caps_key.hash());
+    const is_lit = is_hovered or is_caps_focused or ui_state.focused(remove_key.hash());
+
+    const holder = Rect{ .key = key, .style = if (is_lit) &style.hotkey_combo_lit else &style.hotkey_combo };
+    _ = try holder.open(context);
+    const caps = Button{ .key = caps_key, .style = &style.hotkey_caps };
+    const response = try caps.openResponse(context);
+    try comboCaps(context, caps_key, combo, std.mem.findScalar(u32, g_conflicts, combo) != null);
+    try caps.close(context);
+    var action: ComboAction = if (response.clicked) .replace else .none;
+    // Laid over the combo's top-right corner rather than beside it, so lighting a combo doesn't shift the row.
+    if ((is_lit or shows_remove) and box.w() > 0) {
+        const badge = try context.arena().create(ui.Style);
+        // knots places an absolute child from inside its parent's padding.
+        const padding = comptime style.hotkey_combo.padding.?;
+        badge.* = style.hotkey_remove.with(.{ .offset = .{ box.w() - padding.left() - style.HOTKEY_REMOVE_SIZE + style.HOTKEY_REMOVE_OVERHANG, -padding.top() - style.HOTKEY_REMOVE_OVERHANG } });
+        if ((try context.interact(Button{ .key = remove_key, .label = "\u{00D7}", .style = badge })).clicked) action = .remove;
     }
+    try holder.close(context);
+    if (is_caps_focused and ui_state.input.containsKey(.delete)) action = .remove;
+    return action;
 }
 
-fn cap(context: *ui.Frame, key: ui.Key, name: []const u8, is_modifier: bool) !void {
+/// Whether any of the field's `count` combos, keyed under `key` as field draws them, has keyboard focus.
+fn hasComboFocus(context: *ui.Frame, key: ui.Key, count: usize) bool {
+    const ui_state = context.ui();
+    for (0..count) |index| {
+        const combo_key = key.indexed(COMBO_KEY_BASE + index);
+        if (ui_state.focused(combo_key.indexed(1).hash()) or ui_state.focused(combo_key.indexed(2).hash())) return true;
+    }
+    return false;
+}
+
+/// Red while `is_conflict`, since the combo has no box of its own to mark it.
+fn comboCaps(context: *ui.Frame, key: ui.Key, combo: u32, is_conflict: bool) !void {
+    const cap_style = if (is_conflict) &style.keycap_conflict else &style.keycap;
+    const modifier_text = if (is_conflict) &style.keycap_conflict_text else &style.keycap_modifier_text;
+    const key_text = if (is_conflict) &style.keycap_conflict_text else &style.keycap_text;
+    const part_index = try modifierCaps(context, key, vk.extractModifiers(combo), cap_style, modifier_text);
+    const virtual_key = vk.extractVk(combo);
+    const name = vk.keyName(virtual_key) orelse try std.fmt.allocPrint(context.arena(), "VK{X}", .{virtual_key});
+    try cap(context, key.indexed(KEYCAP_KEY_BASE + part_index), name, cap_style, key_text);
+}
+
+/// A cap and a + for each of `modifiers`' MOD_* flags; returns how many parts it keyed, so what follows takes the next.
+fn modifierCaps(context: *ui.Frame, key: ui.Key, modifiers: u32, cap_style: *const ui.Style, text_style: *const ui.Style) !usize {
+    var part_index: usize = 0;
+    for (MODIFIER_ORDER) |modifier| {
+        if (modifiers & modifier.flag == 0) continue;
+        try cap(context, key.indexed(KEYCAP_KEY_BASE + part_index), modifier.name, cap_style, text_style);
+        try context.e(Text{ .selectable = false, .key = key.indexed(KEYCAP_KEY_BASE + part_index + 1), .content = "+", .style = &style.keycap_plus });
+        part_index += 2;
+    }
+    return part_index;
+}
+
+fn orText(context: *ui.Frame, key: ui.Key) !void {
+    try context.e(Text{ .selectable = false, .key = key, .content = lang.text("or"), .style = &style.hotkey_or });
+}
+
+/// Replaces `slot`'s combo, or adds one when it's null.
+fn applyCapture(keys: *KeyList, slot: ?usize, combo: u32) void {
+    if (slot) |index| {
+        // The list may have shrunk while recording, e.g. on a profile switch; the key is then added instead.
+        if (index < keys.len) return keys.replace(index, combo);
+    }
+    if (!keys.append(combo)) slog.warn("Failed to add hotkey: a hotkey holds at most {d} keys", .{key_list.MAX_KEYS});
+}
+
+fn cap(context: *ui.Frame, key: ui.Key, name: []const u8, cap_style: *const ui.Style, text_style: *const ui.Style) !void {
     try context.e(.{
-        Rect{ .key = key, .style = &style.keycap },
-        .{Text{ .selectable = false, .key = key.indexed(1), .content = try std.ascii.allocUpperString(context.arena(), name), .style = if (is_modifier) &style.keycap_modifier_text else &style.keycap_text }},
+        Rect{ .key = key, .style = cap_style },
+        .{Text{ .selectable = false, .key = key.indexed(1), .content = try std.ascii.allocUpperString(context.arena(), name), .style = text_style }},
     });
+}
+
+/// Where the combo being recorded will go: a prompt, then the modifiers held so far as they're pressed.
+fn recordingLabel(context: *ui.Frame, key: ui.Key) !void {
+    const held = if (g_recording) |recording| recording.held else 0;
+    const label = Rect{ .key = key, .style = &style.hotkey_combo };
+    _ = try label.open(context);
+    if (held == 0) {
+        try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = lang.text(RECORDING_PROMPT), .style = &style.hotkey_prompt });
+    } else {
+        const part_index = try modifierCaps(context, key, held, &style.keycap, &style.keycap_modifier_text);
+        try context.e(Text{ .selectable = false, .key = key.indexed(KEYCAP_KEY_BASE + part_index), .content = "\u{2026}", .style = &style.hotkey_prompt });
+    }
+    try label.close(context);
+}
+
+/// Records a hotkey's first combo or another one; `tip_text` names which, since the + alone doesn't.
+fn addKeyButton(context: *ui.Frame, key: ui.Key, tip_text: []const u8) !bool {
+    const tip = Tooltip{ .key = key, .content = lang.text(tip_text), .style = &style.hotkey_add_gap };
+    _ = try tip.open(context);
+    const is_clicked = try widgets.glyphButton(context, key.indexed(3), .add, "", &style.icon_button, false);
+    try tip.close(context);
+    return is_clicked;
 }
 
 fn sized(context: *ui.Frame, base: *const ui.Style, width: ?*const ui.Style) !*const ui.Style {
@@ -313,6 +502,15 @@ fn manualBox(context: *ui.Frame, edit: *ManualEdit, ref: anytype, comptime field
 fn isRecordingField(id: u64) bool {
     const recording = g_recording orelse return false;
     return recording.id == id;
+}
+
+/// Whether field `id` records into `slot`, null meaning a combo being added.
+fn isRecordingSlot(id: u64, slot: ?usize) bool {
+    const recording = g_recording orelse return false;
+    if (recording.id != id) return false;
+    const recorded = recording.slot orelse return slot == null;
+    const asked = slot orelse return false;
+    return recorded == asked;
 }
 
 fn manualEditFor(id: u64) ?*ManualEdit {
@@ -355,12 +553,18 @@ fn endManual() void {
     g_manual = null;
 }
 
-fn startRecording(id: u64) void {
+fn startRecording(context: *ui.Frame, id: u64, slot: ?usize) void {
     stopRecording();
     endManual();
-    g_recording = .{ .id = id };
+    g_recording = .{ .id = id, .slot = slot };
     // The low-level hooks swallow matched keys system-wide, so the window would never see a bound key otherwise.
     if (session.runningApp().hotkey_manager) |manager| manager.dialogSuspendHotkeys();
+    context.requestRedraw();
+}
+
+fn cancelRecording(context: *ui.Frame) void {
+    stopRecording();
+    context.requestRedraw();
 }
 
 fn stopRecording() void {

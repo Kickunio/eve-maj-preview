@@ -410,9 +410,9 @@ fn computeLayoutNode(self: *Context, root_slot: Element.Slot, x: f32, y: f32, sc
     const static_count = countStaticChildren(self, el);
     resolvePercentChildren(self, el, axis, static_count);
     const m = self.measureChildren(el, axis);
-    const gap = gapTotal(el, m.static_count);
     const avail = axis.available();
-    const justify_free = @max(0, avail - (m.fixed_used - gap));
+    // EVE-Maj patch: fixed_used already counts the gaps; leaving them out of the free space centred a row with a gap half a gap right.
+    const justify_free = @max(0, avail - m.fixed_used);
     const remaining_free = @max(0, avail - m.used);
 
     self.distributeGrow(el, axis, remaining_free, m.grow_count);

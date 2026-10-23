@@ -13,7 +13,7 @@ const Entry = struct {
 };
 
 var g_allocator: std.mem.Allocator = undefined;
-/// The search box's text. Owned; freed in reset.
+/// The search box's text; owned, freed in reset.
 pub var g_query: std.ArrayList(u8) = .empty;
 var g_entries: std.ArrayList(Entry) = .empty;
 var g_is_indexed: bool = false;

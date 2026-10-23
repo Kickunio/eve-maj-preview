@@ -5,12 +5,15 @@ const config_mod = @import("../config.zig");
 const scout = @import("scout.zig");
 const animation = @import("animation.zig");
 const exclusions_mod = @import("exclusions.zig");
+const strings = @import("../util/strings.zig");
 const log = @import("../log.zig");
 
 const slog = log.Scoped("actions");
 
 /// Kept clear of the screen edges so a restored window's title bar stays grabbable.
 const SCREEN_EDGE_MARGIN: i32 = 30;
+
+pub const GroupAction = enum { minimize, close };
 
 pub fn minimizeAllClients(eve_windows: []const scout.EveWindow, config: *const config_mod.Config) void {
     slog.info("Minimizing all EVE clients (hotkey action)", .{});
@@ -31,9 +34,9 @@ pub fn minimizeAllClients(eve_windows: []const scout.EveWindow, config: *const c
     }
 }
 
-/// Clamps `position` onto its title bar's monitor when that title bar would be off every screen (e.g. the screen configuration changed since save), or when the corner sits on a monitor of another scale.
+/// Onto the title bar's monitor when that title bar would be off every screen, or its corner sits on a monitor of another scale.
 pub fn clampOntoScreen(position: config_mod.Position) config_mod.Position {
-    // Probe inside the title bar: saved corners include the invisible resize border, so a client snapped to a screen edge sits a few pixels off it.
+    // Inside the title bar, since saved corners include the invisible resize border and can sit just off a screen edge.
     const probe: win32.POINT = .{ .x = position.x +| SCREEN_EDGE_MARGIN, .y = position.y +| SCREEN_EDGE_MARGIN };
     const monitor = win32.nearestMonitor(probe) orelse return position;
     const monitor_rect = win32.monitorRect(monitor) orelse return position;
@@ -122,12 +125,7 @@ pub fn closeAllClients(eve_windows: []const scout.EveWindow, config: *const conf
             continue;
         }
 
-        if (!win32.toBool(win32.PostMessageA(eve_window.hwnd, win32.WM_CLOSE, 0, 0))) {
-            slog.warn("Failed to send close to '{s}'", .{eve_window.character_name});
-            continue;
-        }
-        closed_count += 1;
-        slog.debug("Closing: {s}", .{eve_window.character_name});
+        if (closeClient(eve_window)) closed_count += 1;
     }
 
     if (closed_count > 0) {
@@ -137,6 +135,48 @@ pub fn closeAllClients(eve_windows: []const scout.EveWindow, config: *const conf
     } else {
         slog.debug("No EVE clients to close", .{});
     }
+}
+
+/// Minimizes or closes the group's running members; ignores the Close All exclusions, since the group's members were picked for it.
+pub fn applyToGroup(eve_windows: []const scout.EveWindow, config: *const config_mod.Config, groups: []const config_mod.HotkeyGroupConfig, group_index: usize, action: GroupAction) void {
+    if (group_index >= groups.len) {
+        slog.err("Failed to {s} group: index {} is out of range", .{ @tagName(action), group_index });
+        return;
+    }
+    const group = &groups[group_index];
+    var name_buf: [config_mod.HotkeyGroupConfig.DISPLAY_NAME_SIZE]u8 = undefined;
+    const group_name = group.displayName(&name_buf, group_index);
+
+    var applied_count: usize = 0;
+    for (eve_windows) |eve_window| {
+        if (!eve_window.is_eve_client or !win32.isWindow(eve_window.hwnd)) continue;
+        if (strings.indexOfString(group.characters.items, eve_window.character_name) == null) continue;
+        switch (action) {
+            .minimize => animation.showClient(config, eve_window.hwnd, win32.SW_FORCEMINIMIZE),
+            .close => if (!closeClient(eve_window)) continue,
+        }
+        applied_count += 1;
+    }
+
+    if (applied_count > 0) {
+        const done = switch (action) {
+            .minimize => "Minimized",
+            .close => "Sent close message to",
+        };
+        slog.info("{s} {} EVE client(s) in group '{s}'", .{ done, applied_count, group_name });
+    } else {
+        slog.info("No running clients in group '{s}' to {s}", .{ group_name, @tagName(action) });
+    }
+}
+
+/// Logs its own failure; returns whether the close was sent.
+pub fn closeClient(eve_window: scout.EveWindow) bool {
+    if (!win32.toBool(win32.PostMessageA(eve_window.hwnd, win32.WM_CLOSE, 0, 0))) {
+        slog.warn("Failed to send close to '{s}'", .{eve_window.character_name});
+        return false;
+    }
+    slog.debug("Closing: {s}", .{eve_window.character_name});
+    return true;
 }
 
 fn clampToRect(position: config_mod.Position, rect: win32.RECT) config_mod.Position {

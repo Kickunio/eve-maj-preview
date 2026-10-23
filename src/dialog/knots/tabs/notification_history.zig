@@ -2,8 +2,8 @@
 const ui = @import("ui");
 const config = @import("../../../config.zig");
 const notification = @import("../../../notifications/notification.zig");
-const history_look = @import("../../../notifications/history_look.zig");
-const list_look = @import("../../../thumbnail/list_look.zig");
+const history_look = @import("../../../panels/history_look.zig");
+const list_look = @import("../../../panels/list_look.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
 const style = @import("../style.zig");
@@ -54,11 +54,12 @@ const Look = struct {
 
 pub fn show(context: *ui.Frame) !void {
     const are_notifications_enabled = session.profile().ptr.thumbnail.notifications.enabled;
-    if (!are_notifications_enabled) try widgets.notice(context, .src(@src()), "Notification History requires Notification System switched on in the Notifications tab.");
+    if (!are_notifications_enabled) try widgets.noticeWithButton(context, .src(@src()), "Notification History requires Notification System switched on in the Notifications tab.", "Go to Notifications", .notifications);
     const ref = session.profile().child("display");
 
-    const section = try bind.switchedSection(context, "Notification History", "A draggable, resizable panel showing recent notification history. Click a row to jump to that character.", ref, "showNotifInfoPanel", are_notifications_enabled);
+    const section = try widgets.openSection(context, "Notification History", "A panel of recent alerts. Click a row to jump to that character.", &style.section);
     const notifications = try widgets.openGroup(context, .src(@src()), are_notifications_enabled);
+    try bind.toggle(context, ref, "showNotifInfoPanel", "Enable Notification History");
     const shown = try widgets.openGroup(context, .src(@src()), ref.get("showNotifInfoPanel"));
     try preview(context, session.profile().ptr);
     try shown.close(context);
@@ -73,7 +74,7 @@ pub fn show(context: *ui.Frame) !void {
 }
 
 fn layout(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
-    const section = try widgets.openSection(context, "Panel Layout", "The panel's size, how many rows it holds, and its font.", &style.section);
+    const section = try widgets.openSection(context, "Panel Layout", "The panel's size, how many rows it holds, its font, and its filter buttons.", &style.section);
     const options = try widgets.openGroup(context, .src(@src()), is_shown);
     const size = try widgets.openBinding(context, .src(@src()), "Size");
     try bind.unitNumberBox(context, ref, "notifInfoPanelWidth", "px", .{});
@@ -81,7 +82,7 @@ fn layout(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
     try bind.unitNumberBox(context, ref, "notifInfoPanelHeight", "px", .{});
     try size.close(context);
     try widgets.hintText(context, .src(@src()), "You can also drag the panel's edges to resize it.");
-    try bind.number(context, ref, "notifInfoPanelMaxRows", "Max Rows", .{});
+    try bind.number(context, ref, "notifInfoPanelMaxRows", "Max Rows", .{ .unit = "rows", .singular_unit = "row" });
     try widgets.hintText(context, .src(@src()), "Older notifications drop off past this.");
     const font = try widgets.openBinding(context, .src(@src()), "Font");
     try bind.fontBox(context, ref, "notifInfoPanelFontName");
@@ -89,12 +90,14 @@ fn layout(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
     try bind.choiceBox(context, ref, "notifInfoPanelFontWeight");
     try font.close(context);
     try widgets.hintText(context, .src(@src()), "Used for every row's text.");
+    try bind.toggle(context, ref, "notifInfoPanelShowCategoryFilters", "Category Filters");
+    try widgets.hintText(context, .src(@src()), "Adds buttons to filter the panel by type.");
     try options.close(context);
     try section.close(context);
 }
 
 fn visibility(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
-    const section = try widgets.openSection(context, "Panel Visibility", "Where the panel opens, how see-through it is, and when it's hidden automatically.", &style.section);
+    const section = try widgets.openSection(context, "Panel Visibility", "Where the panel opens, how see-through it is, and when it hides.", &style.section);
     const options = try widgets.openGroup(context, .src(@src()), is_shown);
     try bind.toggle(context, ref, "rememberNotifInfoPanelPosition", "Remember Position");
     try widgets.hintText(context, .src(@src()), "Opens the panel where you last left it.");
@@ -111,8 +114,6 @@ fn rowSettings(context: *ui.Frame, ref: DisplayRef, is_shown: bool) !void {
     const options = try widgets.openGroup(context, .src(@src()), is_shown);
     try bind.toggle(context, ref, "notifInfoPanelShowTimestamp", "Relative Timestamps");
     try widgets.hintText(context, .src(@src()), "Shows times like \"5m ago\" instead of a fixed clock time.");
-    try bind.toggle(context, ref, "notifInfoPanelShowCategoryFilters", "Category Filters");
-    try widgets.hintText(context, .src(@src()), "Adds buttons to filter the panel by type.");
     try bind.toggle(context, ref, "notifInfoPanelMergeEnabled", "Merge Repeats");
     try widgets.hintText(context, .src(@src()), "Repeats share one row with a count; click it to expand.");
     const merge = try widgets.openGroup(context, .src(@src()), ref.get("notifInfoPanelMergeEnabled"));
@@ -152,7 +153,7 @@ fn lookOf(profile: *const config.Config, available_width: f32) Look {
     };
 }
 
-/// Just tall enough for the samples shown (or the empty text), so the panel's empty space below them isn't drawn.
+/// Just tall enough for the samples or the empty text, leaving no blank space.
 fn previewHeight(display: *const config.DisplayConfig, sizes: history_look.Metrics) i32 {
     const capacity = history_look.rowCapacity(display, sizes);
     var shown_count: usize = 0;

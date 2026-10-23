@@ -14,7 +14,7 @@ const MAX_LOG_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
 const TRUNCATED_MARKER = "...[truncated]\n";
 
-pub const LogLevel = enum {
+pub const LogLevel = enum(u8) {
     debug,
     info,
     warn,
@@ -30,8 +30,9 @@ pub const LogLevel = enum {
     }
 };
 
-var g_level: LogLevel = .err;
-/// True only while the console is shown, since std.debug.print caches its stderr handle and printing before AllocConsole would keep a dead one; main thread writes it under g_log_mutex.
+/// Set by the main thread, read by every logging thread.
+var g_level: std.atomic.Value(LogLevel) = .init(.err);
+/// Main thread writes it under g_log_mutex; printing before AllocConsole would cache a dead stderr handle.
 var g_is_console_shown = false;
 /// The console is hidden rather than freed, since a reallocated one would get a handle the cached one doesn't match.
 var g_has_console = false;
@@ -48,7 +49,7 @@ var g_console_buf: [16 * 1024]u8 = undefined;
 var g_console_buf_len: usize = 0;
 
 pub fn setLevel(level: LogLevel) void {
-    g_level = level;
+    g_level.store(level, .monotonic);
 }
 
 /// Must be called once before any logging happens.
@@ -56,7 +57,7 @@ pub fn setIo(io: std.Io) void {
     g_io = io;
 }
 
-/// Pops (or shows again) a console for debug logging, since the GUI subsystem doesn't create one; std.debug.print's mirror stays off until then.
+/// Allocates or re-shows a console, since the GUI subsystem has none.
 pub fn openDebugConsole() void {
     if (g_is_console_shown) return;
     if (g_has_console) {
@@ -64,7 +65,7 @@ pub fn openDebugConsole() void {
     } else {
         _ = win32.AllocConsole();
         g_has_console = true;
-        // Closing the console window kills the process before any `defer` can run, so buffered lines are flushed from its ctrl handler instead.
+        // Closing the console ends the process before any defer runs, so its ctrl handler flushes instead.
         _ = win32.SetConsoleCtrlHandler(consoleCtrlHandler, win32.TRUE);
         disableQuickEdit();
     }
@@ -85,6 +86,14 @@ pub fn flushConsole() void {
     flushConsoleLocked();
 }
 
+/// Writes buffered lines out now, for when the process may end without reaching deinitFile.
+pub fn flush() void {
+    g_log_mutex.lock(g_io) catch return;
+    defer g_log_mutex.unlock(g_io);
+    flushLocked();
+    flushConsoleLocked();
+}
+
 pub fn deinitFile() void {
     g_log_mutex.lock(g_io) catch return;
     defer g_log_mutex.unlock(g_io);
@@ -96,7 +105,7 @@ pub fn deinitFile() void {
     }
 }
 
-/// Retries tryLock briefly to avoid missing the crash line, but bails instead of deadlocking if this thread already holds the lock (e.g. panicked inside the logger).
+/// Retries tryLock briefly rather than locking, so a crash inside the logger can't deadlock.
 pub fn writeCrashLine(comptime fmt: []const u8, args: anytype) void {
     const lock_retries = 20;
     var attempt: u32 = 0;
@@ -162,7 +171,7 @@ fn consoleCtrlHandler(ctrl_type: win32.DWORD) callconv(.c) win32.BOOL {
         },
         else => {},
     }
-    // Never claim to have handled it: this only flushes, the OS's default behavior for the event (e.g. terminating the process) still applies.
+    // Unhandled, so the event's default action (e.g. ending the process) still runs.
     return win32.FALSE;
 }
 
@@ -179,13 +188,6 @@ fn ensureFileOpen() bool {
     return true;
 }
 
-fn flush() void {
-    g_log_mutex.lock(g_io) catch return;
-    defer g_log_mutex.unlock(g_io);
-    flushLocked();
-    flushConsoleLocked();
-}
-
 /// Main thread only; on hiding, writes out what the console has buffered first.
 fn setConsoleShown(is_shown: bool) void {
     g_log_mutex.lock(g_io) catch return;
@@ -197,7 +199,7 @@ fn setConsoleShown(is_shown: bool) void {
 fn shouldLog(level: LogLevel) bool {
     // Tests never call setIo, so a write would go through an undefined Io.
     if (builtin.is_test) return false;
-    return @backingInt(level) >= @backingInt(g_level);
+    return @backingInt(level) >= @backingInt(g_level.load(.monotonic));
 }
 
 fn formatTimestamp(buf: *[23]u8) []const u8 {
@@ -218,7 +220,7 @@ fn formatLine(buf: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
     return writer.buffered();
 }
 
-/// Rotates to .old, replacing any previous one; if another program holds the log open, keeps appending and tries again next flush. Caller holds g_log_mutex.
+/// Rotates to .old, replacing any previous one; if another program holds the log open, keeps appending and tries again next flush; caller holds g_log_mutex.
 fn rotate() void {
     if (g_log_file) |f| f.close(g_io);
     g_log_file = null;
@@ -232,7 +234,7 @@ fn rotate() void {
     g_log_file = cwd.createFile(g_io, LOG_FILE_NAME, .{ .read = true, .truncate = renamed }) catch null;
 }
 
-/// Rotates first if the file is full; the end is read, not tracked, since a second instance may have appended. Caller holds g_log_mutex.
+/// Rotates first if the file is full; the end is read, not tracked, since a second instance may have appended; caller holds g_log_mutex.
 fn appendLocked(bytes: []const u8) void {
     if (!ensureFileOpen()) return;
     var end = g_log_file.?.length(g_io) catch return;

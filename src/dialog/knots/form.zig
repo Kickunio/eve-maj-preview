@@ -35,8 +35,6 @@ const Text = ui.component.Text;
 const Button = ui.component.Button;
 const Canvas = ui.component.Canvas;
 
-const CONTENT_KEY: ui.Key = .str("knots.content");
-
 /// A heading in the sidebar over the tabs that belong to it.
 const Category = enum {
     clients,
@@ -112,12 +110,12 @@ const Tab = enum {
             .appearance => .thumbnail,
             .placement => .tiles,
             .hotkeys => .keyboard,
-            .behavior => .spokes,
+            .behavior => .pointer,
             .notifications => .envelope,
             .event_alerts => .bell,
             .notification_history => .clock,
-            .chatlog => .magnifier,
-            .mining => .diamond,
+            .chatlog => .document,
+            .mining => .pickaxe,
             .general => .gear,
             .about => .star,
             .backups => .reset,
@@ -205,12 +203,12 @@ pub fn frame(_: *knots.View, context: *ui.Frame) !void {
     const body = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .grow(), .direction = .row } };
     _ = try body.open(context);
     try sidebar(context, offered);
-    const fill = Rect{ .key = CONTENT_KEY, .style = &style.content_fill };
+    const fill = Rect{ .key = widgets.TAB_CONTENT_KEY, .style = &style.content_fill };
     var scroll: ?widgets.ScrollPane = null;
     if (g_tab.fills()) {
         _ = try fill.open(context);
     } else {
-        scroll = try widgets.openScrollPane(context, CONTENT_KEY, style.content_scroll);
+        scroll = try widgets.openScrollPane(context, widgets.TAB_CONTENT_KEY, style.content_scroll);
     }
     if (search.needsIndex()) {
         try indexTabs(context, offered);
@@ -222,6 +220,10 @@ pub fn frame(_: *knots.View, context: *ui.Frame) !void {
     }
     if (scroll) |pane| try pane.close(context) else try fill.close(context);
     try body.close(context);
+    if (widgets.takeNoticeTarget()) |target| selectTab(context, switch (target) {
+        .notifications => .notifications,
+        .log_monitoring => .chatlog,
+    });
 
     try footer(context);
     try import_dialog.show(context);
@@ -344,14 +346,14 @@ fn tabItem(context: *ui.Frame, tab: Tab) !void {
 fn selectTab(context: *ui.Frame, tab: Tab) void {
     g_tab = tab;
     const ui_state = context.ui();
-    if (ui_state.state.get(.scroll, CONTENT_KEY.hash())) |scroll| scroll.offset = .{ 0, 0 };
+    if (ui_state.state.get(.scroll, widgets.TAB_CONTENT_KEY.hash())) |scroll| scroll.offset = .{ 0, 0 };
     context.requestRedraw();
 }
 
 fn footer(context: *ui.Frame) !void {
     const bar = Rect{ .key = .src(@src()), .style = &style.footer };
     _ = try bar.open(context);
-    // A copy, since a dialog drawn after the footer may show a new status this frame, rewriting the buffer under it.
+    // Copied: a dialog drawn later this frame may rewrite the status buffer.
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = try context.arena().dupe(u8, status.text()), .style = switch (status.kind()) {
         .info => &style.status_info,
         .success => &style.status_success,
@@ -409,7 +411,10 @@ fn switchPrompt(context: *ui.Frame) !void {
     try context.e(Text{
         .selectable = false,
         .key = .src(@src()),
-        .content = try lang.format(context.arena(), "Switching to '{name}' drops your unsaved changes. Save them first?", .{ .name = target }),
+        .content = if (profiles.isAwaitingRename())
+            lang.text("Renaming reloads the profile, which drops your unsaved changes. Save them first?")
+        else
+            try lang.format(context.arena(), "Switching to '{name}' drops your unsaved changes. Save them first?", .{ .name = target }),
         .style = &style.modal_text,
     });
     const actions = Rect{ .key = .src(@src()), .style = &style.modal_actions };
@@ -418,7 +423,7 @@ fn switchPrompt(context: *ui.Frame) !void {
     // Furthest from Save, so the destructive choice isn't beside the default one.
     if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Discard"), .style = &style.danger_button })).clicked) choice = .discard;
     if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Cancel"), .style = &style.outline_button })).clicked) is_open.* = false;
-    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Save and Switch"), .style = &style.primary_button })).clicked) choice = .save;
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text(if (profiles.isAwaitingRename()) "Save and Rename" else "Save and Switch"), .style = &style.primary_button })).clicked) choice = .save;
     try actions.close(context);
     try dialog.close(context);
     if (choice) |unsaved| {

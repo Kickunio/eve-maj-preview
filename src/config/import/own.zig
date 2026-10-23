@@ -24,16 +24,17 @@ const SECTIONS = std.StaticStringMap(SectionWords).initComptime(.{
     .{ "hotkeys", SectionWords{ .title = "Global Hotkeys", .hint = "App-wide hotkeys" } },
     .{ "interaction", SectionWords{ .title = "Interaction", .hint = "Click/drag behavior" } },
     .{ "mining", SectionWords{ .title = "Mining Tracker", .hint = "Mining log parsing" } },
+    .{ "ping", SectionWords{ .title = "Ping", .hint = "Per-client ping overlay" } },
     .{ "resources", SectionWords{ .title = "Resource Usage", .hint = "Per-client CPU/RAM/VRAM overlay" } },
     .{ "snapping", SectionWords{ .title = "Snapping", .hint = "Thumbnail snapping" } },
-    .{ "systemColors", SectionWords{ .title = "System Colors", .hint = "Per-system border colors ({n})" } },
+    .{ "systemColors", SectionWords{ .title = "System Colors", .hint = "Per-system name colors ({n})" } },
     .{ "thumbnail", SectionWords{ .title = "Thumbnail Appearance & Notifications", .hint = "Border/text styling, per-state visuals, alert notifications" } },
     .{ "thumbnailSpaces", SectionWords{ .title = "Thumbnail Spaces", .hint = "Screen regions hotkey groups fill ({n})" } },
     .{ "timer", SectionWords{ .title = "Scan Timer", .hint = "Window scan interval" } },
-    .{ "windowFilters", SectionWords{ .title = "Window Filters", .hint = "Custom EVE window matching rules ({n})" } },
+    .{ "windowFilters", SectionWords{ .title = "Window Filters", .hint = "Window matching rules for other apps ({n})" } },
     .{ "autoMovePosition", SectionWords{ .title = "Auto-Move Windows", .hint = "Moving game windows to their saved positions" } },
-    .{ "exclusion", SectionWords{ .title = "Cycle Exclusion", .hint = "Shift-click exclusion and excluded characters" } },
-    .{ "travel", SectionWords{ .title = "Travel Alerts", .hint = "Alerts for characters left behind while travelling" } },
+    .{ "exclusion", SectionWords{ .title = "Cycle Exclusion", .hint = "Shift+click exclusion and excluded characters" } },
+    .{ "travel", SectionWords{ .title = "Travel Alerts", .hint = "Alerts for characters left behind while traveling" } },
     .{ "accentColor", SectionWords{ .title = "Accent Color", .hint = "The profile's color in this window" } },
 });
 
@@ -65,11 +66,11 @@ pub fn sections(draft: *Draft, root: Value) ![]const Section {
 }
 
 pub fn build(draft: *Draft, text: []const u8, root: Value, chosen: []const []const u8) !void {
-    // So an unreadable setting keeps the profile's current value instead of taking the default.
     var readable_root = root;
     // The same upgrade buildConfigFromJson applies, so present() still finds the migrated sections in the file.
     try config_mod.migrateProfileJson(draft.arena, &readable_root);
     var skipped: std.ArrayList([]const u8) = .empty;
+    // So an unreadable setting keeps the profile's current value instead of taking the default.
     _ = readable.dropUnreadable(Config.Wire, draft.arena, &readable_root, &skipped);
 
     const config = try Config.buildConfigFromJson(draft.arena, text, "import");
@@ -104,10 +105,9 @@ fn importSection(draft: *Draft, config: *const Config, root: Value, comptime nam
     var section = try present(draft.arena, loaded, raw);
     if (comptime std.mem.eql(u8, name, "characters")) dropPlaceholderCharacters(&section);
     try draft.root.put(draft.arena, name, section);
-    try sectionNote(draft, name, if (section == .array) section.array.items.len else 0);
 }
 
-/// Older imports from other tools let their sample entries ("Example Name1") through, so a profile copy shouldn't carry them on.
+/// Older imports let sample entries ("Example Name1") through; a profile copy drops them.
 fn dropPlaceholderCharacters(list: *Value) void {
     if (list.* != .array) return;
     var kept_count: usize = 0;
@@ -119,21 +119,7 @@ fn dropPlaceholderCharacters(list: *Value) void {
     list.array.shrinkRetainingCapacity(kept_count);
 }
 
-fn sectionNote(draft: *Draft, comptime name: []const u8, item_count: usize) !void {
-    const list_notes = .{
-        .{ "characters", "Imported {n} character(s)." },
-        .{ "systemColors", "Imported {n} system color(s)." },
-        .{ "hotkeyGroups", "Imported {n} hotkey group(s)." },
-        .{ "windowFilters", "Imported {n} window filter(s)." },
-        .{ "thumbnailSpaces", "Imported {n} thumbnail space(s)." },
-    };
-    inline for (list_notes) |entry| {
-        if (comptime std.mem.eql(u8, entry[0], name)) return draft.noteCount(entry[1], "n", item_count);
-    }
-    try draft.note("{title} imported.", &.{.{ .name = "title", .value = (comptime sectionWords(name)).title, .should_translate = true }});
-}
-
-/// Only what the file has: `loaded` holds every field, defaults included, but a field an older file lacks should keep its current value.
+/// A field an older file lacks keeps its current value, though `loaded` has every field.
 fn present(arena: std.mem.Allocator, loaded: Value, raw: Value) !Value {
     if (loaded == .object and raw == .object) {
         var out: std.json.ObjectMap = .empty;

@@ -26,6 +26,7 @@ pub const AutoColors = struct {
     pub const MAX_AVOIDED = 32;
 
     pub const Entry = struct {
+        /// Owned; freed on eviction or in deinit.
         name: []const u8,
         color: u32,
     };
@@ -97,7 +98,7 @@ pub fn premultiplyAlpha(color: u32) u32 {
     return (alpha << 24) | (r << 16) | (g << 8) | b;
 }
 
-/// Mixes each channel `percent`% of the way toward white, keeping alpha.
+/// `percent`% of the way toward white, keeping alpha.
 pub fn lighten(color: u32, percent: u32) u32 {
     return mix(0x00FF_FFFF, color, percent);
 }
@@ -113,7 +114,7 @@ pub fn mix(color: u32, background: u32, percent: u32) u32 {
     return out;
 }
 
-/// Text color that stays readable on `background`: dark ink on light colors, light ink on dark ones.
+/// Dark ink on light backgrounds, light ink on dark ones.
 pub fn inkFor(background: u32) u32 {
     const r = (background >> 16) & 0xFF;
     const g = (background >> 8) & 0xFF;

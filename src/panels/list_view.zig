@@ -7,9 +7,9 @@ const config_mod = @import("../config.zig");
 const types = @import("../config/types.zig");
 const list_look = @import("list_look.zig");
 const app = @import("../app.zig");
-const window = @import("window.zig");
-const input = @import("input.zig");
-const drag_panel = @import("../drag/panel.zig");
+const window = @import("../thumbnail/window.zig");
+const thumbnail_input = @import("../control/thumbnail_input.zig");
+const drag = @import("drag.zig");
 const template = @import("../notifications/template.zig");
 const pixel_buffer = @import("../util/pixel_buffer.zig");
 
@@ -31,6 +31,7 @@ const RowText = struct {
 
 pub const ListWindow = struct {
     panel: PanelWindow,
+    /// Borrowed; outlives the window.
     store: *config_mod.ProfileStore,
     /// Borrows store.live.
     config: *const config_mod.Config,
@@ -56,13 +57,13 @@ pub const ListWindow = struct {
         self.panel.deinit();
     }
 
-    /// Matches the panel to its configured position; whether it exists at all is the view mode's, which rebuilds the ThumbnailSet.
+    /// Matches the panel to its configured position.
     pub fn sync(self: *ListWindow) void {
         self.panel.followPosition(self.config.display.startX, self.config.display.startY);
         win32.setClickThroughStyle(self.panel.hwnd, self.config.interaction.clickThrough);
     }
 
-    /// The client of the row at client point (`x`, `y`), from the last render; null over the header or an empty cell.
+    /// From the last render; null over the header or an empty cell.
     fn rowSourceAt(self: *const ListWindow, x: i32, y: i32) ?win32.HWND {
         const sizes = list_look.metrics(&self.config.display);
         if (y < sizes.header_height) return null;
@@ -122,7 +123,7 @@ pub const ListWindow = struct {
             .Tracked => {},
             .Alphabetical => std.sort.pdq(usize, self.rows.items, AlphabeticalContext{ .thumbnails = thumbnails }, AlphabeticalContext.lessThan),
             .ConfiguredCharacters => {
-                // Built once per sort instead of rescanning the configured characters in every comparison.
+                // Built once per sort, not per comparison.
                 var order_map = try config_mod.buildCharacterOrderMap(self.config.characters.items, self.panel.allocator);
                 defer order_map.deinit();
                 std.sort.pdq(usize, self.rows.items, ConfiguredContext{ .thumbnails = thumbnails, .order_map = &order_map }, ConfiguredContext.lessThan);
@@ -201,7 +202,7 @@ pub const ListWindow = struct {
         return hasher.final();
     }
 
-    /// The row's combat, mining and bounty rates the list shows, in writing order; empty when none is.
+    /// In writing order; empty when the list shows none.
     fn statReadings(self: *const ListWindow, thumbnail: *const ThumbnailWindow, out: *[list_look.STAT_COUNT]list_look.StatReading) []const list_look.StatReading {
         const config = self.config;
         const settings: list_look.StatSettings = .{ .display = &config.display, .combat = &config.combat, .mining = &config.mining, .bounty = &config.bounty };
@@ -373,17 +374,17 @@ fn registerWindowClass(instance: win32.HINSTANCE) !void {
 }
 
 fn listWindow() ?*ListWindow {
-    const thumbnail_set = app.currentThumbnailSet() orelse return null;
-    return if (thumbnail_set.list_window) |*list_window| list_window else null;
+    const running = app.g_app orelse return null;
+    return if (running.list_window) |*list_window| list_window else null;
 }
 
 fn listWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(.c) win32.LRESULT {
     // The thumbnail set only holds the list once its window exists, so creation's messages go without a header.
     const header_height = if (listWindow()) |list_window| list_look.metrics(&list_window.config.display).header_height else 0;
-    if (drag_panel.handleMessage(app.currentThumbnailSet(), hwnd, msg, lParam, header_height)) |result| return result;
+    if (drag.handleMessage(app.currentThumbnailSet(), hwnd, msg, lParam, header_height)) |result| return result;
     switch (msg) {
         win32.WM_ENTERSIZEMOVE => {
-            drag_panel.beginPanelDrag(hwnd);
+            drag.beginPanelDrag(hwnd);
             return 0;
         },
         win32.WM_EXITSIZEMOVE => {
@@ -393,17 +394,17 @@ fn listWindowProc(hwnd: win32.HWND, msg: win32.UINT, wParam: win32.WPARAM, lPara
         win32.WM_LBUTTONDOWN => {
             const list_window = listWindow() orelse return 0;
             const source_hwnd = list_window.rowSourceAt(win32.lparamX(lParam), win32.lparamY(lParam)) orelse return 0;
-            input.press(hwnd, source_hwnd);
+            thumbnail_input.press(hwnd, source_hwnd);
             return 0;
         },
         win32.WM_LBUTTONUP => {
-            input.release(hwnd);
+            thumbnail_input.release(hwnd);
             return 0;
         },
         win32.WM_SETCURSOR => {
             // Rows only: the header is the drag handle.
             const hit_test: win32.LRESULT = @as(u16, @truncate(@as(usize, @bitCast(lParam))));
-            if (hit_test == win32.HTCLIENT and input.applyHoverCursor()) return 1;
+            if (hit_test == win32.HTCLIENT and thumbnail_input.applyHoverCursor()) return 1;
             return win32.DefWindowProcA(hwnd, msg, wParam, lParam);
         },
         else => return win32.DefWindowProcA(hwnd, msg, wParam, lParam),
@@ -465,7 +466,7 @@ fn drawTextRight(dc: win32.HDC, text: []const u8, right_x: i32, y: i32, rgb: u32
     drawText(dc, text[0..length], x, y, rgb);
 }
 
-/// Right-aligned at `right_x`, each reading in its own colour a space apart; skipped like drawTextRight rather than drawn left of `min_x`.
+/// Each reading in its own colour, a space apart; skipped like drawTextRight past `min_x`.
 fn drawStatsRight(dc: win32.HDC, display: *const config_mod.DisplayConfig, readings: []const list_look.StatReading, right_x: i32, y: i32, min_x: i32) void {
     var texts: [list_look.STAT_COUNT][list_look.STAT_TEXT_MAX]u8 = undefined;
     var lengths: [list_look.STAT_COUNT]usize = undefined;

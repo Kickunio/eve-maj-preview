@@ -1,4 +1,4 @@
-//! The "Update Available!" prompt, shown when the window opens if the app's update check found a newer release; main thread only.
+//! The "Update Available!" prompt, shown when the window opens if the app's update check found a newer release, or from About's link to it; main thread only.
 const std = @import("std");
 const ui = @import("ui");
 const win32 = @import("../../platform/win32.zig");
@@ -27,8 +27,9 @@ var g_retry_at_ms: i64 = 0;
 var g_is_open: bool = false;
 var g_version_buf: [VERSION_SIZE]u8 = undefined;
 var g_url_buf: [URL_SIZE]u8 = undefined;
-/// Borrow from the buffers above.
+/// Borrows from g_version_buf.
 var g_version: [:0]const u8 = "";
+/// Borrows from g_url_buf.
 var g_url: [:0]const u8 = "";
 /// Owned; freed in reset.
 var g_notes: ?[]const u8 = null;
@@ -43,6 +44,11 @@ pub fn reset() void {
     if (g_notes) |notes| g_allocator.free(notes);
     g_notes = null;
     g_is_open = false;
+}
+
+/// From About's link to a found release: opens the prompt if there's a release to show; the caller draws a frame.
+pub fn openIfAvailable() void {
+    _ = openWithRelease(session.runningApp().io);
 }
 
 pub fn show(context: *ui.Frame) !void {
@@ -81,10 +87,7 @@ fn check(context: *ui.Frame) void {
         g_check = .done;
         return;
     }
-    const io = session.runningApp().io;
-    const version = update.g_update_status.copyVersionZ(io, &g_version_buf);
-    const url = update.g_update_status.copyUrlZ(io, &g_url_buf);
-    if (version == null or url == null) {
+    if (!openWithRelease(session.runningApp().io)) {
         if (g_check == .pending) {
             g_check = .retrying;
             g_retry_at_ms = now + RETRY_DELAY_MS;
@@ -94,9 +97,17 @@ fn check(context: *ui.Frame) void {
         return;
     }
     g_check = .done;
-    g_version = version.?;
-    g_url = url.?;
+    context.requestRedraw();
+}
+
+/// False while no release has been found.
+fn openWithRelease(io: std.Io) bool {
+    const version = update.g_update_status.copyVersionZ(io, &g_version_buf) orelse return false;
+    const url = update.g_update_status.copyUrlZ(io, &g_url_buf) orelse return false;
+    g_version = version;
+    g_url = url;
+    if (g_notes) |notes| g_allocator.free(notes);
     g_notes = update.g_update_status.dupeNotes(io, g_allocator);
     g_is_open = true;
-    context.requestRedraw();
+    return true;
 }

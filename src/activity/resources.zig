@@ -128,7 +128,7 @@ pub const ResourceTracker = struct {
         }
     }
 
-    /// One wildcard-instance PDH query covers every process; per-pid filtering happens client-side via the "pid_<N>_" prefix.
+    /// One wildcard query covers every process; each instance is matched to a client by its pid.
     fn pollVram(self: *ResourceTracker, windows: []const scout.EveWindow) !void {
         for (windows) |eve_window| {
             if (self.stats.getPtr(eve_window.process_id)) |process_stats| {

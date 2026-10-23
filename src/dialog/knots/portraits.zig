@@ -7,6 +7,7 @@ const files = @import("../../config/files.zig");
 const session = @import("session.zig");
 const http_client = @import("../../util/http_client.zig");
 const rgba = @import("../../util/rgba.zig");
+const detached = @import("../../util/detached.zig");
 const log = @import("../../log.zig");
 
 const Image = ui.component.Image;
@@ -25,7 +26,7 @@ const MAX_FILE_SIZE = 256 * 1024;
 pub const Loaded = struct {
     /// Owned; freed in deinit.
     id: []const u8,
-    /// Null when it couldn't be read, fetched or decoded. Owned; freed in deinit unless taken.
+    /// Null when it couldn't be read, fetched or decoded; owned, freed in deinit unless taken.
     image: ?wic.Decoded,
 
     pub fn deinit(self: *Loaded) void {
@@ -42,7 +43,7 @@ const Entry = struct {
     serial: usize,
 };
 
-/// Read by the load threads too; set before any starts.
+/// Set once by setAllocator, before any load thread starts; read by them too.
 var g_allocator: std.mem.Allocator = undefined;
 var g_timer_hwnd: ?win32.HWND = null;
 var g_command: usize = 0;
@@ -50,9 +51,13 @@ var g_command: usize = 0;
 var g_entries: std.StringHashMapUnmanaged(Entry) = .empty;
 var g_next_serial: usize = 0;
 
-/// Each time the window opens: `timer_hwnd` receives `command` with each *Loaded, and portraits that failed are tried again.
-pub fn init(allocator: std.mem.Allocator, timer_hwnd: ?win32.HWND, command: usize) void {
+/// Once at startup, since a load thread can outlive the window that started it.
+pub fn setAllocator(allocator: std.mem.Allocator) void {
     g_allocator = allocator;
+}
+
+/// Each time the window opens: `timer_hwnd` receives `command` with each *Loaded, and portraits that failed are tried again.
+pub fn init(timer_hwnd: ?win32.HWND, command: usize) void {
     g_timer_hwnd = timer_hwnd;
     g_command = command;
     var it = g_entries.iterator();
@@ -65,7 +70,7 @@ pub fn init(allocator: std.mem.Allocator, timer_hwnd: ?win32.HWND, command: usiz
     }
 }
 
-/// At app exit; a load still running is freed when its result lands.
+/// At app exit; a load still running posts a result nothing reads, which goes with the process.
 pub fn deinit() void {
     var it = g_entries.iterator();
     while (it.next()) |entry| {
@@ -83,7 +88,7 @@ pub fn preload(name: []const u8) void {
     if (!g_entries.contains(id)) request(id);
 }
 
-/// `name`'s portrait, or null until it has loaded or when its ID isn't known yet; starts loading it the first time.
+/// Null until loaded or while its ID is unknown; the first call starts loading it.
 pub fn image(arena: std.mem.Allocator, key: ui.Key, name: []const u8, image_style: *const ui.Style) ?Image {
     const id = lookUp(arena, name) orelse return null;
     const entry = g_entries.getPtr(id) orelse {
@@ -123,7 +128,7 @@ fn lookUp(allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
     };
 }
 
-/// Adds the entry, then loads it; a failure leaves the entry empty until the window next opens, rather than retrying every frame.
+/// A failure leaves the entry empty until the window reopens, rather than retrying every frame.
 fn request(id: []const u8) void {
     const entry = addEntry(id) catch |err| {
         slog.warn("Failed to load the portrait of character '{s}': {}", .{ id, err });
@@ -148,11 +153,10 @@ fn startLoad(id: []const u8) !void {
     const timer_hwnd = g_timer_hwnd orelse return error.MissingTimerWindow;
     const owned_id = try g_allocator.dupe(u8, id);
     errdefer g_allocator.free(owned_id);
-    const thread = try std.Thread.spawn(.{}, loadThread, .{ session.runningApp().io, timer_hwnd, g_command, owned_id });
-    thread.detach();
+    try detached.spawn(loadThread, .{ session.runningApp().io, timer_hwnd, g_command, owned_id });
 }
 
-/// The load's thread; takes ownership of `id`, and touches nothing of the main thread's but the allocator and the posted message.
+/// Takes ownership of `id`; shares only the allocator and the posted message with the main thread.
 fn loadThread(io: std.Io, timer_hwnd: win32.HWND, command: usize, id: []const u8) void {
     const loaded = g_allocator.create(Loaded) catch |err| {
         slog.warn("Failed to load the portrait of character '{s}': {}", .{ id, err });
@@ -180,7 +184,7 @@ fn load(io: std.Io, id: []const u8) !wic.Decoded {
         }
     }
 
-    const body = try fetch(io, id);
+    const body = try fetch(id);
     defer g_allocator.free(body);
     const decoded = try decode(body);
     save(io, path, body);
@@ -202,12 +206,12 @@ fn readCached(io: std.Io, path: []const u8) ?[]u8 {
 }
 
 /// Caller frees.
-fn fetch(io: std.Io, id: []const u8) ![]u8 {
-    var client: std.http.Client = .{ .allocator = g_allocator, .io = io };
-    defer client.deinit();
+fn fetch(id: []const u8) ![]u8 {
+    var http_session = try http_client.Session.init();
+    defer http_session.deinit();
     var url_buf: [128]u8 = undefined;
     const url = try std.fmt.bufPrint(&url_buf, URL_FORMAT, .{ id, FETCH_SIZE });
-    return http_client.fetch(g_allocator, &client, url, .{});
+    return http_session.fetch(g_allocator, url, .{});
 }
 
 /// A portrait that can't be saved still shows; it's fetched again next run.

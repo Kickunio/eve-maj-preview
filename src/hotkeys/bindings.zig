@@ -1,8 +1,8 @@
 //! Hotkey IDs, the actions they trigger, and the table of global actions.
 const std = @import("std");
-const protocol = @import("../protocol.zig");
+const url = @import("../protocol/url.zig");
 
-// ID bands: 0 group cycle (2 per combo), 1000 global, 2000 character, 3000 profile, 4000 group assign, 5000 app, 6000 URL.
+// ID bands: 0 group cycle (2 per combo), 1000 global, 2000 character, 3000 profile, 4000 group assign, 5000 app, 6000 URL, 7000 group close, 8000 group minimize.
 pub const HOTKEY_ID_CYCLE_GROUP_BASE: c_int = 0;
 
 /// IDs in the group cycle band, before it runs into the global band.
@@ -19,6 +19,10 @@ pub const HOTKEY_ID_ASSIGN_GROUP_BASE: c_int = 4000;
 pub const HOTKEY_ID_APP_HOTKEY_BASE: c_int = 5000;
 
 pub const HOTKEY_ID_URL_HOTKEY_BASE: c_int = 6000;
+
+pub const HOTKEY_ID_CLOSE_GROUP_BASE: c_int = 7000;
+
+pub const HOTKEY_ID_MINIMIZE_GROUP_BASE: c_int = 8000;
 
 pub const GLOBAL_BINDINGS = [_]GlobalBinding{
     .{ .action = .minimize_all, .protocol = .minimize_all, .field = "hotkeyMinimizeAll", .description = "minimize all clients" },
@@ -44,20 +48,25 @@ pub const GLOBAL_BINDINGS = [_]GlobalBinding{
     .{ .action = .previous_app, .protocol = .previous_app, .field = "hotkeyCycleAppsBackward", .is_global_setting = true, .description = "cycle backward through the app hotkeys' running apps" },
     .{ .action = .exit_app, .protocol = .exit_app, .field = "hotkeyExitApp", .description = "exit the application" },
     .{ .action = .close_active, .protocol = .close_active, .field = "hotkeyCloseActive", .description = "close the focused client" },
+    .{ .action = .toggle_dragging, .protocol = .toggle_dragging, .field = "hotkeyToggleDragging", .description = "toggle thumbnail dragging" },
+    .{ .action = .toggle_travel_mode, .protocol = .toggle_travel_mode, .field = "hotkeyToggleTravelMode", .description = "toggle travel mode" },
+    .{ .action = .toggle_notification_history, .protocol = .toggle_notification_history, .field = "hotkeyToggleNotificationHistory", .description = "show/hide the notification history" },
+    .{ .action = .clear_notification_history, .protocol = .clear_notification_history, .field = "hotkeyClearNotificationHistory", .description = "clear the notification history" },
 };
 
 /// Also re-registered on its own while hotkeys are suspended, so it can resume them.
 pub const SUSPEND_BINDING = GlobalBinding{ .action = .suspend_hotkeys, .protocol = .suspend_hotkeys, .field = "hotkeySuspend", .description = "suspend/resume all hotkeys" };
 
-/// Characters sharing one per-character hotkey; HotkeyManager.unregisterAll frees the owned index list.
+/// Characters sharing one per-character hotkey.
 pub const CharacterGroup = struct {
+    /// Owned; HotkeyManager.unregisterAll frees it.
     character_indices: []const usize,
     current_index: ?usize = null,
 };
 
-/// Hotkey groups sharing one cycle combo, cycled as one list; HotkeyManager.unregisterAll frees the owned index list.
+/// Hotkey groups sharing one cycle combo, cycled as one list.
 pub const GroupChain = struct {
-    /// In hotkeyGroups order.
+    /// In hotkeyGroups order; owned, HotkeyManager.unregisterAll frees it.
     group_indices: []const usize,
     is_forward: bool,
 };
@@ -66,6 +75,12 @@ pub const HotkeyAction = union(enum) {
     cycle_group: GroupChain,
     activate_character: CharacterGroup,
     assign_group: struct {
+        group_index: usize,
+    },
+    close_group: struct {
+        group_index: usize,
+    },
+    minimize_group: struct {
         group_index: usize,
     },
     minimize_all: void,
@@ -94,6 +109,10 @@ pub const HotkeyAction = union(enum) {
     previous_app: void,
     exit_app: void,
     close_active: void,
+    toggle_dragging: void,
+    toggle_travel_mode: void,
+    toggle_notification_history: void,
+    clear_notification_history: void,
     activate_app: struct {
         app_index: usize,
     },
@@ -107,7 +126,7 @@ pub const ActionTag = std.meta.Tag(HotkeyAction);
 /// A global action: which config field binds it, and the protocol URL action that also triggers it.
 pub const GlobalBinding = struct {
     action: ActionTag,
-    protocol: protocol.GlobalAction,
+    protocol: url.GlobalAction,
     /// Name of the KeyList field, on GlobalConfig when `is_global_setting`, else on the profile's Config.hotkeys.
     field: []const u8,
     is_global_setting: bool = false,
@@ -128,7 +147,7 @@ pub fn actionFor(comptime action: ActionTag) HotkeyAction {
 }
 
 /// Every GlobalAction maps to exactly one binding; checked at compile time below.
-pub fn fromProtocol(action: protocol.GlobalAction) HotkeyAction {
+pub fn fromProtocol(action: url.GlobalAction) HotkeyAction {
     inline for (GLOBAL_BINDINGS) |binding| {
         if (binding.protocol == action) return actionFor(binding.action);
     }
@@ -136,19 +155,19 @@ pub fn fromProtocol(action: protocol.GlobalAction) HotkeyAction {
 }
 
 comptime {
-    for (std.enums.values(protocol.GlobalAction)) |tag| {
+    for (std.enums.values(url.GlobalAction)) |tag| {
         var matches: usize = 0;
         for (GLOBAL_BINDINGS) |binding| {
             if (binding.protocol == tag) matches += 1;
         }
-        if (matches != 1) @compileError("protocol.GlobalAction." ++ @tagName(tag) ++ " must map to exactly one global binding");
+        if (matches != 1) @compileError("url.GlobalAction." ++ @tagName(tag) ++ " must map to exactly one global binding");
     }
 }
 
 const testing = std.testing;
 
 test "fromProtocol maps each URL action to the hotkey action of the same name" {
-    for (std.enums.values(protocol.GlobalAction)) |action| {
+    for (std.enums.values(url.GlobalAction)) |action| {
         try testing.expectEqualStrings(@tagName(action), @tagName(std.meta.activeTag(fromProtocol(action))));
     }
 }

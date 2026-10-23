@@ -13,12 +13,12 @@ pub const Glyph = enum {
     gear,
     thumbnail,
     list,
-    spokes,
+    pointer,
     keyboard,
     split_square,
-    magnifier,
+    document,
     envelope,
-    diamond,
+    pickaxe,
     tiles,
     bell,
     clock,
@@ -33,7 +33,6 @@ pub const Glyph = enum {
     speech,
     speaker,
     check,
-    chevron,
 };
 
 /// The glyph centred in a `box`-sized square, moved onto whole device pixels by `snap` (see snapOffset).
@@ -64,7 +63,7 @@ pub fn commands(arena: std.mem.Allocator, glyph: Glyph, box: f32, snap: [2]f32, 
     return list.items;
 }
 
-/// How far to shift a canvas's drawing so its pixels land on whole device pixels, from where it was laid out last frame.
+/// The shift that lands a canvas on whole device pixels, from last frame's layout.
 pub fn snapOffset(context: *ui.Frame, key: ui.Key) ![2]f32 {
     const ui_state = context.ui();
     const measured = try ui_state.state.getOrCreate(.measured, ui_state.allocator, key.hash());
@@ -125,18 +124,18 @@ fn bitmap(glyph: Glyph) []const []const u8 {
             "...........",
             "###########",
         },
-        .spokes => &.{
-            "....###....",
-            "....###....",
-            "....###....",
-            ".....#.....",
-            "###..#..###",
-            "###########",
-            "###..#..###",
-            ".....#.....",
-            "....###....",
-            "....###....",
-            "....###....",
+        .pointer => &.{
+            "#..........",
+            "##.........",
+            "###........",
+            "####.......",
+            "#####......",
+            "######.....",
+            "#######....",
+            "####.......",
+            "##.##......",
+            "#...##.....",
+            "....##.....",
         },
         .keyboard => &.{
             "...........",
@@ -163,18 +162,18 @@ fn bitmap(glyph: Glyph) []const []const u8 {
             "#....#....#",
             "###########",
         },
-        .magnifier => &.{
-            "..####.....",
-            ".#....#....",
-            "#......#...",
-            "#......#...",
-            "#......#...",
-            "#......#...",
-            ".#....#....",
-            "..####.##..",
-            ".......###.",
-            "........###",
-            ".........##",
+        .document => &.{
+            "######...",
+            "#....##..",
+            "#....#.#.",
+            "#....####",
+            "#.......#",
+            "#.####..#",
+            "#.......#",
+            "#.#####.#",
+            "#.......#",
+            "#.###...#",
+            "#########",
         },
         .envelope => &.{
             "...........",
@@ -188,17 +187,17 @@ fn bitmap(glyph: Glyph) []const []const u8 {
             "#.........#",
             "###########",
         },
-        .diamond => &.{
-            "...........",
-            ".....#.....",
-            "....###....",
-            "...#####...",
-            "..#######..",
-            ".#########.",
-            "..#######..",
-            "...#####...",
-            "....###....",
-            ".....#.....",
+        .pickaxe => &.{
+            "..#####....",
+            "......##...",
+            ".......##..",
+            "......#.##.",
+            ".....#...#.",
+            "....#....##",
+            "...#......#",
+            "..#........",
+            ".#.........",
+            "#..........",
         },
         .tiles => &.{
             "#####.#####",
@@ -358,14 +357,6 @@ fn bitmap(glyph: Glyph) []const []const u8 {
             ".##.##...",
             "..###....",
             "...#.....",
-        },
-        .chevron => &.{
-            "#.......#",
-            "##.....##",
-            ".##...##.",
-            "..##.##..",
-            "...###...",
-            "....#....",
         },
     };
 }

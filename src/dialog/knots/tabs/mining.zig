@@ -24,16 +24,17 @@ var g_is_table_shown = false;
 pub fn show(context: *ui.Frame) !void {
     try chatlogNotice(context);
     const ref = session.profile().child("mining");
-    const section = try bind.switchedSection(context, "Mining Overlay Settings", "Displays m3 mined per minute on each thumbnail, calculated from EVE gamelogs.", ref, "enabled", true);
+    const section = try widgets.openSection(context, "Mining Overlay", "Displays m3 mined per minute on each thumbnail, calculated from EVE gamelogs.", &style.section);
+    try bind.toggle(context, ref, "enabled", "Enable Mining Overlay");
     const options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
-    try bind.number(context, ref, "window_seconds", "Window", .{ .unit = "s" });
+    try bind.number(context, ref, "window_seconds", "Averaging Window", .{ .unit = "s" });
     try widgets.hintText(context, .src(@src()), "The mining rate is averaged over this time.");
     try bind.number(context, ref, "update_interval_ms", "Update Interval", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How often the number on the thumbnail changes.");
     try bind.toggle(context, ref, "show_isk_rate", "Show ISK Rate");
     try widgets.hintText(context, .src(@src()), "Uses the prices below; fetch or enter them first.");
     const isk_rate = try widgets.openGroup(context, .src(@src()), ref.get("show_isk_rate"));
-    try bind.choice(context, ref, "isk_rate_unit", "ISK Rate Unit");
+    try bind.segmented(context, ref, "isk_rate_unit", "ISK Rate Unit", &.{ "Per Minute", "Per Hour" });
     try widgets.hintText(context, .src(@src()), "Shows ISK earned per minute or per hour.");
     try isk_rate.close(context);
     try bind.toggle(context, ref, "show_prefix", "Show M: Prefix");
@@ -41,13 +42,13 @@ pub fn show(context: *ui.Frame) !void {
     try options.close(context);
     try section.close(context);
 
-    const alerts = try widgets.openSection(context, "Alerts", "Notifications triggered by mining laser activity. Requires Mining Overlay Settings above to be switched on.", &style.section);
+    const alerts = try widgets.openSection(context, "Alerts", "Alerts from mining laser activity. Needs Mining Overlay switched on.", &style.section);
     const alert_options = try widgets.openGroup(context, .src(@src()), ref.get("enabled"));
-    try widgets.subheading(context, .src(@src()), "Laser Idle Alert");
+    try widgets.subheading(context, .src(@src()), "Mining Idle Alert");
     try widgets.hintText(context, .src(@src()), "Alerts when mining slows, not just when it stops.");
     try bind.number(context, ref, "idle_alert_window_seconds", "Detection Window", .{ .unit = "s" });
     try widgets.hintText(context, .src(@src()), "The time mining cycles are counted over.");
-    try bind.number(context, ref, "idle_alert_threshold", "Event Threshold", .{});
+    try bind.number(context, ref, "idle_alert_threshold", "Minimum Cycles", .{ .unit = "cycles", .singular_unit = "cycle" });
     try widgets.hintText(context, .src(@src()), "Fewer mining cycles than this in the window counts as slow.");
     try widgets.subheading(context, .src(@src()), "Mining Stopped Alert");
     try widgets.hintText(context, .src(@src()), "Alerts once all mining has stopped.");
@@ -163,7 +164,7 @@ fn priceControls(context: *ui.Frame) !void {
     if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text(toggle_label), .style = &style.plain_button })).clicked) {
         g_is_table_shown = !g_is_table_shown;
     }
-    if (try widgets.glyphButton(context, .src(@src()), .refresh, "Fetch Prices", &style.plain_button, prices.isFetching())) {
+    if (try widgets.glyphButton(context, .src(@src()), .refresh, "Fetch Prices", &style.add_button, prices.isFetching())) {
         if (host.fetchPrices()) status.show(.info, "Fetching {n} price(s)", .{ .n = prices.NAMES.len });
     }
     try row.close(context);
@@ -188,5 +189,5 @@ fn fetchedLabel(arena: std.mem.Allocator, fetched_at_seconds: i64) ![]const u8 {
 
 fn chatlogNotice(context: *ui.Frame) !void {
     if (session.profile().ptr.chatlog.enabled) return;
-    try widgets.notice(context, .str("knots.mining.chatlog"), "The Mining overlay requires Log Monitoring enabled to read logs.");
+    try widgets.noticeWithButton(context, .str("knots.mining.chatlog"), "The Mining overlay requires Log Monitoring enabled to read logs.", "Go to Log Monitoring", .log_monitoring);
 }

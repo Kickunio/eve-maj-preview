@@ -1,4 +1,4 @@
-//! The configuration window's Event Alerts tab: a searchable list of notification types beside the selected type's settings; main thread only.
+//! The configuration window's Event Alerts tab: a list of notification types beside the selected type's settings; main thread only.
 const std = @import("std");
 const ui = @import("ui");
 const config = @import("../../../config.zig");
@@ -8,11 +8,11 @@ const overlay = @import("../../../thumbnail/overlay.zig");
 const session = @import("../session.zig");
 const bind = @import("../bind.zig");
 const host = @import("../host.zig");
-const lang = @import("../../../lang/lang.zig");
 const status = @import("../status.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
 const glyphs = @import("../glyphs.zig");
+const lang = @import("../../../lang/lang.zig");
 const log = @import("../../../log.zig");
 
 const Rect = ui.component.Rect;
@@ -29,6 +29,8 @@ const CUSTOM_TEXT_MAX_LENGTH = 100;
 const NEWLINE_TOKEN = "\\n";
 /// Holds notification.defaultText, which the box and its preview both show.
 const DEFAULT_TEXT_SIZE = 128;
+/// knots' Tooltip keys its popup and text as its own key indexed 1 and 2, so what it wraps takes this.
+const TOOLTIP_CHILD_INDEX = 3;
 
 /// Every type, by category, then as declared.
 const TYPES_IN_ORDER = blk: {
@@ -46,22 +48,9 @@ const TYPES_IN_ORDER = blk: {
 
 const TextField = enum { custom_text, custom_text_alt };
 
-var g_allocator: std.mem.Allocator = undefined;
 var g_selected: NotificationType = TYPES_IN_ORDER[0];
-/// The roster's search text. Owned; freed in reset.
-var g_search: std.ArrayList(u8) = .empty;
 /// Where a placeholder chip inserts, per type; the first box until another is focused.
 var g_last_text_field: std.EnumArray(NotificationType, TextField) = .initFill(.custom_text);
-
-pub fn init(allocator: std.mem.Allocator) void {
-    g_allocator = allocator;
-}
-
-/// Once the window has closed.
-pub fn reset() void {
-    g_search.deinit(g_allocator);
-    g_search = .empty;
-}
 
 /// A notification type's own settings, by its index in NotificationType.
 pub fn typeRef(index: usize) TypeRef {
@@ -72,11 +61,11 @@ pub fn typeRef(index: usize) TypeRef {
 pub fn show(context: *ui.Frame) !void {
     const is_enabled = session.profile().ptr.thumbnail.notifications.enabled;
     if (!is_enabled) {
-        try widgets.notice(context, .src(@src()), "Event Alerts requires Notification System switched on in the Notifications tab.");
+        try widgets.noticeWithButton(context, .src(@src()), "Event Alerts requires Notification System switched on in the Notifications tab.", "Go to Notifications", .notifications);
     } else if (!session.profile().ptr.chatlog.enabled) {
-        try widgets.notice(context, .src(@src()), "Without Log Monitoring, only alerts for your own actions, like Profile Switch, are shown.");
+        try widgets.noticeWithButton(context, .src(@src()), "Without Log Monitoring, only alerts for your own actions, like Profile Switch, are shown.", "Go to Log Monitoring", .log_monitoring);
     }
-    const section = try widgets.openSection(context, "Event Alerts", "Per-event notification, suppression, speech, and border behavior. Select an event on the left to edit it.", &style.fill_section);
+    const section = try widgets.openSection(context, "Event Alerts", "How each game event alerts you. Pick an event on the left to edit it.", &style.fill_section);
     const options = try widgets.openFillGroup(context, .src(@src()), is_enabled);
     const master_detail = Rect{ .key = .src(@src()), .style = &style.master_detail_fill };
     _ = try master_detail.open(context);
@@ -109,7 +98,7 @@ fn categoryHeading(category: notification.NotificationCategory) []const u8 {
 
 fn englishLabel(notification_type: NotificationType) []const u8 {
     return switch (notification_type) {
-        .AggressionCantJump => "Aggression Cant Jump",
+        .AggressionCantJump => "Aggression Can't Jump",
         .AsteroidDepleted => "Asteroid Depleted",
         .AutoMinimizeToggle => "Auto-Minimize Toggle",
         .AutopilotApproaching => "Autopilot Approaching",
@@ -204,21 +193,13 @@ fn englishStateLabel(state: notification.State) []const u8 {
     };
 }
 
-fn matchesSearch(notification_type: NotificationType) bool {
-    const query = std.mem.trim(u8, g_search.items, " ");
-    if (query.len == 0) return true;
-    return std.ascii.findIgnoreCase(typeShortLabel(notification_type), query) != null or std.ascii.findIgnoreCase(typeLabel(notification_type), query) != null;
-}
-
 /// Grouped under category headings; each row's dot is filled while its event is enabled.
 fn typeRoster(context: *ui.Frame) !void {
     const roster = Rect{ .key = .src(@src()), .style = try rosterStyle(context) };
     _ = try roster.open(context);
-    try widgets.searchBox(context, .str("knots.events.search"), &g_search, "Search events...");
     const rows = try widgets.openScrollPane(context, .str("knots.events.rows"), style.roster_scroll);
     var last_category: ?notification.NotificationCategory = null;
     for (TYPES_IN_ORDER) |notification_type| {
-        if (!matchesSearch(notification_type)) continue;
         const index = @backingInt(notification_type);
         const category = notification.notificationCategory(notification_type);
         if (last_category != category) {
@@ -247,7 +228,7 @@ fn typeRoster(context: *ui.Frame) !void {
     try roster.close(context);
 }
 
-/// style.roster, widened so each name's longest word fits beside a row's dot and a marker, rather than breaking mid-word.
+/// Widened so names' longest words don't break beside a dot and marker.
 fn rosterStyle(context: *ui.Frame) !*const ui.Style {
     var widest: f32 = 0;
     for (TYPES_IN_ORDER) |notification_type| {
@@ -266,7 +247,7 @@ fn rosterStyle(context: *ui.Frame) !*const ui.Style {
 fn marker(context: *ui.Frame, key: ui.Key, glyph: glyphs.Glyph, tip: []const u8) !void {
     const tooltip = Tooltip{ .key = key, .content = lang.text(tip) };
     _ = try tooltip.open(context);
-    const glyph_key = key.indexed(1);
+    const glyph_key = key.indexed(TOOLTIP_CHILD_INDEX);
     try context.e(Canvas{
         .key = glyph_key,
         .commands = try glyphs.commands(context.arena(), glyph, style.ROSTER_MARKER_SIZE, try glyphs.snapOffset(context, glyph_key), style.MUTED.value),
@@ -296,7 +277,7 @@ fn typeDetail(context: *ui.Frame, notification_type: NotificationType) !void {
     const timing = try widgets.openFieldGroup(context, .str("knots.events.timing"), "Timing");
     try bind.number(context, ref, "duration_ms", "Duration", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "How long the alert shows; 0 keeps it until dismissed.");
-    try bind.number(context, ref, "throttle_ms", "Limit", .{ .shows_seconds = true, .unit = "s" });
+    try bind.number(context, ref, "throttle_ms", "Cooldown", .{ .shows_seconds = true, .unit = "s" });
     try widgets.hintText(context, .src(@src()), "Ignores repeats within this time.");
     try timing.close(context);
     try widgets.separator(context, .str("knots.events.separator.timing"));
@@ -309,8 +290,8 @@ fn typeDetail(context: *ui.Frame, notification_type: NotificationType) !void {
     try widgets.hintText(context, .src(@src()), "Skips the alert while you're on that character.");
     try bind.toggle(context, ref, "suppress_when_clicked", "Suppress After Click");
     try widgets.hintText(context, .src(@src()), "Skips the alert briefly after you click that character.");
-    try bind.toggle(context, ref, "show_hidden_thumbnail", "Show Hidden Thumbnail");
-    try widgets.hintText(context, .src(@src()), "Shows the thumbnail during the alert, even if it's hidden.");
+    try bind.toggle(context, ref, "show_hidden_thumbnail", "Show Thumbnail Even If Hidden");
+    try widgets.hintText(context, .src(@src()), "Only for as long as the alert lasts.");
     try bind.toggle(context, ref, "tts_enabled", "Speak Aloud (TTS)");
     try widgets.hintText(context, .src(@src()), "Reads the alert out loud. Voice settings are on the Notifications tab.");
     try behavior.close(context);
@@ -352,13 +333,9 @@ fn customText(context: *ui.Frame, ref: TypeRef, notification_type: NotificationT
     _ = try chip_box.open(context);
     for (notification.placeholders(notification_type), 0..) |placeholder, index| {
         const token = try std.fmt.allocPrint(context.arena(), "{{{s}}}", .{placeholder.name});
-        if ((try context.interact(Button{ .key = ui.Key.str("knots.events.chip").indexed(index), .label = token, .style = &style.placeholder_chip })).clicked) {
-            insertToken(context, ref, notification_type, token);
-        }
+        if (try tagChip(context, ui.Key.str("knots.events.chip").indexed(index), token)) insertToken(context, ref, notification_type, token);
     }
-    if ((try context.interact(Button{ .key = .src(@src()), .label = NEWLINE_TOKEN, .style = &style.placeholder_chip })).clicked) {
-        insertToken(context, ref, notification_type, NEWLINE_TOKEN);
-    }
+    if (try tagChip(context, .str("knots.events.chip.newline"), NEWLINE_TOKEN)) insertToken(context, ref, notification_type, NEWLINE_TOKEN);
     try chip_box.close(context);
     try chips.close(context);
 
@@ -368,26 +345,35 @@ fn customText(context: *ui.Frame, ref: TypeRef, notification_type: NotificationT
         alt_sample.state = state;
         try preview(context, notification_type, .custom_text_alt, ref.get("custom_text_alt"), alt_sample);
     }
-    try widgets.paragraph(context, .src(@src()), "Click a tag to add it to the text.");
     try bind.optionalColor(context, ref, "text_color", "Text Color", session.profile().ptr.thumbnail.notifications.color);
     try widgets.hintText(context, .src(@src()), "Reset uses the Notification text's color on the Appearance tab.");
     try group.close(context);
 }
 
+/// A placeholder chip, whose tooltip says what clicking it does; returns whether it was clicked.
+fn tagChip(context: *ui.Frame, key: ui.Key, token: []const u8) !bool {
+    const tip = Tooltip{ .key = key, .content = lang.text("Inserts this into the text at the cursor.") };
+    _ = try tip.open(context);
+    const is_clicked = (try context.interact(Button{ .key = key.indexed(TOOLTIP_CHILD_INDEX), .label = token, .style = &style.placeholder_chip })).clicked;
+    try tip.close(context);
+    return is_clicked;
+}
+
 fn textBox(context: *ui.Frame, ref: TypeRef, notification_type: NotificationType, comptime field: TextField, sample: notification.Notification, has_states: bool) !void {
     const name = @tagName(field);
     const state = sample.state orelse .on;
-    const label = if (has_states) englishStateLabel(state) else "Text";
+    // A type with one text needs no label beyond its field group's.
+    const label = if (has_states) englishStateLabel(state) else "";
     const row = try widgets.openBinding(context, ui.Key.str("knots.events.text:" ++ name).indexed(ref.index), label);
-    var buf: [DEFAULT_TEXT_SIZE]u8 = undefined;
+    var buffer: [DEFAULT_TEXT_SIZE]u8 = undefined;
     // The box keeps its placeholder until the frame is drawn, so it can't point at this stack buffer.
-    try bind.styledTextBox(context, ref, name, try context.arena().dupe(u8, notification.defaultText(sample, &buf)), &style.custom_text_input);
+    try bind.styledTextBox(context, ref, name, try context.arena().dupe(u8, notification.defaultText(sample, &buffer)), &style.custom_text_input);
     if (context.ui().focused(bind.boxKey(ref, name).hash())) g_last_text_field.set(notification_type, field);
     if ((try context.interact(Button{ .key = ui.Key.str("knots.events.text.clear:" ++ name).indexed(ref.index), .label = "\u{00D7}", .style = &style.icon_button_danger_text })).clicked) {
         ref.set(name, null);
     }
     try row.close(context);
-    try widgets.hintText(context, ui.Key.str("knots.events.text.hint:" ++ name).indexed(ref.index), "Leave empty for the grey default. Type \\n for a new line.");
+    try widgets.hintText(context, ui.Key.str("knots.events.text.hint:" ++ name).indexed(ref.index), "Leave empty for the gray default. Type \\n for a new line.");
 }
 
 /// Inserts at the caret of the box last focused, as long as it still fits.
@@ -411,14 +397,14 @@ fn insertToken(context: *ui.Frame, ref: TypeRef, notification_type: Notification
 
 /// Mirrors notifications/template.zig's render with each placeholder's sample value.
 fn preview(context: *ui.Frame, notification_type: NotificationType, comptime field: TextField, custom: ?[]const u8, sample: notification.Notification) !void {
-    var default_buf: [DEFAULT_TEXT_SIZE]u8 = undefined;
-    var render_buf: [notification.TEXT_MAX]u8 = undefined;
+    var default_buffer: [DEFAULT_TEXT_SIZE]u8 = undefined;
+    var render_buffer: [notification.TEXT_MAX]u8 = undefined;
     const typed = std.mem.trim(u8, custom orelse "", " ");
-    const shown = if (typed.len == 0) notification.defaultText(sample, &default_buf) else template.render(typed, notification.placeholders(notification_type), .{
+    const shown = if (typed.len == 0) notification.defaultText(sample, &default_buffer) else template.render(typed, notification.placeholders(notification_type), .{
         .source = sample.source,
         .target = sample.target,
         .character = notification.SAMPLE_CHARACTER,
-    }, &render_buf) orelse typed;
+    }, &render_buffer) orelse typed;
     var lines = std.mem.splitScalar(u8, shown, '\n');
     var kept: std.ArrayList(u8) = .empty;
     var line_count: usize = 0;

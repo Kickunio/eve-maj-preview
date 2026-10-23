@@ -43,26 +43,13 @@ const FLAGS = [_]Flag{
 
 const Flag = struct { field: []const u8, label: []const u8, hint: []const u8 };
 
-var g_allocator: std.mem.Allocator = undefined;
 var g_selected_index: usize = 0;
-/// The roster's search text. Owned; freed in reset.
-var g_search: std.ArrayList(u8) = .empty;
-
-pub fn init(allocator: std.mem.Allocator) void {
-    g_allocator = allocator;
-}
-
-/// Once the window has closed.
-pub fn reset() void {
-    g_search.deinit(g_allocator);
-    g_search = .empty;
-}
 
 pub fn show(context: *ui.Frame) !void {
     const section = try widgets.openSection(
         context,
         "Character List",
-        "Customize each character's saved position, size, border color, display name, and jump-to hotkey. Characters are added automatically when detected.",
+        "Settings for each character. Characters are added when they log in.",
         &style.fill_section,
     );
     const profile = session.profile();
@@ -92,8 +79,8 @@ fn emptyState(context: *ui.Frame, profile: ProfileRef) !void {
     try state.close(context);
 }
 
-/// `lifted_style` while it's being dragged, otherwise the roster's own.
-fn characterRow(context: *ui.Frame, character: *const config.CharacterConfig, index: usize, lifted_style: ?*const ui.Style) !void {
+/// `lifted_style` while it's being dragged, otherwise the roster's own; `logged_in` borrows positions.openClients' names.
+fn characterRow(context: *ui.Frame, character: *const config.CharacterConfig, index: usize, logged_in: []const []const u8, lifted_style: ?*const ui.Style) !void {
     const arena = context.arena();
     const name = try rosterName(context, index);
     const is_selected = index == g_selected_index;
@@ -105,9 +92,13 @@ fn characterRow(context: *ui.Frame, character: *const config.CharacterConfig, in
         g_selected_index = index;
         context.requestRedraw();
     }
+    const portrait_box = Rect{ .key = ui.Key.str("knots.roster.portrait_box").indexed(index), .style = &style.roster_portrait_box };
+    _ = try portrait_box.open(context);
     const portrait = portraits.image(arena, PORTRAIT_KEY, character.name, &style.roster_portrait) orelse
         images.g_default_portrait.image(ui.Key.str("knots.roster.portrait_default").indexed(index), &style.roster_portrait);
     if (portrait) |image| try context.e(image);
+    if (isLoggedIn(logged_in, character.name)) try context.e(Rect{ .key = ui.Key.str("knots.roster.online").indexed(index), .style = &style.roster_online_ring });
+    try portrait_box.close(context);
     try context.e(Text{
         .selectable = false,
         .key = ui.Key.str("knots.roster.name").indexed(index),
@@ -132,28 +123,18 @@ fn rosterName(context: *ui.Frame, index: usize) ![]const u8 {
     return if (name.len > 0) name else try lang.format(context.arena(), "Character {n}", .{ .n = index + 1 });
 }
 
-/// While searching, only matching rows show, and none can be dragged, since a drop among hidden rows would land somewhere unseen.
 fn roster(context: *ui.Frame, profile: ProfileRef) !void {
     const characters = profile.ptr.characters.items;
-    const list = try widgets.openSearchedRoster(context, .str("knots.characters.roster"), &style.roster, true, &g_search, "Search characters...");
-    const query = std.mem.trim(u8, g_search.items, " ");
+    const list = try widgets.openRoster(context, .str("knots.characters.roster"), &style.roster, true);
+    const logged_in = try positions.openClients(context.arena());
     var order = widgets.ReorderList.begin(context, ROW_KEY, characters.len, 0);
-    var match_count: usize = 0;
     for (characters, 0..) |*character, index| {
-        if (query.len > 0) {
-            if (!try matchesSearch(context, character, index, query)) continue;
-        } else {
-            try widgets.reorderRow(context, ROW_KEY, index);
-        }
-        match_count += 1;
-        if (try order.next(context, index)) try characterRow(context, character, index, null);
-    }
-    if (match_count == 0) {
-        try widgets.boxedText(context, .src(@src()), "No matching characters.", &style.roster_empty, &style.roster_empty_text);
+        try widgets.reorderRow(context, ROW_KEY, index);
+        if (try order.next(context, index)) try characterRow(context, character, index, logged_in, null);
     }
     if (try order.end(context)) |lifted| {
         const lifted_style = try order.liftedStyle(context, list.rowsKey(), if (lifted == g_selected_index) &style.roster_row_selected else &style.roster_row);
-        try characterRow(context, &characters[lifted], lifted, lifted_style);
+        try characterRow(context, &characters[lifted], lifted, logged_in, lifted_style);
     }
     const action = try list.close(context, .{ .add_label = "Add Character", .has_open_clients = true });
 
@@ -175,11 +156,13 @@ fn roster(context: *ui.Frame, profile: ProfileRef) !void {
     }
 }
 
-/// By the name as typed so far, or the display name.
-fn matchesSearch(context: *ui.Frame, character: *const config.CharacterConfig, index: usize, query: []const u8) !bool {
-    if (std.ascii.findIgnoreCase(try rosterName(context, index), query) != null) return true;
-    const display_name = character.displayName orelse return false;
-    return std.ascii.findIgnoreCase(display_name, query) != null;
+/// Matched like populateFromClients, ignoring case and spaces at either end.
+fn isLoggedIn(logged_in: []const []const u8, name: []const u8) bool {
+    const trimmed = std.mem.trim(u8, name, " ");
+    for (logged_in) |client| {
+        if (std.ascii.eqlIgnoreCase(trimmed, std.mem.trim(u8, client, " "))) return true;
+    }
+    return false;
 }
 
 fn detail(context: *ui.Frame, profile: ProfileRef) !void {
@@ -201,7 +184,7 @@ fn detail(context: *ui.Frame, profile: ProfileRef) !void {
     try bind.text(context, character, "displayName", "Display Name", "Same as character name");
     try widgets.hintText(context, .str("knots.character.display.hint"), "Shown on the thumbnail and spoken aloud. Clients are still matched by Character Name.");
 
-    const hotkey_row = try widgets.openBinding(context, .str("knots.character.hotkey"), "Hotkey");
+    const hotkey_row = try widgets.openBinding(context, .str("knots.character.hotkey"), "Direct Hotkey");
     try hotkey.field(context, character, "hotkey");
     try hotkey_row.close(context);
     try widgets.hintText(context, .str("knots.character.hotkey.hint"), "Brings this character's client to the front.");
@@ -307,10 +290,14 @@ fn colors(context: *ui.Frame, character: CharacterRef) !void {
 fn windowPosition(context: *ui.Frame, character: CharacterRef) !void {
     const row = try widgets.openBinding(context, .str("knots.character.window_position"), "Window Position");
     try context.e(Rect{ .key = .src(@src()), .style = &style.spacer });
-    const shown = if (character.get("windowPosition")) |position| try std.fmt.allocPrint(context.arena(), "{d}, {d}", .{ position.x, position.y }) else lang.text("Not set");
+    const saved = character.get("windowPosition");
+    const shown = if (saved) |position| try std.fmt.allocPrint(context.arena(), "{d}, {d}", .{ position.x, position.y }) else lang.text("Not set");
     try context.e(Text{ .selectable = false, .key = .src(@src()), .content = shown, .style = &style.muted_text });
     const name = character.get("name");
-    if (try widgets.confirmButton(context, ui.Key.str("knots.character.position.clear").indexed(character.index), "\u{00D7}", "OK", &style.icon_button_danger_text, &style.icon_button_confirm)) {
+    const clear_key = ui.Key.str("knots.character.position.clear").indexed(character.index);
+    if (saved == null) {
+        _ = try context.interact(Button{ .key = clear_key, .label = "\u{00D7}", .disabled = true, .style = &style.icon_button_disabled_text });
+    } else if (try widgets.confirmButton(context, clear_key, "\u{00D7}", "OK", &style.icon_button_danger_text, &style.icon_button_confirm)) {
         positions.clear(name) catch |err| {
             slog.err("Failed to clear the window position of '{s}': {}", .{ name, err });
             status.show(.failure, "Failed to save: {err}", .{ .err = err });

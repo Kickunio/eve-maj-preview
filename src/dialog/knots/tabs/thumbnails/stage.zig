@@ -1,6 +1,7 @@
 //! The Appearance tab's thumbnail preview: drawn from the edited settings at its real size, its texts dragged into place and clicked to edit in a popover; main thread only.
 const std = @import("std");
 const ui = @import("ui");
+const config = @import("../../../../config.zig");
 const types = @import("../../../../config/types.zig");
 const draw = @import("../../../../thumbnail/draw.zig");
 const session = @import("../../session.zig");
@@ -13,6 +14,9 @@ const images = @import("../../images.zig");
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
+const Image = ui.component.Image;
+const Tooltip = ui.component.Tooltip;
+const Canvas = ui.component.Canvas;
 const Box = widgets.Box;
 const measuredBox = widgets.measuredBox;
 
@@ -76,6 +80,7 @@ pub fn show(context: *ui.Frame) !void {
     inline for (chips.CHIPS, 0..) |chip, index| {
         try showChip(context, chip, index, stage_box, stage_size, scale);
     }
+    try focusedBorder(context, thumbnail, stage_size);
 
     try stage.close(context);
     try frame.close(context);
@@ -112,7 +117,7 @@ fn chipKey(index: usize) ui.Key {
     return ui.Key.str("knots.stage.chip").indexed(index);
 }
 
-/// The overlay as a thumbnail draws it, with its sample text; outlined while hovered or edited, and faded while it's off.
+/// With its sample text, outlined, and a tooltip saying how to use it; a ghost with a dashed outline while off.
 fn showChip(context: *ui.Frame, comptime chip: chips.Chip, comptime index: usize, stage_box: Box, stage_size: [2]f32, scale: f32) !void {
     const ui_state = context.ui();
     const key = chipKey(index);
@@ -156,18 +161,22 @@ fn showChip(context: *ui.Frame, comptime chip: chips.Chip, comptime index: usize
     };
 
     const is_selected = g_is_popover_open and index == g_selected_index;
+    const is_shown = look.off_switch == null;
     const arena = context.arena();
+    const trigger_style = try arena.create(ui.Style);
+    trigger_style.* = style.overlay_text_trigger.with(.{ .offset = position });
+    const tip = Tooltip{ .key = key.indexed(2), .content = try chips.tipText(arena, look.off_switch), .style = trigger_style, .parts = .{ .popup = &style.row_tooltip } };
+    _ = try tip.open(context);
+    const padding = [2]f32{ draw.TEXT_PADDING_X * scale, draw.TEXT_PADDING_Y * scale };
     const chip_style = try arena.create(ui.Style);
     chip_style.* = style.overlay_text.with(.{
-        .offset = position,
-        .padding = .xy(draw.TEXT_PADDING_X * scale, draw.TEXT_PADDING_Y * scale),
-        .background = .{ .color = color_convert.fromArgb(look.background_color) },
-        // At rest the outline is the background, so the text box reaches the edge as the thumbnail's does.
-        .border_color = if (is_selected) .accent else .{ .color = color_convert.fromArgb(look.background_color) },
-        .opacity = if (look.is_shown) 1 else style.OFF_TEXT_OPACITY,
+        .padding = .xy(padding[0], padding[1]),
+        .background = if (is_shown) .{ .color = color_convert.fromArgb(look.background_color) } else .{ .color = style.CHIP_OFF_FILL },
+        .border_color = if (is_selected) .accent else if (is_shown) .{ .color = style.CHIP_OUTLINE } else .{ .color = .transparent },
     });
     const button = Button{ .key = key, .style = chip_style };
-    if ((try button.openResponse(context)).hovered) ui_state.requestCursor(.move);
+    const is_hovered = (try button.openResponse(context)).hovered;
+    if (is_hovered) ui_state.requestCursor(.move);
     const text_style = try arena.create(ui.Style);
     text_style.* = .{
         .font = switch (look.font_weight) {
@@ -175,10 +184,18 @@ fn showChip(context: *ui.Frame, comptime chip: chips.Chip, comptime index: usize
             .Bold, .BoldItalic => style.FONT_SEMIBOLD,
         },
         .font_size = .{ .px = @as(f32, @floatFromInt(look.font_size)) * scale },
-        .foreground = color_convert.solid(look.color),
+        .foreground = if (is_shown) color_convert.solid(look.color) else .{ .color = style.TEXT },
     };
     try context.e(Text{ .selectable = false, .key = key.indexed(1), .content = chip.sample, .style = text_style });
+    // Hover and selection draw the accent outline instead.
+    if (!is_shown and !is_hovered and !is_selected) {
+        const outline_style = try arena.create(ui.Style);
+        // Absolute children start inside the padding, so step back out to the chip's edge.
+        outline_style.* = .{ .position = .absolute, .offset = .{ -padding[0], -padding[1] }, .width = .fixed(chip_size[0]), .height = .fixed(chip_size[1]) };
+        try context.e(Canvas{ .key = key.indexed(3), .commands = try dashedOutline(arena, chip_size, style.MUTED.value), .style = outline_style });
+    }
     try button.close(context);
+    try tip.close(context);
 }
 
 /// Where the settings put a chip: its anchor's box corner plus the scaled offsets, kept on the stage.
@@ -190,7 +207,7 @@ fn settledPosition(look: chips.Look, chip_size: [2]f32, stage_size: [2]f32, scal
     };
 }
 
-/// The cursor's spot for the chip, snapped flush to the nearest anchor when close and held within the offset range.
+/// Snapped flush to the nearest anchor when close, and held within the offset range.
 fn dragTarget(mouse: [2]f64, grab: [2]f32, stage_box: Box, chip_size: [2]f32, stage_size: [2]f32, scale: f32, range: [2]f32) [2]f32 {
     const max = [2]f32{ @max(0, stage_size[0] - chip_size[0]), @max(0, stage_size[1] - chip_size[1]) };
     var raw_position = [2]f32{
@@ -205,7 +222,7 @@ fn dragTarget(mouse: [2]f64, grab: [2]f32, stage_box: Box, chip_size: [2]f32, st
     };
 }
 
-/// The anchor is the third of the thumbnail the chip's centre lands in; the offsets are what's left over, in real pixels.
+/// The anchor is the third the chip's centre lands in; offsets are the rest, in real pixels.
 fn dropResult(position: [2]f32, chip_size: [2]f32, stage_size: [2]f32, scale: f32, range: [2]f32) Drop {
     const zone = zoneFor(position, chip_size, stage_size);
     const anchor = anchorPosition(zone, chip_size, stage_size);
@@ -248,6 +265,64 @@ fn stageBackground(context: *ui.Frame, stage_size: [2]f32, opacity: f32) !void {
         .opacity = opacity,
     };
     if (images.g_layout_preview.image(.str("knots.stage.backdrop"), image_style)) |image| try context.e(image);
+}
+
+/// Drawn by the thumbnail's own border code at real size, then scaled with the stage.
+fn focusedBorder(context: *ui.Frame, thumbnail: *const config.ThumbnailConfig, stage_size: [2]f32) !void {
+    if (!thumbnail.showBorderWhenFocused) return;
+    const width: usize = @intCast(@max(thumbnail.width, 1));
+    const height: usize = @intCast(@max(thumbnail.height, 1));
+    // drawBorder needs room for both sides.
+    const border_width = @min(thumbnail.borderWidth, @min(width, height) / 2);
+    const pixels = try context.arena().alloc(u32, width * height);
+    @memset(pixels, 0);
+    draw.drawBorder(.{ .pixels = pixels.ptr, .width = width, .height = height }, border_width, thumbnail.borderColor, thumbnail.borderStyle);
+
+    const look = extern struct { width: u32, height: u32, border_width: u32, color: u32, style: u32 }{
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .border_width = @intCast(border_width),
+        .color = thumbnail.borderColor,
+        .style = @intFromEnum(thumbnail.borderStyle),
+    };
+    const image_style = try context.arena().create(ui.Style);
+    image_style.* = .{
+        .position = .absolute,
+        .width = .fixed(stage_size[0]),
+        .height = .fixed(stage_size[1]),
+    };
+    try context.e(Image{
+        .key = .str("knots.stage.border"),
+        .source = .{ .pixels = .{
+            .data = std.mem.sliceAsBytes(pixels),
+            .width = look.width,
+            .height = look.height,
+            // 0xAARRGGBB words sit in memory as B, G, R, A.
+            .format = .bgra8_srgb,
+            .upload_policy = .versioned,
+            .version = std.hash.Wyhash.hash(0, std.mem.asBytes(&look)),
+        } },
+        .style = image_style,
+    });
+}
+
+/// Knots borders can't be dashed, so the dashes are drawn.
+fn dashedOutline(arena: std.mem.Allocator, size: [2]f32, color: [4]f32) ![]const Canvas.DrawCmd {
+    const dash = style.CHIP_DASH_LENGTH;
+    var commands: std.ArrayList(Canvas.DrawCmd) = .empty;
+    var x: f32 = 0;
+    while (x < size[0]) : (x += dash * 2) {
+        const length = @min(dash, size[0] - x);
+        try commands.append(arena, .{ .fill_rect = .{ .x = x, .y = 0, .w = length, .h = 1, .color = color } });
+        try commands.append(arena, .{ .fill_rect = .{ .x = x, .y = size[1] - 1, .w = length, .h = 1, .color = color } });
+    }
+    var y: f32 = 0;
+    while (y < size[1]) : (y += dash * 2) {
+        const length = @min(dash, size[1] - y);
+        try commands.append(arena, .{ .fill_rect = .{ .x = 0, .y = y, .w = 1, .h = length, .color = color } });
+        try commands.append(arena, .{ .fill_rect = .{ .x = size[0] - 1, .y = y, .w = 1, .h = length, .color = color } });
+    }
+    return commands.items;
 }
 
 fn scaleAlpha(argb: u32, alpha: f32) ui.Color {

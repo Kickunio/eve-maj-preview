@@ -16,6 +16,18 @@ const slog = log.Scoped("tray");
 /// Keeps profile item IDs inside their range above IDM_PROFILE_BASE.
 const MAX_PROFILE_ITEMS = 1000;
 
+/// Keeps each group submenu's item IDs inside their range above its base.
+const MAX_GROUP_ITEMS = 1000;
+
+/// How often a missing icon is added again, in case Explorer's TaskbarCreated never arrives.
+const RETRY_INTERVAL_MS: u64 = 5000;
+
+/// An item in one of the group submenus.
+const GroupCommand = struct {
+    group_index: usize,
+    action: actions.GroupAction,
+};
+
 pub const TrayIcon = struct {
     hwnd: win32.HWND,
     nid: win32.NOTIFYICONDATAA,
@@ -23,7 +35,13 @@ pub const TrayIcon = struct {
     owns_icon: bool,
     /// The profiles the menu last listed, which a profile item's ID indexes into; owned, freed by freeProfiles.
     profiles: std.ArrayList([]const u8) = .empty,
+    /// False until the notification area takes the icon, which it can't at logon or while Explorer restarts.
+    is_shown: bool = false,
+    last_show_attempt: win32.Ticks = .{},
+    /// Explorer's TaskbarCreated message, or 0 if it couldn't be registered.
+    taskbar_created_message: win32.UINT = 0,
 
+    /// Fails only without an icon to show; a notification area that isn't ready yet is retried.
     pub fn init(allocator: std.mem.Allocator, hwnd: win32.HWND) !TrayIcon {
         var tray: TrayIcon = .{
             .hwnd = hwnd,
@@ -57,20 +75,59 @@ pub const TrayIcon = struct {
         @memcpy(tray.nid.szTip[0..tip.len], tip);
         tray.nid.szTip[tip.len] = 0;
 
-        if (win32.Shell_NotifyIconA(win32.NIM_ADD, &tray.nid) == 0) {
-            slog.err("Failed to add system tray icon", .{});
-            return error.AddTrayIconFailed;
+        tray.listenForTaskbarCreated();
+        tray.show();
+        if (tray.is_shown) {
+            slog.debug("System tray icon created", .{});
+        } else {
+            slog.warn("Failed to add the system tray icon, retrying until the notification area is ready", .{});
         }
-
-        slog.debug("System tray icon created", .{});
         return tray;
     }
 
     pub fn deinit(self: *TrayIcon) void {
-        _ = win32.Shell_NotifyIconA(win32.NIM_DELETE, &self.nid);
+        if (self.is_shown) _ = win32.Shell_NotifyIconA(win32.NIM_DELETE, &self.nid);
         if (self.owns_icon) _ = win32.DestroyIcon(self.nid.hIcon);
         self.freeProfiles();
         slog.debug("System tray icon removed", .{});
+    }
+
+    /// Explorer sends TaskbarCreated when it starts or restarts with an empty notification area; false for any other message.
+    pub fn handleTaskbarCreated(self: *TrayIcon, msg: win32.UINT) bool {
+        if (self.taskbar_created_message == 0 or msg != self.taskbar_created_message) return false;
+        self.show();
+        if (self.is_shown) {
+            slog.info("Added the system tray icon again for a restarted Explorer", .{});
+        } else {
+            slog.warn("Failed to add the system tray icon for a restarted Explorer, retrying", .{});
+        }
+        return true;
+    }
+
+    /// From the tick: adds a missing icon at most every RETRY_INTERVAL_MS.
+    pub fn retryIfMissing(self: *TrayIcon, now: win32.Ticks) void {
+        if (self.is_shown or now.elapsedSince(self.last_show_attempt) < RETRY_INTERVAL_MS) return;
+        self.show();
+        if (self.is_shown) slog.info("Added the system tray icon", .{});
+    }
+
+    /// NIM_MODIFY catches an add Explorer reported as failed but kept, which happens while it's busy at logon.
+    fn show(self: *TrayIcon) void {
+        self.last_show_attempt = win32.Ticks.now();
+        self.is_shown = win32.toBool(win32.Shell_NotifyIconA(win32.NIM_ADD, &self.nid)) or
+            win32.toBool(win32.Shell_NotifyIconA(win32.NIM_MODIFY, &self.nid));
+    }
+
+    fn listenForTaskbarCreated(self: *TrayIcon) void {
+        self.taskbar_created_message = win32.RegisterWindowMessageA("TaskbarCreated");
+        if (self.taskbar_created_message == 0) {
+            slog.warn("Failed to register for Explorer restarts, so a lost tray icon comes back by retry only: error {d}", .{win32.GetLastError()});
+            return;
+        }
+        // An elevated app otherwise never receives it from the unelevated Explorer.
+        if (!win32.toBool(win32.ChangeWindowMessageFilterEx(self.hwnd, self.taskbar_created_message, win32.MSGFLT_ALLOW, null))) {
+            slog.warn("Failed to allow Explorer's restart message through, so a lost tray icon may come back by retry only: error {d}", .{win32.GetLastError()});
+        }
     }
 
     fn freeProfiles(self: *TrayIcon) void {
@@ -141,6 +198,8 @@ pub const TrayIcon = struct {
         }
 
         _ = win32.AppendMenuA(menu, win32.MF_STRING, win32.IDM_CLOSE_ALL_CLIENTS, "Close All Clients");
+        self.appendGroupMenu(menu, config.hotkeyGroups.items, win32.IDM_MINIMIZE_GROUP_BASE, "Minimize Group");
+        self.appendGroupMenu(menu, config.hotkeyGroups.items, win32.IDM_CLOSE_GROUP_BASE, "Close Group");
         _ = win32.AppendMenuA(menu, win32.MF_SEPARATOR, 0, null);
         _ = win32.AppendMenuA(menu, win32.MF_STRING, win32.IDM_EXIT, "Exit");
 
@@ -172,6 +231,29 @@ pub const TrayIcon = struct {
         }
     }
 
+    /// Each item's ID is `id_base` plus its group index.
+    fn appendGroupMenu(self: *const TrayIcon, menu: win32.HMENU, groups: []const config_mod.HotkeyGroupConfig, id_base: usize, label: [*:0]const u8) void {
+        if (groups.len == 0) {
+            _ = win32.AppendMenuA(menu, win32.MF_STRING | win32.MF_GRAYED, 0, label);
+            return;
+        }
+        // Destroyed along with `menu`.
+        const group_menu = win32.CreatePopupMenu() orelse {
+            slog.err("Failed to create the '{s}' submenu", .{std.mem.span(label)});
+            return;
+        };
+        for (groups[0..@min(groups.len, MAX_GROUP_ITEMS)], 0..) |*group, i| {
+            var name_buf: [config_mod.HotkeyGroupConfig.DISPLAY_NAME_SIZE]u8 = undefined;
+            const name_z = self.allocator.dupeSentinel(u8, group.displayName(&name_buf, i), 0) catch |err| {
+                slog.warn("Failed to copy group name '{s}' for tray menu: {}", .{ group.name, err });
+                continue;
+            };
+            defer self.allocator.free(name_z);
+            _ = win32.AppendMenuA(group_menu, win32.MF_STRING, id_base + i, name_z);
+        }
+        _ = win32.AppendMenuA(menu, win32.MF_POPUP, @intFromPtr(group_menu), label);
+    }
+
     pub fn handleMenuCommand(self: *const TrayIcon, command_id: u16, app: *App) void {
         if (command_id >= win32.IDM_PROFILE_BASE and command_id < win32.IDM_PROFILE_BASE + MAX_PROFILE_ITEMS) {
             const index = command_id - win32.IDM_PROFILE_BASE;
@@ -180,9 +262,13 @@ pub const TrayIcon = struct {
             app.requestProfileSwitch(self.profiles.items[index]);
             return;
         }
+        if (groupCommand(command_id)) |command| {
+            slog.info("Group {s} requested from system tray", .{@tagName(command.action)});
+            actions.applyToGroup(app.scout.getWindows(), &app.store.live, app.store.live.hotkeyGroups.items, command.group_index, command.action);
+            return;
+        }
 
-        const store = &app.store;
-        const config = &store.live;
+        const config = &app.store.live;
         switch (command_id) {
             win32.IDM_EXIT => {
                 slog.info("Exit requested from system tray", .{});
@@ -192,17 +278,9 @@ pub const TrayIcon = struct {
                 slog.info("Opening configuration dialog from system tray", .{});
                 knots_host.open();
             },
-            win32.IDM_TOGGLE_DRAGGING => {
-                const is_enabled = !config.interaction.enableDragging;
-                store.update(.{ .interaction = .{ .enableDragging = is_enabled } });
-                slog.info("Thumbnail dragging toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
-            },
+            win32.IDM_TOGGLE_DRAGGING => app.toggleDragging(),
             win32.IDM_TOGGLE_AUTO_MINIMIZE => app.toggleAutoMinimize(),
-            win32.IDM_TOGGLE_TRAVEL_MODE => {
-                const is_enabled = !config.travel.enabled;
-                store.update(.{ .travel = .{ .enabled = is_enabled } });
-                slog.info("Travel Mode toggled: {s}", .{if (is_enabled) "enabled" else "disabled"});
-            },
+            win32.IDM_TOGGLE_TRAVEL_MODE => app.toggleTravelMode(),
             win32.IDM_TOGGLE_VISIBILITY => {
                 slog.info("Toggle visibility requested from system tray", .{});
                 const thumbnail_set = app.thumbnail_set orelse {
@@ -213,7 +291,7 @@ pub const TrayIcon = struct {
             },
             win32.IDM_TOGGLE_NOTIF_HISTORY => {
                 slog.info("Toggle history panel requested from system tray", .{});
-                app.notifications.panel.toggle(app.allocator, store, app.instance, scout.anyCharacterLoggedIn(app.scout.getWindows()));
+                app.toggleNotificationHistory();
             },
             win32.IDM_CLEAR_NOTIF_HISTORY => {
                 slog.info("Clear notification history requested from system tray", .{});
@@ -243,6 +321,17 @@ pub const TrayIcon = struct {
         }
     }
 };
+
+/// Null when `command_id` is outside both group submenus' ranges.
+fn groupCommand(command_id: u16) ?GroupCommand {
+    if (command_id >= win32.IDM_MINIMIZE_GROUP_BASE and command_id < win32.IDM_MINIMIZE_GROUP_BASE + MAX_GROUP_ITEMS) {
+        return .{ .group_index = command_id - win32.IDM_MINIMIZE_GROUP_BASE, .action = .minimize };
+    }
+    if (command_id >= win32.IDM_CLOSE_GROUP_BASE and command_id < win32.IDM_CLOSE_GROUP_BASE + MAX_GROUP_ITEMS) {
+        return .{ .group_index = command_id - win32.IDM_CLOSE_GROUP_BASE, .action = .close };
+    }
+    return null;
+}
 
 fn appendChecked(menu: win32.HMENU, is_checked: bool, id: usize, label: [*:0]const u8) void {
     var flags: u32 = win32.MF_STRING;

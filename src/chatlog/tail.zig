@@ -21,8 +21,9 @@ pub const Backoff = struct {
 };
 
 pub const LogFile = struct {
-    /// Both strings owned; freed in deinit.
+    /// Owned; freed in deinit.
     path: []const u8,
+    /// Owned; freed in deinit.
     character_name: []const u8,
     /// UTF-16 LE if true, UTF-8 if not.
     is_chatlog: bool,
@@ -37,6 +38,8 @@ pub const LogFile = struct {
     idle_check_count: u32 = 0,
     skipped_cycle_count: u32 = 0,
     poll_interval_multiplier: u8 = 1,
+    /// Failed polls in a row; only the first is logged.
+    failure_count: u32 = 0,
     lines: lines_mod.LineAssembler = .{},
     u16_buffer: std.ArrayList(u16) = .empty,
     utf8_buffer: std.ArrayList(u8) = .empty,
@@ -82,27 +85,36 @@ pub const LogFile = struct {
         return found;
     }
 
-    /// Passes each complete line appended since the last poll to `handler`; see LineAssembler.feed.
-    pub fn poll(self: *LogFile, allocator: std.mem.Allocator, io: std.Io, backoff: Backoff, handler: anytype) !void {
+    /// Passes each complete line appended since the last poll to `handler`, logging its own failures; see LineAssembler.feed.
+    pub fn poll(self: *LogFile, allocator: std.mem.Allocator, io: std.Io, backoff: Backoff, handler: anytype) void {
         if (self.is_disabled) return;
         self.skipped_cycle_count += 1;
         if (self.skipped_cycle_count < @min(self.poll_interval_multiplier, backoff.max_multiplier)) return;
         self.skipped_cycle_count = 0;
 
-        const file = self.file orelse self.open(io) orelse return;
-        if (!self.has_started) return self.skipToEnd(io, file);
-        self.readAppended(allocator, io, file, backoff, handler) catch |err| {
+        self.pollOnce(allocator, io, backoff, handler) catch |err| {
             // Reopened on the next poll, in case the handle itself went bad.
             self.closeFile(io);
-            return err;
+            self.poll_interval_multiplier = @min(self.poll_interval_multiplier *| 2, backoff.max_multiplier);
+            self.failure_count +|= 1;
+            if (self.failure_count == 1) slog.err("Failed to read '{s}' for '{s}', retrying less often: {}", .{ self.path, self.character_name, err });
+            return;
         };
+        if (self.failure_count > 0 and self.file != null) {
+            slog.info("Reading '{s}' again after {} failed attempt(s)", .{ self.path, self.failure_count });
+            self.failure_count = 0;
+        }
+    }
+
+    /// `handler` has `onLine([]const u8)` and `onLongLine(usize)`.
+    fn pollOnce(self: *LogFile, allocator: std.mem.Allocator, io: std.Io, backoff: Backoff, handler: anytype) !void {
+        const file = self.file orelse try self.open(io) orelse return;
+        if (!self.has_started) return self.skipToEnd(io, file);
+        try self.readAppended(allocator, io, file, backoff, handler);
     }
 
     fn skipToEnd(self: *LogFile, io: std.Io, file: std.Io.File) !void {
-        const stat = file.stat(io) catch |err| {
-            self.closeFile(io);
-            return err;
-        };
+        const stat = try file.stat(io);
         self.last_size = stat.size;
         self.last_modified_ns = @intCast(stat.mtime.nanoseconds);
         self.position = stat.size;
@@ -110,22 +122,22 @@ pub const LogFile = struct {
         slog.info("Following '{s}' from its end, after its start failed", .{self.path});
     }
 
-    fn open(self: *LogFile, io: std.Io) ?std.Io.File {
-        const file = std.Io.Dir.cwd().openFile(io, self.path, .{}) catch |err| {
-            switch (err) {
-                // Retried from the start, in case it's recreated.
-                error.FileNotFound => {
-                    self.position = 0;
-                    self.last_size = 0;
-                    self.lines.reset();
-                },
-                error.BadPathName => {
-                    slog.warn("Failed to open '{s}' for '{s}', disabling it: {}", .{ self.path, self.character_name, err });
-                    self.is_disabled = true;
-                },
-                else => slog.warn("Failed to open '{s}': {}", .{ self.path, err }),
-            }
-            return null;
+    /// Null when there's nothing to read yet, or ever.
+    fn open(self: *LogFile, io: std.Io) !?std.Io.File {
+        const file = std.Io.Dir.cwd().openFile(io, self.path, .{}) catch |err| switch (err) {
+            // Retried from the start, in case it's recreated.
+            error.FileNotFound => {
+                self.position = 0;
+                self.last_size = 0;
+                self.lines.reset();
+                return null;
+            },
+            error.BadPathName => {
+                slog.warn("Failed to open '{s}' for '{s}', disabling it: {}", .{ self.path, self.character_name, err });
+                self.is_disabled = true;
+                return null;
+            },
+            else => return err,
         };
         self.file = file;
         return file;
@@ -150,8 +162,8 @@ pub const LogFile = struct {
         self.idle_check_count = 0;
         self.poll_interval_multiplier = 1;
 
-        // EVE only appends, so a shrink means something else (e.g. a sync client) rewrote it; replaying would refire old events.
-        if (size < self.last_size) {
+        // EVE only appends, so a size below what's been read means something else (e.g. a sync client) rewrote it; replaying would refire old events.
+        if (size < self.position) {
             self.position = if (self.is_chatlog) size & ~@as(u64, 1) else size;
             self.last_size = size;
             self.last_modified_ns = modified_ns;

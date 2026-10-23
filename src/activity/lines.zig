@@ -31,7 +31,7 @@ pub const ParsedMiningEvent = struct {
     }
 };
 
-/// `weapon` borrows from the already-stripped line; an incoming miss counts as a zero-amount hit for Taking Damage, and an outgoing one is dropped.
+/// `weapon` borrows from the line; an incoming miss is a zero-amount hit, for Taking Damage, and an outgoing one is null.
 pub fn parseCombatLine(stripped_line: []const u8) ?struct { amount: u32, is_incoming: bool, weapon: []const u8 } {
     const combat_prefix = "(combat)";
     const combat_index = std.mem.find(u8, stripped_line, combat_prefix) orelse return null;
@@ -85,7 +85,7 @@ pub fn isWeaponExcluded(weapon: []const u8, excluded_csv: []const u8) bool {
     return false;
 }
 
-/// The ISK added to the next payout; unlike combat and mining amounts, it has thousands separators ("246,153 ISK", or "246 153 ISK" on some Windows locales).
+/// Unlike combat and mining amounts, the ISK has thousands separators ("246,153 ISK", or "246 153 ISK" on some locales).
 pub fn parseBountyLine(line: []const u8) ?f32 {
     const bounty_prefix = "(bounty)";
     const bounty_index = std.mem.find(u8, line, bounty_prefix) orelse return null;

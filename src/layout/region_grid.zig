@@ -6,12 +6,12 @@ const types = @import("../config/types.zig");
 
 const Position = characters.Position;
 
-/// box_width/box_height is the per-column/row share of the region, used only to pick the column count; cell_width/cell_height is the actual aspect-corrected thumbnail size used for positioning.
+/// box_* is each column's or row's share of the region, which picks the column count; cell_* is the aspect-corrected thumbnail size it's positioned by.
 pub const RegionFitGrid = struct { columns: u32, rows: u32, box_width: i32, box_height: i32, cell_width: i32, cell_height: i32 };
 
 pub const RegionFitCap = struct { width: i32, height: i32 };
 
-/// Grows one column or row at a time from a single full-region cell, whichever yields the bigger cell, so the grid grows incrementally instead of re-optimizing from scratch per count.
+/// Grows from one full-region cell a column or row at a time, whichever gives the bigger cell.
 pub fn calculateRegionFitGrid(region: win32.RECT, count: usize, spacing_x: i32, spacing_y: i32, aspect_ratio: f32, max_cell: ?RegionFitCap) RegionFitGrid {
     const cell_count: u32 = @intCast(@max(count, 1));
     const region_width = region.right - region.left;
@@ -55,7 +55,7 @@ pub fn regionFitPositionForGrid(region: win32.RECT, grid: RegionFitGrid, index: 
     };
 }
 
-/// Floors at 1px (a Win32 API-validity floor, not a usability minimum).
+/// Never under 1px, the least Win32 takes for a window.
 fn fitAspect(box_width: i32, box_height: i32, aspect_ratio: f32) struct { width: i32, height: i32 } {
     if (box_width <= 0 or box_height <= 0) return .{ .width = 1, .height = 1 };
 

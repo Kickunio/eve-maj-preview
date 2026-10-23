@@ -93,12 +93,11 @@ pub const Layout = struct {
             return .{ .x = saved_position.x, .y = saved_position.y };
         }
 
-        // No saved position: flow left-to-right from startX/startY, wrapping to a new row instead of overlapping once a row runs out of width.
+        // Wraps to a new row once a row runs out of width, instead of overlapping.
         const slot = @as(i32, @intCast(self.unpositionedIndex(index)));
         const step_x = thumbnail_width + scalePixels(display.newThumbnailSpacing, scale);
         const step_y = thumbnail_height + scalePixels(display.newThumbnailSpacing, scale);
 
-        // Monitor bounds if one's configured, otherwise the real current virtual screen, not a guessed multi-monitor range.
         const bounds = monitor_bounds orelse win32.virtualScreenRect();
 
         // startX/startY are monitor-relative when a monitor is configured, absolute otherwise.
@@ -112,7 +111,7 @@ pub const Layout = struct {
 
         var position = config_mod.Position{ .x = start_x + column * step_x, .y = start_y + row * step_y };
 
-        // Clamp to keep thumbnails from spawning fully off-screen, while still allowing edge placement; only bites once rows also overflow the screen's height.
+        // Keeps a thumbnail from spawning fully off-screen; only bites once rows overflow the screen's height.
         const clamp_margin = 50;
         const monitor_suffix = if (monitor_bounds != null) " for monitor" else "";
         clampAxisWithWarn(&position.x, bounds.left - clamp_margin, bounds.right - thumbnail_width + clamp_margin, "X", "left", "right", monitor_suffix);
@@ -126,7 +125,7 @@ pub const Layout = struct {
         return @as(f32, @floatFromInt(self.config.thumbnail.width)) / @as(f32, @floatFromInt(self.config.thumbnail.height));
     }
 
-    /// Physical-pixel cap on a space's cell size, DPI-scaled for the space's own monitor (which may differ from the app's configured monitor); null unless `should_limit`.
+    /// In physical pixels, scaled for the space's own monitor rather than the app's; null unless `should_limit`.
     fn thumbnailSizeCap(self: Layout, region: win32.RECT, should_limit: bool) ?RegionFitCap {
         if (!should_limit) return null;
         const center = win32.POINT{ .x = @divTrunc(region.left + region.right, 2), .y = @divTrunc(region.top + region.bottom, 2) };

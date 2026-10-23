@@ -19,33 +19,34 @@ var g_selected_index: usize = 0;
 
 /// Both thumbnails and the client list colour system names by these.
 pub fn show(context: *ui.Frame) !void {
-    const section = try widgets.openSection(context, "System Colors", "Colors chosen systems' names on thumbnails and in the client list.", &style.section);
-    try widgets.hintText(context, .src(@src()), "These beat Unique System Colors. Exact names win over partial ones.");
+    const section = try widgets.openSection(context, "System Colors", "Give chosen solar systems' names their own color on thumbnails and in the client list.", &style.section);
     const profile = session.profile();
     const count = profile.ptr.systemColors.items.len;
+    if (count == 0) {
+        if (try widgets.emptyListRow(context, .src(@src()), "No system colors yet.", "Add System Color")) addEntry(context, profile);
+        try section.close(context);
+        return;
+    }
     // The list can shrink while the window is open, e.g. on a profile switch.
-    if (g_selected_index >= count) g_selected_index = count -| 1;
+    if (g_selected_index >= count) g_selected_index = count - 1;
     const master_detail = Rect{ .key = .src(@src()), .style = &style.master_detail };
     _ = try master_detail.open(context);
     try roster(context, profile);
-    if (profile.ptr.systemColors.items.len == 0) {
-        const empty = Rect{ .key = .src(@src()), .style = &style.detail_fit };
-        _ = try empty.open(context);
-        try widgets.paragraph(context, .src(@src()), "Add a system color under the list to color a system's name.");
-        try empty.close(context);
-    } else {
-        try detail(context, profile, g_selected_index);
-    }
+    try detail(context, profile, g_selected_index);
     try master_detail.close(context);
     try section.close(context);
+}
+
+/// Its details are the tab's last section, so the tab's end shows them.
+fn addEntry(context: *ui.Frame, profile: ProfileRef) void {
+    const added = profile.append("systemColors", .{ .systemName = "", .color = 0xFFFFFFFF }) orelse return;
+    g_selected_index = added.index;
+    widgets.scrollToEnd(context, widgets.TAB_CONTENT_KEY);
 }
 
 fn roster(context: *ui.Frame, profile: ProfileRef) !void {
     const entries = profile.ptr.systemColors.items;
     const list = try widgets.openRoster(context, .str("knots.system_color.roster"), &style.roster_fixed, true);
-    if (entries.len == 0) {
-        try widgets.boxedText(context, .src(@src()), "No system colors yet.", &style.roster_empty, &style.roster_empty_text);
-    }
     const arena = context.arena();
     for (entries, 0..) |entry, index| {
         const is_selected = index == g_selected_index;
@@ -67,9 +68,7 @@ fn roster(context: *ui.Frame, profile: ProfileRef) !void {
         try widgets.fitRosterRow(context, name, style.SPACE_DOT_SIZE, "");
         try row.close(context);
     }
-    if (try list.close(context, .{ .add_label = "Add System Color" }) == .add) {
-        if (profile.append("systemColors", .{ .systemName = "", .color = 0xFFFFFFFF })) |added| g_selected_index = added.index;
-    }
+    if (try list.close(context, .{ .add_label = "Add System Color" }) == .add) addEntry(context, profile);
 }
 
 fn rowName(context: *ui.Frame, profile: ProfileRef, index: usize) ![]const u8 {
@@ -91,9 +90,9 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     const color_row = try widgets.openBinding(context, ui.Key.str("knots.system_color.color").indexed(index), "Color");
     try bind.colorBox(context, entry, "color");
     try color_row.close(context);
-    try widgets.hintText(context, .src(@src()), "The color these systems' names are drawn in.");
+    try widgets.hintText(context, .src(@src()), "The color these systems' names are drawn in; it beats Unique System Colors.");
     // Always shown, unlike a field hint: the wildcards are easy to miss otherwise.
-    try widgets.paragraph(context, .src(@src()), "Separate names with commas. Wildcards: * any text, ? one character, # one digit, so J###### is every wormhole.");
+    try widgets.paragraph(context, .src(@src()), "Separate names with commas. Wildcards: * any text, ? one character, # one digit, so J###### is every wormhole. Exact names beat wildcards.");
     try stack.close(context);
 
     if (removed) {

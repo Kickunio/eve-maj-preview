@@ -12,12 +12,6 @@ const Config = config_mod.Config;
 const ThumbnailWindow = window.ThumbnailWindow;
 const slog = log.Scoped("auto_minimize");
 
-/// Per-thumbnail auto-minimize state; only AutoMinimizer.check writes it after creation.
-pub const AutoMinimizeState = struct {
-    /// When check's delay counts from: the last tick the thumbnail was Active or Minimized.
-    inactive_since: win32.Ticks,
-};
-
 /// App owns it, so a thumbnail set rebuild keeps it.
 pub const AutoMinimizer = struct {
     last_focused_by_monitor: std.AutoHashMap(win32.HMONITOR, win32.HWND),
@@ -48,7 +42,7 @@ pub const AutoMinimizer = struct {
         return is_enabled;
     }
 
-    /// A monitor with no live recorded last-active client exempts everyone on it rather than minimize clients with no known "last active".
+    /// Also true when the monitor has no live recorded client, sparing everyone there.
     fn isLastActiveOnItsMonitor(self: *const AutoMinimizer, thumbnails: []const ThumbnailWindow, source_hwnd: win32.HWND) bool {
         const monitor = win32.MonitorFromWindow(source_hwnd, win32.MONITOR_DEFAULTTONEAREST) orelse return true;
         const last_active = self.last_focused_by_monitor.get(monitor) orelse return true;

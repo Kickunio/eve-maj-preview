@@ -13,7 +13,7 @@ const slog = log.Scoped("config");
 /// Not ".json", which would list it as a profile.
 const UNREADABLE_BACKUP_FILE = files.GLOBAL_SETTINGS_FILE ++ ".bak";
 
-/// Fallback prices are a Jita snapshot and will drift - re-fetch via "Fetch Prices" for current numbers.
+/// The prices are a Jita snapshot that drifts; Fetch Prices overrides them.
 pub const DEFAULT_ORE_TABLE = [_]OreEntry{
     .{ .name = "Veldspar", .category = "Ore", .volumeM3 = 0.10, .price = 11.53 },
     .{ .name = "Mordunium", .category = "Ore", .volumeM3 = 0.10, .price = 12.83 },
@@ -228,25 +228,28 @@ pub const GlobalConfig = struct {
                 slog.debug("No global settings file, using defaults", .{});
                 return GlobalConfig.fromWire(.{}, allocator);
             }
-            slog.err("Failed to read global settings file: {}", .{err});
-            std.Io.Dir.cwd().deleteFile(io, files.GLOBAL_SETTINGS_FILE) catch |delete_err| {
-                slog.warn("Failed to delete unreadable global settings file: {}", .{delete_err});
-            };
+            slog.err("Failed to read global settings file, using defaults and keeping it as '{s}': {}", .{ UNREADABLE_BACKUP_FILE, err });
+            keepUnreadable(io);
             return GlobalConfig.fromWire(.{}, allocator);
         };
         defer allocator.free(content);
 
         const settings = loadFromJson(allocator, content) catch |err| {
             slog.warn("Failed to parse global settings file, using defaults and keeping it as '{s}': {}", .{ UNREADABLE_BACKUP_FILE, err });
-            const cwd = std.Io.Dir.cwd();
-            cwd.rename(files.GLOBAL_SETTINGS_FILE, cwd, UNREADABLE_BACKUP_FILE, io) catch |rename_err| {
-                slog.err("Failed to keep unreadable global settings as '{s}': {}", .{ UNREADABLE_BACKUP_FILE, rename_err });
-            };
+            keepUnreadable(io);
             return GlobalConfig.fromWire(.{}, allocator);
         };
 
         slog.info("Loaded global settings: last profile = {s}", .{settings.lastUsedProfile});
         return settings;
+    }
+
+    /// Moved aside rather than deleted, since running on defaults saves over it; a file still locked fails that save too, so it survives either way.
+    fn keepUnreadable(io: std.Io) void {
+        const cwd = std.Io.Dir.cwd();
+        cwd.rename(files.GLOBAL_SETTINGS_FILE, cwd, UNREADABLE_BACKUP_FILE, io) catch |err| {
+            slog.err("Failed to keep unreadable global settings as '{s}': {}", .{ UNREADABLE_BACKUP_FILE, err });
+        };
     }
 
     fn loadFromJson(allocator: std.mem.Allocator, json_text: []const u8) !GlobalConfig {
@@ -260,7 +263,7 @@ pub const GlobalConfig = struct {
         return wire.toJsonAlloc(allocator, self);
     }
 
-    pub fn save(self: *GlobalConfig, io: std.Io) !void {
+    pub fn save(self: *const GlobalConfig, io: std.Io) !void {
         const json = try self.toJsonString(self.allocator);
         defer self.allocator.free(json);
 
@@ -275,16 +278,28 @@ pub const GlobalConfig = struct {
 
     pub fn updateLastUsed(self: *GlobalConfig, io: std.Io, profile_name: []const u8) !void {
         const is_same_profile = self.lastUsedProfile.len > 0 and std.mem.eql(u8, self.lastUsedProfile, profile_name);
+        if (is_same_profile) return;
 
-        if (!is_same_profile) {
-            const new_profile = try self.allocator.dupe(u8, profile_name);
-            errdefer self.allocator.free(new_profile);
+        const new_profile = try self.allocator.dupe(u8, profile_name);
+        errdefer self.allocator.free(new_profile);
 
-            self.allocator.free(self.lastUsedProfile);
-            self.lastUsedProfile = new_profile;
+        self.allocator.free(self.lastUsedProfile);
+        self.lastUsedProfile = new_profile;
 
-            try self.save(io);
+        try self.save(io);
+    }
+
+    /// After profile `old_name` was renamed `new_name`: its switch hotkeys follow it, saved if any did.
+    pub fn retargetProfileSwitches(self: *GlobalConfig, io: std.Io, old_name: []const u8, new_name: []const u8) !void {
+        var is_changed = false;
+        for (self.profileSwitchHotkeys.items) |*entry| {
+            if (!std.mem.eql(u8, entry.targetProfile, old_name)) continue;
+            const owned = try self.allocator.dupe(u8, new_name);
+            self.allocator.free(entry.targetProfile);
+            entry.targetProfile = owned;
+            is_changed = true;
         }
+        if (is_changed) try self.save(io);
     }
 
     pub fn saveDialogPosition(self: *GlobalConfig, io: std.Io, x: i32, y: i32) !void {
@@ -293,7 +308,7 @@ pub const GlobalConfig = struct {
         try self.save(io);
     }
 
-    /// Takes `edited`'s settings but running_fields, leaving it holding the replaced values to free; only while the chatlog worker, which reads ore prices, is stopped.
+    /// Takes all but running_fields, leaving `edited` holding the old values to free; only while the chatlog worker is stopped.
     pub fn adopt(self: *GlobalConfig, edited: *GlobalConfig) void {
         inline for (comptime wire.savedFields(GlobalConfig)) |f| {
             if (comptime !isRunningField(f.name)) std.mem.swap(f.type, &@field(self, f.name), &@field(edited, f.name));

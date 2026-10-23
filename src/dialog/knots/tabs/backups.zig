@@ -1,15 +1,18 @@
-//! The configuration window's Backups tab: profiles kept when they were deleted or couldn't be read, each restored as a new profile or deleted for good; main thread only.
+//! The configuration window's Backups tab: backing up the running profile, and profiles kept when they were backed up, deleted, reset, imported over or couldn't be read, each restored or deleted for good; main thread only.
 const std = @import("std");
 const ui = @import("ui");
+const win32 = @import("../../../platform/win32.zig");
 const config = @import("../../../config.zig");
 const host = @import("../host.zig");
 const profiles = @import("../profiles.zig");
 const session = @import("../session.zig");
+const status = @import("../status.zig");
 const style = @import("../style.zig");
 const widgets = @import("../widgets.zig");
 const lang = @import("../../../lang/lang.zig");
 const log = @import("../../../log.zig");
 
+const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
 const slog = log.Scoped("dialog_knots");
@@ -38,15 +41,14 @@ pub fn reset() void {
 
 pub fn show(context: *ui.Frame) !void {
     if (g_scanned_revision != profiles.revision()) scan();
-    const section = try widgets.openSection(context, "Profile Backups", "When you delete a profile, or one fails to load, a copy is kept here. Restore makes it a new profile and keeps the copy.", &style.section);
-    if (g_backups.len == 0) {
-        try widgets.paragraph(context, .src(@src()), "No backups yet: no profile has been deleted or failed to load.");
-    }
+    const section = try widgets.openSection(context, "Profile Backups", "Copies kept when a profile is deleted, reset, imported over or fails to load.", &style.section);
+    try actions(context);
     const arena = context.arena();
     for (g_backups, 0..) |backup, index| {
         const row = try widgets.openRow(context, ROW_KEY.indexed(index));
         const parsed = config.parseBackupName(backup);
-        try context.e(Text{ .selectable = false, .key = ROW_KEY.indexed(index).indexed(1), .content = try label(arena, parsed), .style = &style.label_aligned });
+        try context.e(Text{ .selectable = false, .key = ROW_KEY.indexed(index).indexed(1), .content = parsed.name, .style = &style.label_aligned });
+        if (parsed.saved_at_seconds) |seconds| try context.e(Text{ .selectable = false, .key = ROW_KEY.indexed(index).indexed(4), .content = try savedAt(arena, seconds), .style = &style.muted_text });
         if ((try context.interact(Button{ .key = ROW_KEY.indexed(index).indexed(2), .label = lang.text("Restore"), .style = &style.plain_button })).clicked) {
             host.restoreBackup(backup, parsed.name);
             // The prompt it opens is drawn by the header, which this frame has already drawn.
@@ -60,15 +62,47 @@ pub fn show(context: *ui.Frame) !void {
     try section.close(context);
 }
 
-/// "Main — 2026-10-10 02:40", or just the name for a backup saved without a time.
-fn label(arena: std.mem.Allocator, backup: config.BackupName) ![]const u8 {
-    const seconds = backup.saved_at_seconds orelse return backup.name;
+/// Back Up for the running profile and Open Backups Folder, above the list.
+fn actions(context: *ui.Frame) !void {
+    const running = session.profile().ptr.profile_name;
+    const row = try widgets.openRow(context, .src(@src()));
+    // The empty state takes the row's spare width, pushing the buttons right as the spacer does.
+    if (g_backups.len == 0) {
+        try context.e(Text{ .selectable = false, .key = .src(@src()), .content = lang.text("No backups yet."), .style = &style.empty_list_text });
+    } else {
+        try context.e(Rect{ .key = .src(@src()), .style = &style.spacer });
+    }
+    const label = try lang.format(context.arena(), "Back Up '{name}'", .{ .name = profiles.displayName(running) });
+    if ((try context.interact(Button{ .key = .src(@src()), .label = label, .style = &style.plain_button })).clicked) profiles.request(.back_up, running, null);
+    if ((try context.interact(Button{ .key = .src(@src()), .label = lang.text("Open Backups Folder"), .style = &style.plain_button })).clicked) openFolder();
+    try row.close(context);
+    // A backup copies the profile's file, which holds only what was saved.
+    if (session.isDirty()) try widgets.paragraph(context, .src(@src()), "Unsaved changes aren't in a backup until you save them.");
+}
+
+fn openFolder() void {
+    showFolder() catch |err| {
+        slog.err("Failed to open the backups folder: {}", .{err});
+        status.show(.failure, "Failed to open the backups folder: {err}", .{ .err = err });
+    };
+}
+
+/// Creates the folder first, so it opens before anything has been backed up.
+fn showFolder() !void {
+    const dir = try config.profileBackupDir(g_allocator, session.runningApp().io);
+    defer g_allocator.free(dir);
+    const dir_z = try g_allocator.dupeSentinel(u8, dir, 0);
+    defer g_allocator.free(dir_z);
+    if (!win32.shellOpen(dir_z.ptr, null)) return error.ShellOpenFailed;
+}
+
+/// "2026-10-10 02:40", in UTC.
+fn savedAt(arena: std.mem.Allocator, seconds: u64) ![]const u8 {
     const day = std.time.epoch.EpochSeconds{ .secs = seconds };
     const year_day = day.getEpochDay().calculateYearDay();
     const month_day = year_day.calculateMonthDay();
     const time = day.getDaySeconds();
-    return std.fmt.allocPrint(arena, "{s} \u{2014} {d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}", .{
-        backup.name,
+    return std.fmt.allocPrint(arena, "{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}", .{
         year_day.year,
         month_day.month.numeric(),
         month_day.day_index + 1,

@@ -3,14 +3,17 @@ const std = @import("std");
 const win32 = @import("../platform/win32.zig");
 const config_mod = @import("../config.zig");
 const set = @import("../thumbnail/set.zig");
+const window = @import("../thumbnail/window.zig");
 const scout = @import("../clients/scout.zig");
 const chatlog = @import("../chatlog.zig");
 const tracker_mod = @import("tracker.zig");
 const resources_mod = @import("resources.zig");
+const ping_mod = @import("ping.zig");
 const schedule = @import("../util/schedule.zig");
 const log = @import("../log.zig");
 
 const ThumbnailSet = set.ThumbnailSet;
+const ActivityStats = window.ActivityStats;
 const Config = config_mod.Config;
 const slog = log.Scoped("activity");
 
@@ -20,27 +23,39 @@ const ALERT_CHECK_INTERVAL_MS: u64 = 1000;
 pub const Trackers = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
+    /// Owned; the chatlog worker feeds it under its own lock.
     combat: ?*tracker_mod.CombatTracker = null,
+    /// Owned; the chatlog worker feeds it under its own lock.
     mining: ?*tracker_mod.MiningTracker = null,
+    /// Owned; the chatlog worker feeds it under its own lock.
     bounty: ?*tracker_mod.BountyTracker = null,
+    /// Owned; main thread only.
     resources: ?*resources_mod.ResourceTracker = null,
+    /// Owned; main thread only.
+    ping: ?*ping_mod.PingTracker = null,
     last_dps_update: win32.Ticks = .{},
     last_mining_update: win32.Ticks = .{},
     last_bounty_update: win32.Ticks = .{},
     last_resource_update: win32.Ticks = .{},
+    last_ping_update: win32.Ticks = .{},
     last_alert_check: win32.Ticks = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Trackers {
         return .{ .allocator = allocator, .io = io };
     }
 
-    /// Matches the trackers to `config`, keeping enabled ones' history, and hands them to `monitor` (worker stopped); without one, the log-fed trackers are dropped, and one that can't be created is logged and left off.
+    /// Keeps enabled trackers' history; without `monitor`, the log-fed trackers are dropped.
     pub fn setup(self: *Trackers, config: *const Config, monitor: ?*chatlog.ChatlogMonitor) void {
+        // Checked before reconcile, which can free a tracker the worker still reads.
+        if (monitor) |active_monitor| {
+            if (!active_monitor.isWorkerStopped("trackers")) return;
+        }
         const has_monitor = monitor != null;
         self.reconcile(tracker_mod.CombatTracker, &self.combat, has_monitor and config.combat.enabled, config.combat.window_seconds, "Combat DPS");
         self.reconcile(tracker_mod.MiningTracker, &self.mining, has_monitor and config.mining.enabled, config.mining.window_seconds, "Mining rate");
         self.reconcile(tracker_mod.BountyTracker, &self.bounty, has_monitor and config.bounty.enabled, config.bounty.window_seconds, "Bounty rate");
-        self.setupResources(config.resources.enabled);
+        self.setupSampler(resources_mod.ResourceTracker, &self.resources, config.resources.enabled, "Resource usage");
+        self.setupSampler(ping_mod.PingTracker, &self.ping, config.ping.enabled, "Ping");
 
         if (monitor) |active_monitor| {
             active_monitor.setTrackers(self.combat, self.mining, self.bounty);
@@ -54,6 +69,7 @@ pub const Trackers = struct {
         self.destroy(tracker_mod.MiningTracker, &self.mining, null);
         self.destroy(tracker_mod.BountyTracker, &self.bounty, null);
         self.destroy(resources_mod.ResourceTracker, &self.resources, null);
+        self.destroy(ping_mod.PingTracker, &self.ping, null);
     }
 
     fn reconcile(self: *Trackers, comptime T: type, slot: *?*T, is_enabled: bool, window_seconds: u32, label: []const u8) void {
@@ -76,19 +92,20 @@ pub const Trackers = struct {
         slog.debug("{s} tracking enabled ({d}s window)", .{ label, window_seconds });
     }
 
-    fn setupResources(self: *Trackers, is_enabled: bool) void {
+    /// For the trackers that sample the OS rather than read the logs.
+    fn setupSampler(self: *Trackers, comptime T: type, slot: *?*T, is_enabled: bool, label: []const u8) void {
         if (!is_enabled) {
-            self.destroy(resources_mod.ResourceTracker, &self.resources, null);
+            self.destroy(T, slot, null);
             return;
         }
-        if (self.resources != null) return;
-        const tracker = self.allocator.create(resources_mod.ResourceTracker) catch |err| {
-            slog.err("Failed to create resource tracker: {}", .{err});
+        if (slot.* != null) return;
+        const tracker = self.allocator.create(T) catch |err| {
+            slog.err("Failed to create {s} tracker: {}", .{ label, err });
             return;
         };
-        tracker.* = resources_mod.ResourceTracker.init(self.allocator);
-        self.resources = tracker;
-        slog.debug("Resource usage tracking enabled", .{});
+        tracker.* = T.init(self.allocator);
+        slot.* = tracker;
+        slog.debug("{s} tracking enabled", .{label});
     }
 
     fn destroy(self: *Trackers, comptime T: type, slot: *?*T, label: ?[]const u8) void {
@@ -99,7 +116,7 @@ pub const Trackers = struct {
         if (label) |name| slog.debug("Cleaned up {s} tracker", .{name});
     }
 
-    /// Pushes enabled trackers' values to `thumbnail_set` at their intervals, checks alerts, then redraws once; `now` is the tick's start, so the schedule holds however long the work takes.
+    /// `now` is the tick's start, so the schedule holds however long the work takes.
     pub fn tick(self: *Trackers, config: *const Config, windows: []const scout.EveWindow, now: win32.Ticks, tick_interval_ms: u64, thumbnail_set: ?*ThumbnailSet) void {
         if (self.combat) |t| pushThrottled(tracker_mod.CombatTracker, pushDps, t, thumbnail_set, config, windows, now, tick_interval_ms, &self.last_dps_update, config.combat.update_interval_ms);
         if (self.mining) |t| pushThrottled(tracker_mod.MiningTracker, pushMining, t, thumbnail_set, config, windows, now, tick_interval_ms, &self.last_mining_update, config.mining.update_interval_ms);
@@ -110,12 +127,23 @@ pub const Trackers = struct {
             if (thumbnail_set) |active_set| self.checkAlerts(active_set, config, windows, now);
         }
 
-        self.setupResources(config.resources.enabled);
+        self.setupSampler(resources_mod.ResourceTracker, &self.resources, config.resources.enabled, "Resource usage");
         if (self.resources) |tracker| {
             if (schedule.isDue(now.elapsedSince(self.last_resource_update), config.resources.update_interval_ms, tick_interval_ms)) {
                 self.last_resource_update = now;
                 pushResources(tracker, thumbnail_set, windows, now);
             }
+        }
+
+        self.setupSampler(ping_mod.PingTracker, &self.ping, config.ping.enabled, "Ping");
+        if (self.ping) |tracker| {
+            var has_changed = tracker.poll();
+            if (schedule.isDue(now.elapsedSince(self.last_ping_update), config.ping.update_interval_ms, tick_interval_ms)) {
+                self.last_ping_update = now;
+                tracker.sample(windows);
+                has_changed = true;
+            }
+            if (has_changed) pushPing(tracker, thumbnail_set, windows);
         }
 
         if (thumbnail_set) |active_set| active_set.renderDirtyThumbnails(null);
@@ -163,16 +191,17 @@ fn pushThrottled(
 
 fn pushDps(tracker: *tracker_mod.CombatTracker, thumbnail_set: *ThumbnailSet, _: *const Config, eve_window: scout.EveWindow, now: win32.Ticks) void {
     const dps = tracker.query(eve_window.character_name, tracker_mod.CombatWindow.computeDps, .{now}, .{ .incoming = 0.0, .outgoing = 0.0 });
-    thumbnail_set.updateDpsForCharacter(eve_window.hwnd, dps.incoming, dps.outgoing);
+    thumbnail_set.updateStats(eve_window.hwnd, ActivityStats.setDps, .{ dps.incoming, dps.outgoing });
 }
 
 fn pushMining(tracker: *tracker_mod.MiningTracker, thumbnail_set: *ThumbnailSet, _: *const Config, eve_window: scout.EveWindow, now: win32.Ticks) void {
     const rates = tracker.query(eve_window.character_name, tracker_mod.MiningWindow.computeRates, .{now}, .{ .m3 = 0.0, .isk = 0.0 });
-    thumbnail_set.updateMiningForCharacter(eve_window.hwnd, rates.m3, rates.isk);
+    thumbnail_set.updateStats(eve_window.hwnd, ActivityStats.setMining, .{ rates.m3, rates.isk });
 }
 
 fn pushBounty(tracker: *tracker_mod.BountyTracker, thumbnail_set: *ThumbnailSet, _: *const Config, eve_window: scout.EveWindow, now: win32.Ticks) void {
-    thumbnail_set.updateBountyForCharacter(eve_window.hwnd, tracker.query(eve_window.character_name, tracker_mod.BountyWindow.computeIskRate, .{now}, 0.0));
+    const isk_rate = tracker.query(eve_window.character_name, tracker_mod.BountyWindow.computeIskRate, .{now}, 0.0);
+    thumbnail_set.updateStats(eve_window.hwnd, ActivityStats.setBounty, .{isk_rate});
 }
 
 fn pushResources(tracker: *resources_mod.ResourceTracker, thumbnail_set: ?*ThumbnailSet, windows: []const scout.EveWindow, now: win32.Ticks) void {
@@ -181,6 +210,14 @@ fn pushResources(tracker: *resources_mod.ResourceTracker, thumbnail_set: ?*Thumb
     const active_set = thumbnail_set orelse return;
     for (windows) |eve_window| {
         const stats = tracker.getStats(eve_window.process_id);
-        active_set.updateResourceStatsForCharacter(eve_window.hwnd, stats.cpu_percent, stats.ram_mb, stats.vram_mb, stats.has_vram);
+        active_set.updateStats(eve_window.hwnd, ActivityStats.setResources, .{ stats.cpu_percent, stats.ram_mb, stats.vram_mb, stats.has_vram });
+    }
+}
+
+fn pushPing(tracker: *const ping_mod.PingTracker, thumbnail_set: ?*ThumbnailSet, windows: []const scout.EveWindow) void {
+    const active_set = thumbnail_set orelse return;
+    for (windows) |eve_window| {
+        const ping = tracker.pingOf(eve_window.process_id);
+        active_set.updateStats(eve_window.hwnd, ActivityStats.setPing, .{ ping.is_connected, ping.rtt_ms });
     }
 }

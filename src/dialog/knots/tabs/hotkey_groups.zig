@@ -30,7 +30,7 @@ pub const UNNAMED_GROUP_FORMAT = "Hotkey Group {n}";
 
 var g_allocator: std.mem.Allocator = undefined;
 var g_selected_index: usize = 0;
-/// The name typed into the add-member box. Owned; freed in reset.
+/// The name typed into the add-member box; owned, freed in reset.
 var g_new_member: std.ArrayList(u8) = .empty;
 
 pub fn init(allocator: std.mem.Allocator) void {
@@ -44,7 +44,7 @@ pub fn reset() void {
 }
 
 pub fn show(context: *ui.Frame) !void {
-    const section = try widgets.openSection(context, "Hotkey Groups", "Groups of characters you can cycle through with hotkeys. List members here, or assign them live.", &style.fill_section);
+    const section = try widgets.openSection(context, "Hotkey Groups", "Characters to cycle through with hotkeys. List them here or assign them live.", &style.fill_section);
     const profile = session.profile();
     const group_count = profile.ptr.hotkeyGroups.items.len;
     if (group_count == 0) {
@@ -125,28 +125,29 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
     try header.close(context);
     carryToSpaces(profile, name_before, group.get("name"));
 
-    const keys = try widgets.openFieldGroup(context, .str("knots.groups.keys"), "Keys");
-    // Marked with the Hotkeys tab's pair arrows; a pair on one row doesn't fit this pane.
-    inline for (.{ .{ "backwardKey", "Cycle Backward", "\u{2190}", "Switches to the previous character in this group." }, .{ "forwardKey", "Cycle Forward", "\u{2192}", "Switches to the next character in this group." } }) |key| {
-        const row = try widgets.openMarkedBinding(context, .str("knots.groups.key:" ++ key[0]), key[1], key[2]);
+    const keys = try widgets.openFieldGroup(context, .str("knots.groups.keys"), "Hotkeys");
+    inline for (.{
+        .{ "backwardKey", "Cycle Backward", "Switches to the previous character in this group." },
+        .{ "forwardKey", "Cycle Forward", "Switches to the next character in this group." },
+        .{ "assignKey", "Assign Group", "Hover a thumbnail and press this to add or remove it." },
+        .{ "minimizeKey", "Minimize Group", "Minimizes every open client in this group." },
+        .{ "closeKey", "Close Group", "Closes every open client in this group." },
+    }) |key| {
+        const row = try widgets.openBinding(context, .str("knots.groups.key:" ++ key[0]), key[1]);
         try hotkey.field(context, group, key[0]);
         try row.close(context);
-        try widgets.hintText(context, .str("knots.groups.key.hint:" ++ key[0]), key[3]);
+        try widgets.hintText(context, .str("knots.groups.key.hint:" ++ key[0]), key[2]);
     }
-    const assign = try widgets.openBinding(context, .str("knots.groups.key:assignKey"), "Assign Key");
-    try hotkey.field(context, group, "assignKey");
-    try assign.close(context);
-    try widgets.hintText(context, .src(@src()), "Hover a thumbnail and press this to add or remove it.");
     try keys.close(context);
     try widgets.separator(context, .str("knots.groups.separator.keys"));
 
     const behavior = try widgets.openFieldGroup(context, .str("knots.groups.behavior"), "Behavior");
     try bind.toggle(context, group, "includeNotLoggedIn", "Include Logged-Out Clients");
     try widgets.hintText(context, .src(@src()), "Clients at the login screen come after the group's characters.");
-    try bind.toggle(context, group, "stopAtEnds", "Stop at First/Last Character (Don't Loop)");
+    try bind.toggle(context, group, "stopAtEnds", "Stop at First/Last Character");
     try widgets.hintText(context, .src(@src()), "Pressing again at the end goes back to that character if you've switched away.");
-    try bind.toggle(context, group, "temporaryMembership", "Temporary Membership (Resets on Restart)");
-    try widgets.hintText(context, .src(@src()), "Changes made with Assign Key aren't saved.");
+    try bind.toggle(context, group, "temporaryMembership", "Temporary Membership");
+    try widgets.hintText(context, .src(@src()), "Changes made with Assign Group are undone on restart.");
     try bind.toggle(context, group, "showBadge", "Show Group Badge on Thumbnails");
     try widgets.hintText(context, .src(@src()), "Shows the group's name on its characters' thumbnails.");
     try behavior.close(context);
@@ -154,12 +155,14 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
 
     const characters = try widgets.openFillFieldGroup(context, .str("knots.groups.characters"), "Characters");
     // Temporary members are assigned while the app runs, so there's no list to edit.
-    if (group.get("temporaryMembership")) {
-        try widgets.paragraph(context, .src(@src()), "Members are assigned while the app runs: hover a thumbnail and press the assign key to toggle it in or out.");
-    } else {
+    const has_member_list = !group.get("temporaryMembership");
+    if (has_member_list) {
         try members(context, group);
+    } else {
+        try widgets.paragraph(context, .src(@src()), "Members are assigned while the app runs: hover a thumbnail and press the Assign Group key to toggle it in or out.");
     }
     try characters.close(context);
+    if (has_member_list) try addMemberRow(context, group);
 
     if (removed) {
         const name = try context.arena().dupe(u8, group.get("name"));
@@ -239,7 +242,10 @@ fn members(context: *ui.Frame, group: GroupRef) !void {
     try list.close(context);
     if (removed_index) |member_index| group.remove("characters", member_index);
     if (widgets.reorderFinish(context, MEMBER_ROW_KEY, names.len)) |moved| group.move("characters", moved.from, moved.before);
+}
 
+/// Under the Characters group rather than in it, so the name box has the pane's full width.
+fn addMemberRow(context: *ui.Frame, group: GroupRef) !void {
     const add_row = Rect{ .key = .src(@src()), .style = &style.member_add_row };
     _ = try add_row.open(context);
     const is_focused = context.ui().focused(ADD_MEMBER_KEY.hash());

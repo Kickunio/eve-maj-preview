@@ -176,6 +176,8 @@ pub const NotificationConfig = struct {
     tts_rate: i8 = 0,
     tts_speak_character_name: bool = true,
     tts_use_display_name: bool = false,
+    /// Spoken alerts waiting behind the one speaking; past it the oldest is dropped.
+    tts_max_waiting: u8 = 3,
 
     notified_cycle_retention_seconds: u32 = 30,
 
@@ -188,6 +190,7 @@ pub const NotificationConfig = struct {
         .suppress_click_duration_ms = .{ 0, 60000 },
         .tts_volume = ranges_mod.PERCENT,
         .tts_rate = .{ -10, 10 },
+        .tts_max_waiting = .{ 1, 10 },
         .notified_cycle_retention_seconds = .{ 5, 600 },
     };
 

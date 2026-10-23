@@ -9,7 +9,7 @@ const slog = log.Scoped("activity_tracker");
 /// Ring-buffer capacity per character; a window holding more events is rated over the time the newest 512 span.
 const RING_CAPACITY = 512;
 
-/// Guards against simultaneous multi-module/multi-weapon log lines spiking a warm-up rate computed over a near-zero span.
+/// Keeps several modules' simultaneous lines from spiking a warm-up rate over a near-zero span.
 const MIN_RATE_SPAN_MS: u64 = 3 * std.time.ms_per_s;
 
 /// Lines landing this soon after a streak's first one (lasers cycling in step, one volley) count as its first moment.
@@ -136,7 +136,6 @@ pub const MiningWindow = struct {
 
     pub fn addEntry(self: *MiningWindow, m3: f32, isk: f32, timestamp: Ticks) void {
         self.ring.push(.{ .timestamp = timestamp, .m3 = m3, .isk = isk });
-        // Mining resumed, so the stopped alert can fire again.
         self.last_stopped_alert = .{};
     }
 
@@ -231,7 +230,7 @@ fn Tracker(comptime Window: type) type {
             };
         }
 
-        /// Must only be called after the worker thread has stopped (no lock needed).
+        /// Must only be called after the worker thread has stopped.
         pub fn deinit(self: *Self) void {
             var it = self.windows.keyIterator();
             while (it.next()) |key| self.allocator.free(key.*);
@@ -281,16 +280,20 @@ fn Tracker(comptime Window: type) type {
 
         /// Caller holds mutex.
         fn getOrCreate(self: *Self, character_name: []const u8) !*Window {
-            if (self.windows.getPtr(character_name)) |window| return window;
-            const key = try self.allocator.dupe(u8, character_name);
-            errdefer self.allocator.free(key);
-            try self.windows.put(key, Window.init(self.window_seconds));
-            return self.windows.getPtr(character_name).?;
+            const slot = try self.windows.getOrPut(character_name);
+            if (slot.found_existing) return slot.value_ptr;
+            // A new entry's key borrows character_name until it's swapped for an owned copy.
+            slot.key_ptr.* = self.allocator.dupe(u8, character_name) catch |err| {
+                self.windows.removeByPtr(slot.key_ptr);
+                return err;
+            };
+            slot.value_ptr.* = Window.init(self.window_seconds);
+            return slot.value_ptr;
         }
     };
 }
 
-/// A fixed ring of recent events, so recording never allocates, with the streak and recency rates are measured from; `Event` needs a `timestamp: Ticks` field.
+/// Fixed-size so recording never allocates; `Event` needs a `timestamp: Ticks` field.
 fn Ring(comptime Event: type) type {
     return struct {
         entries: [RING_CAPACITY]Event = undefined,
