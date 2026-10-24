@@ -603,7 +603,7 @@ fn onClosed() void {
 /// Wider for languages with longer labels than English's.
 fn designWidth(language: Language) u32 {
     return switch (language) {
-        .en => 770,
+        .en => 810,
         .es, .pt => 820,
         .de, .fr, .pl, .ru => 870,
     };

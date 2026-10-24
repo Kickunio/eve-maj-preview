@@ -265,14 +265,13 @@ pub const drag_grip: Style = .{ .width = .fixed(DRAG_GRIP_SIZE), .height = .fixe
 /// A master-detail list's details: unboxed, since the section around it is already a card.
 pub const detail_scroll: ScrollPane = .{
     .pane = &detail_scroll_pane,
-    .scrolling = &detail_scroll_pane.with(.{ .padding = .init(0, ROW_SCROLLBAR_GUTTER, 0, 8) }),
+    .scrolling = &detail_scroll_pane.with(.{ .padding = .init(0, ROW_SCROLLBAR_GUTTER, 0, 0) }),
     .content = &.{ .width = .grow(), .direction = .column, .gap = 8 },
 };
 const detail_scroll_pane: Style = .{
     .width = .grow(),
     .height = .grow(),
     .direction = .column,
-    .padding = .init(0, 0, 0, 8),
     .overflow = .scroll_y,
 };
 
@@ -291,7 +290,7 @@ pub const field_group_column: Style = .{ .width = .grow(), .direction = .column,
 pub const field_group_fill: Style = field_group.with(.{ .height = .grow() });
 pub const field_group_column_fill: Style = field_group_column.with(.{ .height = .grow() });
 /// A master-detail pane's details that fill it without scrolling, so a list inside them can scroll alone.
-pub const detail_fill: Style = .{ .width = .grow(), .height = .grow(), .direction = .column, .gap = 8, .padding = .init(0, 0, 0, 8) };
+pub const detail_fill: Style = .{ .width = .grow(), .height = .grow(), .direction = .column, .gap = 8 };
 
 pub const detail_header: Style = .{
     .width = .grow(),
@@ -384,6 +383,10 @@ pub const aligned_row: Style = .{
     .@"align" = .center,
     .gap = 8,
 };
+/// widgets.openWrappingBinding's row once its controls don't fit beside the label: they go under it, at the right edge.
+pub const aligned_row_wrapped: Style = aligned_row.with(.{ .direction = .column, .@"align" = .end, .gap = 4 });
+/// Fits its content, so it measures the same beside the label or under it.
+pub const row_controls: Style = .{ .width = .fit(), .direction = .row, .@"align" = .center };
 /// Padding matches the section's gap, so the divider sits midway between rows.
 pub const row_divider: Style = .{
     .width = .grow(),
@@ -926,14 +929,14 @@ pub const icon_button_danger_text: Style = icon_button.with(.{
 pub const icon_button_disabled_text: Style = icon_button_disabled.with(.{ .font_size = .{ .px = 15 } });
 pub const icon_button_confirm: Style = confirm_button.with(.{ .width = .fixed(CONTROL_HEIGHT), .padding = .all(0), .justify = .center });
 
-/// Outside a filling tab: a roster beside the selected item's details, both sized to their content.
-pub const master_detail: Style = .{ .width = .grow(), .direction = .row, .gap = 8, .padding = .xy(ROW_INSET, 0) };
+/// Outside a filling tab: a roster beside the selected item's details, both sized to their content; only the roster side is inset, since the details' rows inset themselves.
+pub const master_detail: Style = .{ .width = .grow(), .direction = .row, .gap = 8, .padding = .init(0, 0, 0, ROW_INSET) };
 /// A master-detail filling the rest of its section, for a tab that fills the window.
 pub const master_detail_fill: Style = master_detail.with(.{ .height = .grow() });
 pub const roster_filters: Style = roster.with(.{ .height = .fit(), .overflow = .visible });
 /// A roster in a scrolling tab whose rows scroll inside it, so adding one doesn't push it off the bottom.
 pub const roster_fixed: Style = roster.with(.{ .height = .fixed(220) });
-pub const detail_fit: Style = .{ .width = .grow(), .direction = .column, .gap = 8, .padding = .init(0, 0, 0, 8) };
+pub const detail_fit: Style = .{ .width = .grow(), .direction = .column, .gap = 8 };
 /// A roster row's small trailing text, e.g. a filter's Disabled.
 pub const roster_badge: Style = .{ .font_size = .xs, .foreground = .{ .color = MUTED } };
 pub const roster_badge_warning: Style = roster_badge.with(.{ .foreground = .accent });

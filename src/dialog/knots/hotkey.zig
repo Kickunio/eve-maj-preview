@@ -88,6 +88,8 @@ var g_conflicts: []const u32 = &.{};
 var g_manual: ?ManualEdit = null;
 /// Called once a capture arrives from outside a frame, so the window redraws to apply it.
 var g_on_capture: ?*const fn () void = null;
+/// A field changed outside a frame; the frame drawing it asks for one more, since its row measures it a frame late.
+var g_is_layout_stale: bool = false;
 
 pub fn init(allocator: std.mem.Allocator, on_capture: *const fn () void) void {
     g_allocator = allocator;
@@ -167,6 +169,7 @@ pub fn field(context: *ui.Frame, ref: anytype, comptime field_name: []const u8) 
                 applyCapture(&current, recording.slot, combo);
                 ref.set(field_name, current);
                 stopRecording();
+                context.requestRedraw();
             }
         }
     }
@@ -226,8 +229,12 @@ pub fn field(context: *ui.Frame, ref: anytype, comptime field_name: []const u8) 
     try row.close(context);
 }
 
-pub fn beginFrame(arena: std.mem.Allocator) !void {
-    g_conflicts = try findConflicts(arena);
+pub fn beginFrame(context: *ui.Frame) !void {
+    if (g_is_layout_stale) {
+        g_is_layout_stale = false;
+        context.requestRedraw();
+    }
+    g_conflicts = try findConflicts(context.arena());
 }
 
 /// Combos the edited documents bind more than once outside one HolderKind cycle; allocated in `arena`.
@@ -583,6 +590,7 @@ fn capture(virtual_key: u32, modifiers: u32) void {
 }
 
 fn redraw() void {
+    g_is_layout_stale = true;
     if (g_on_capture) |on_capture| on_capture();
 }
 

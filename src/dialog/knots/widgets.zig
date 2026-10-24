@@ -39,6 +39,8 @@ pub const DRAG_THRESHOLD = 8;
 const CONFIRM_TIMEOUT_MS = 2000;
 /// A row's divider wrapper is keyed as the row's own key indexed by this.
 const ROW_DIVIDER_INDEX = 10;
+/// openWrappingBinding's controls are keyed as the row's own key indexed by this.
+const ROW_CONTROLS_INDEX = 13;
 /// Scroll panes that can wait to scroll to their end at once, e.g. a roster and the tab it's on.
 const MAX_PENDING_SCROLLS = 4;
 /// Past any pane's height; layout clamps a scroll offset to the content, so this lands at its end.
@@ -114,10 +116,13 @@ pub const Row = struct {
     divider: ?Rect,
     /// The row's own space, e.g. its label, was clicked rather than a control in it.
     is_clicked: bool,
+    /// openWrappingBinding's box around the controls, measured to choose their line.
+    controls: ?Rect = null,
 
     pub fn close(self: Row, context: *ui.Frame) !void {
         g_is_row_lit = false;
         g_is_row_click_pending = false;
+        if (self.controls) |controls| try controls.close(context);
         try self.rect.close(context);
         if (self.divider) |divider| try divider.close(context);
     }
@@ -393,6 +398,30 @@ pub fn openBinding(context: *ui.Frame, key: ui.Key, label: []const u8) !Row {
     const shown = lang.text(label);
     search.captureText(shown);
     try rowLabel(context, key, key.indexed(1), shown, try rowLabelStyle(context, shown));
+    return row;
+}
+
+/// openBinding whose controls drop under the label when they don't fit beside it; aligned rows only, elsewhere it's openBinding.
+pub fn openWrappingBinding(context: *ui.Frame, key: ui.Key, label: []const u8) !Row {
+    if (!g_is_aligned) return openBinding(context, key, label);
+    const ui_state = context.ui();
+    const controls_key = key.indexed(ROW_CONTROLS_INDEX);
+    // Unmeasured, the controls stay beside the label for a frame, then move if they don't fit.
+    if (ui_state.state.get(.measured, controls_key.hash()) == null) context.requestRedraw();
+    _ = try ui_state.state.getOrCreate(.measured, ui_state.allocator, controls_key.hash());
+    const shown = lang.text(label);
+    const label_style = try alignedLabelStyle(context, shown);
+    // The controls fit their content on either line, so last frame's width can't flip the choice back.
+    const controls_width = measuredBox(ui_state, controls_key).w();
+    const room = measuredBox(ui_state, key).w() - 2 * style.ROW_INSET;
+    const label_width = if (label_style.width) |width| width.min else 0;
+    const wraps = controls_width > 0 and room > 0 and label_width + style.aligned_row.gap.? + controls_width > room;
+    var row = try openSettingsRow(context, key, if (wraps) &style.aligned_row_wrapped else &style.aligned_row, .settings);
+    search.captureText(shown);
+    try rowLabel(context, key, key.indexed(1), shown, label_style);
+    const controls = Rect{ .key = controls_key, .style = &style.row_controls };
+    _ = try controls.open(context);
+    row.controls = controls;
     return row;
 }
 

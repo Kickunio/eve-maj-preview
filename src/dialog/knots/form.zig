@@ -179,7 +179,7 @@ pub fn frame(_: *knots.View, context: *ui.Frame) !void {
     session.beginFrame();
     widgets.beginFrame();
     search.beginFrame();
-    try hotkey.beginFrame(context.arena());
+    try hotkey.beginFrame(context);
     applyAccent(context);
     const offered = Offered{
         .is_advanced_mode = session.global().get("advancedMode"),

@@ -133,7 +133,7 @@ fn detail(context: *ui.Frame, profile: ProfileRef, index: usize) !void {
         .{ "minimizeKey", "Minimize Group", "Minimizes every open client in this group." },
         .{ "closeKey", "Close Group", "Closes every open client in this group." },
     }) |key| {
-        const row = try widgets.openBinding(context, .str("knots.groups.key:" ++ key[0]), key[1]);
+        const row = try widgets.openWrappingBinding(context, .str("knots.groups.key:" ++ key[0]), key[1]);
         try hotkey.field(context, group, key[0]);
         try row.close(context);
         try widgets.hintText(context, .str("knots.groups.key.hint:" ++ key[0]), key[2]);
