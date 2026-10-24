@@ -1048,7 +1048,8 @@ fn tessellateLayer(ui: *UI, allocator: Allocator, draw_list: *DrawList, slots: [
                     }
                 }
             },
-            .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ el.box.x(), el.box.y() }, clip),
+            // EVE-Maj patch: snapped like a rect's edges, so a canvas inside a bordered box stays centred in it.
+            .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ snapToPixel(el.box.x(), content_scale), snapToPixel(el.box.y(), content_scale) }, clip),
             .gpu_canvas => |canvas| {
                 try draw_list.pushCustomDraw(&canvas, el.box, clip);
             },
